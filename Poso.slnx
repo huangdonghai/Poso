@@ -1,0 +1,13 @@
+<Solution>
+  <Project Path="src/Poso/Poso.csproj" />
+  <Project Path="src/Poso.Skia/Poso.Skia.csproj" />
+  <Project Path="src/Poso.Avalonia/Poso.Avalonia.csproj" />
+  <Project Path="tests/Poso.Tests/Poso.Tests.csproj" />
+  <Project Path="samples/Sample.Avalonia/Sample.Avalonia/Sample.Avalonia.csproj" />
+  <Project Path="samples/Sample.Avalonia/Sample.Avalonia.Desktop/Sample.Avalonia.Desktop.csproj" />
+  <Project Path="samples/Sample.Avalonia/Sample.Avalonia.Browser/Sample.Avalonia.Browser.csproj" />
+  <Project Path="samples/Sample.Avalonia/Sample.Avalonia.iOS/Sample.Avalonia.iOS.csproj" />
+  <Folder Name="/src/" />
+  <Folder Name="/_scratch/" />
+  <Project Path="samples/Sample.Avalonia/Sample.Avalonia.Android/Sample.Avalonia.Android.csproj" />
+</Solution>

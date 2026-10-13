@@ -1,0 +1,115 @@
+using System.Text;
+using Poso.Pdf;
+using Xunit;
+
+namespace Poso.Tests;
+
+public class PdfParsingTests
+{
+    [Fact]
+    public void Open_SimplePdf_ReadsPagesBoxesAndContent()
+    {
+        byte[] data = PdfFixtures.CreateSimplePdf();
+
+        using PdfDocument document = PdfDocument.FromArray(data);
+
+        Assert.Equal("1.4", document.Version);
+        Assert.False(document.WasRebuilt);
+        Assert.Equal(2, document.PageCount);
+
+        PdfPage page0 = document.Pages[0];
+        Assert.Equal(0, page0.Index);
+        Assert.Equal(200f, page0.Width);
+        Assert.Equal(100f, page0.Height);
+        Assert.Equal(0, page0.Rotation);
+        Assert.Contains("Hello Poso", Encoding.ASCII.GetString(page0.GetContent()));
+
+        PdfPage page1 = document.Pages[1];
+        Assert.Equal(90, page1.Rotation);
+        Assert.Equal(150f, page1.Width);
+        Assert.Equal(300f, page1.Height);
+    }
+
+    [Fact]
+    public void Open_CatalogResolves()
+    {
+        byte[] data = PdfFixtures.CreateSimplePdf();
+
+        using PdfDocument document = PdfDocument.FromArray(data);
+
+        Assert.Equal("Catalog", document.Catalog?.GetNameValue("Type"));
+        Assert.Null(document.CatalogInfo.Outlines);
+        Assert.Equal(2, document.CatalogInfo.PageTreeRoot?.GetIntegerValue("Count"));
+    }
+
+    [Fact]
+    public void Open_FlateContent_DecodesStream()
+    {
+        byte[] data = PdfFixtures.CreateFlatePdf();
+
+        using PdfDocument document = PdfDocument.FromArray(data);
+
+        Assert.Equal(1, document.PageCount);
+        Assert.Contains("Compressed Content", Encoding.ASCII.GetString(document.Pages[0].GetContent()));
+    }
+
+    [Fact]
+    public void Open_ObjectStreamAndXrefStream_ResolvesObjects()
+    {
+        byte[] data = PdfFixtures.CreateObjectStreamPdf();
+
+        using PdfDocument document = PdfDocument.FromArray(data);
+
+        Assert.False(document.WasRebuilt);
+        Assert.Equal(1, document.PageCount);
+
+        PdfPage page = document.Pages[0];
+        Assert.Equal(120f, page.Width);
+        Assert.Equal(60f, page.Height);
+        Assert.Contains("InObjStm", Encoding.ASCII.GetString(page.GetContent()));
+    }
+
+    [Fact]
+    public void Open_CorruptStartXref_RebuildsByScanning()
+    {
+        byte[] data = PdfFixtures.CreateSimplePdf();
+        int index = LastIndexOf(data, "startxref"u8);
+        Assert.True(index >= 0);
+
+        // Overwrite the real startxref offset with an out-of-range value to trigger the rebuild
+        byte[] garbage = Encoding.ASCII.GetBytes("999999");
+        Array.Copy(garbage, 0, data, index + "startxref".Length, garbage.Length);
+
+        using PdfDocument document = PdfDocument.FromArray(data);
+
+        Assert.True(document.WasRebuilt);
+        Assert.Equal(2, document.PageCount);
+        Assert.Contains("Hello Poso", Encoding.ASCII.GetString(document.Pages[0].GetContent()));
+    }
+
+    [Fact]
+    public void Open_MissingFile_Throws()
+    {
+        Assert.Throws<ArgumentNullException>(() => PdfDocument.Open((string)null!));
+    }
+
+    [Fact]
+    public void Open_NotAPdf_ThrowsFormat()
+    {
+        byte[] data = Encoding.ASCII.GetBytes("this is definitely not a pdf file at all");
+        Assert.Throws<Poso.Pdf.PdfFormatException>(() => PdfDocument.FromArray(data));
+    }
+
+    private static int LastIndexOf(byte[] data, ReadOnlySpan<byte> keyword)
+    {
+        for (int i = data.Length - keyword.Length; i >= 0; i--)
+        {
+            if (data.AsSpan(i, keyword.Length).SequenceEqual(keyword))
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+}

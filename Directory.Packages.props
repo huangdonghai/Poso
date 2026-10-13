@@ -1,0 +1,16 @@
+<Project>
+  <!-- https://learn.microsoft.com/en-us/nuget/consume-packages/central-package-management -->
+  <!-- Applies to src/ and tests/. samples/Sample.Avalonia has its own (nearer) Directory.Packages.props. -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Keep in sync with samples/Sample.Avalonia/Directory.Packages.props -->
+    <PackageVersion Include="Avalonia" Version="12.1.2" />
+    <!-- 3.119.4 is the version resolved by the Avalonia 12.1.2 desktop stack: share one native Skia build. -->
+    <PackageVersion Include="SkiaSharp" Version="3.119.4" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageVersion Include="xunit" Version="2.9.2" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,100 @@
+﻿<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:Sample.Avalonia.ViewModels"
+             xmlns:controls="using:Poso.Avalonia.Controls"
+             mc:Ignorable="d" d:DesignWidth="1200" d:DesignHeight="800"
+             x:Class="Sample.Avalonia.Views.MainView"
+             x:DataType="vm:MainViewModel">
+
+    <Design.DataContext>
+        <vm:MainViewModel />
+    </Design.DataContext>
+
+    <Grid RowDefinitions="Auto,*" Background="{DynamicResource SystemRegionBrush}">
+        <!-- Toolbar -->
+        <Grid Grid.Row="0" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*,Auto" Margin="8" Height="40">
+            <Button Grid.Column="0" Command="{Binding OpenFileCommand}" Content="Open" />
+            <Button Grid.Column="1" Command="{Binding OpenSidebarCommand}" Content="&#9776;" Width="36"
+                    ToolTip.Tip="Toggle sidebar" Margin="4,0,0,0" />
+            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4" Margin="8,0,0,0">
+                <Button Command="{Binding PreviousPageCommand}" Content="&#9664;" Width="32" />
+                <TextBox Text="{Binding CurrentPage}" Width="48" TextAlignment="Center" />
+                <TextBlock Text="/" VerticalAlignment="Center" />
+                <TextBlock Text="{Binding PageCount}" VerticalAlignment="Center" MinWidth="32" />
+                <Button Command="{Binding NextPageCommand}" Content="&#9654;" Width="32" />
+            </StackPanel>
+
+            <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="4" Margin="8,0,0,0">
+                <Button Command="{Binding ZoomOutCommand}" Content="-" Width="32" />
+                <TextBlock Text="{Binding Zoom, StringFormat='{}{0:0%}'}" VerticalAlignment="Center" MinWidth="48" TextAlignment="Center" />
+                <Button Command="{Binding ZoomInCommand}" Content="+" Width="32" />
+                <Button Command="{Binding FitPageCommand}" Content="Fit Page" />
+                <Button Command="{Binding FitWidthCommand}" Content="Fit Width" />
+            </StackPanel>
+
+            <StackPanel Grid.Column="4" Orientation="Horizontal" Spacing="4" Margin="8,0,0,0">
+                <Button Command="{Binding RotateCounterClockwiseCommand}" Content="&#8634;" Width="32" />
+                <Button Command="{Binding RotateClockwiseCommand}" Content="&#8635;" Width="32" />
+                <ComboBox ItemsSource="{Binding ZoomModes}" SelectedItem="{Binding ZoomMode}" />
+                <ComboBox ItemsSource="{Binding PageLayouts}" SelectedItem="{Binding PageLayout}" />
+            </StackPanel>
+
+            <StackPanel Grid.Column="5" Orientation="Horizontal" Spacing="4" HorizontalAlignment="Right">
+                <TextBox Text="{Binding SearchQuery}" Width="160" PlaceholderText="Search in document" />
+                <Button Content="Find" Command="{Binding FindCommand}" />
+                <Button Content="&#9664;" Command="{Binding PreviousHitCommand}" Width="28" />
+                <Button Content="&#9654;" Command="{Binding NextHitCommand}" Width="28" />
+                <TextBlock Text="{Binding SearchStatus}" VerticalAlignment="Center" MinWidth="70" />
+            </StackPanel>
+        </Grid>
+
+        <Grid Grid.Row="1" ColumnDefinitions="Auto,*">
+            <!-- Sidebar: bookmarks and thumbnails -->
+            <Border Grid.Column="0" Width="220" BorderBrush="{DynamicResource SystemBaseLowColor}"
+                    BorderThickness="0,0,1,0" IsVisible="{Binding IsSidebarVisible}">
+                <Grid RowDefinitions="Auto,*" Margin="8">
+                    <StackPanel Orientation="Horizontal" Spacing="4">
+                        <Button Content="Bookmarks" Command="{Binding ShowBookmarksCommand}" />
+                        <Button Content="Pages" Command="{Binding ShowThumbnailsCommand}" />
+                    </StackPanel>
+
+                    <TreeView Grid.Row="1" ItemsSource="{Binding Outline}" SelectedItem="{Binding SelectedOutlineNode}"
+                              Margin="0,8,0,0" IsVisible="{Binding IsBookmarkTabSelected}">
+                        <TreeView.ItemTemplate>
+                            <TreeDataTemplate ItemsSource="{Binding Children}">
+                                <StackPanel Orientation="Horizontal" Spacing="6" ToolTip.Tip="{Binding Title}">
+                                    <TextBlock Text="{Binding PageNumber}" Foreground="Gray" MinWidth="20" />
+                                    <TextBlock Text="{Binding Title}" TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+                            </TreeDataTemplate>
+                        </TreeView.ItemTemplate>
+                    </TreeView>
+
+                    <ListBox Grid.Row="1" ItemsSource="{Binding Thumbnails}" SelectedItem="{Binding SelectedThumbnail}"
+                             Margin="0,8,0,0" IsVisible="{Binding IsThumbnailTabSelected}">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Spacing="4" Margin="4">
+                                    <Image Source="{Binding Bitmap}" Stretch="Uniform" MaxHeight="140" />
+                                    <TextBlock Text="{Binding PageNumber}" HorizontalAlignment="Center" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Grid>
+            </Border>
+
+            <!-- Viewer -->
+            <controls:PdfView x:Name="Viewer" Grid.Column="1"
+                              Source="{Binding Document}"
+                              GraphicsFactory="{Binding GraphicsFactory}"
+                              Zoom="{Binding Zoom, Mode=TwoWay}"
+                              ZoomMode="{Binding ZoomMode, Mode=TwoWay}"
+                              Rotation="{Binding Rotation, Mode=TwoWay}"
+                              PageLayout="{Binding PageLayout, Mode=TwoWay}"
+                              CurrentPage="{Binding CurrentPage, Mode=OneWay}" />
+        </Grid>
+    </Grid>
+</UserControl>
