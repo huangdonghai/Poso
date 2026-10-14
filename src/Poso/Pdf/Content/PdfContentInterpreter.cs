@@ -1345,16 +1345,25 @@ public sealed class PdfContentInterpreter
 
         PdfObject? fontObject = resources.GetDictionary("Font")?.Get(fontName.Value);
         PdfIndirectRef? reference = fontObject as PdfIndirectRef;
-
-        if (reference is not null && _fonts.TryGetValue(reference.ObjectNumber, out PdfFont? cached))
-        {
-            return cached;
-        }
-
         PdfDictionary? dictionary = _document.Resolve(fontObject) as PdfDictionary;
         if (dictionary is null)
         {
             return null;
+        }
+
+        // Type3 fonts accumulate mutable glyph-width state while their charprocs run, so keep them
+        // per-interpreter. Every other font is parsed + realised once and shared across the document:
+        // the interpreter is rebuilt per page render, so a per-interpreter cache alone would re-parse
+        // every font on every page (the dominant cost for font-heavy documents).
+        bool isType3 = dictionary.GetNameValue("Subtype") == "Type3";
+        if (reference is not null && !isType3)
+        {
+            return _document.GetOrAddFont(reference.ObjectNumber, _factory, dictionary);
+        }
+
+        if (reference is not null && _fonts.TryGetValue(reference.ObjectNumber, out PdfFont? local))
+        {
+            return local;
         }
 
         PdfFont font = PdfFont.Create(_document, _factory, dictionary);

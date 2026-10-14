@@ -17,6 +17,8 @@ public sealed class PdfDocument : IDisposable
     private PdfXref _xref;
     private readonly Dictionary<long, PdfObject> _objectCache = new();
     private readonly object _gate = new();
+    private readonly Dictionary<int, Fonts.PdfFont> _fontCache = new();
+    private readonly object _fontGate = new();
     private bool _disposed;
     private bool _hasEncrypt;
 
@@ -43,6 +45,30 @@ public sealed class PdfDocument : IDisposable
             }
 
             _xref = PdfXref.Load(_buffer, Resolve, _encryption);
+        }
+    }
+
+    /// <summary>
+    /// Returns the font for a font resource's object number, creating and fully realising it (including
+    /// the backend typeface) exactly once under a lock. Without this, every page render builds a fresh
+    /// interpreter and re-parses each embedded font (decompress + CFF/OpenType build + typeface), which
+    /// dominates cost for font-heavy documents; sharing the parsed font removes that repetition.
+    /// Assumes one graphics factory per document. Type3 fonts are excluded by the caller (they hold
+    /// mutable glyph-width state accumulated while their charprocs run).
+    /// </summary>
+    internal Fonts.PdfFont GetOrAddFont(int objectNumber, Graphics.IGraphicsFactory factory, PdfDictionary dictionary)
+    {
+        lock (_fontGate)
+        {
+            if (_fontCache.TryGetValue(objectNumber, out Fonts.PdfFont? cached))
+            {
+                return cached;
+            }
+
+            Fonts.PdfFont font = Fonts.PdfFont.Create(this, factory, dictionary);
+            _ = font.GraphicsFont; // realise the backend typeface once, here, so shared instances stay immutable
+            _fontCache[objectNumber] = font;
+            return font;
         }
     }
 
@@ -628,6 +654,18 @@ public sealed class PdfDocument : IDisposable
     public void Dispose()
     {
         _disposed = true;
+
+        // Release the backend typefaces held by the shared font cache (they live for the document's
+        // lifetime, so free them here rather than waiting on finalisation).
+        lock (_fontGate)
+        {
+            foreach (Fonts.PdfFont font in _fontCache.Values)
+            {
+                (font.GraphicsFont as IDisposable)?.Dispose();
+            }
+
+            _fontCache.Clear();
+        }
     }
 
     private void ThrowIfDisposed()
