@@ -32,7 +32,7 @@ public class IccColorTests
             }
 
             int[] v = Array.ConvertAll(line.Split(','), s => int.Parse(s, CultureInfo.InvariantCulture));
-            icc!.ToRgb(stackalloc float[] { v[0] / 255f, v[1] / 255f, v[2] / 255f }, out byte r, out byte g, out byte b);
+            icc!.ToRgb(new[] { v[0] / 255f, v[1] / 255f, v[2] / 255f }, out byte r, out byte g, out byte b);
             max = Math.Max(max, Math.Max(Math.Abs(r - v[3]), Math.Max(Math.Abs(g - v[4]), Math.Abs(b - v[5]))));
         }
 
@@ -54,7 +54,7 @@ public class IccColorTests
             }
 
             int[] v = Array.ConvertAll(line.Split(','), s => int.Parse(s, CultureInfo.InvariantCulture));
-            icc!.ToRgb(stackalloc float[] { v[0] / 255f }, out byte r, out byte g, out byte b);
+            icc!.ToRgb(new[] { v[0] / 255f }, out byte r, out byte g, out byte b);
             max = Math.Max(max, Math.Max(Math.Abs(r - v[1]), Math.Max(Math.Abs(g - v[2]), Math.Abs(b - v[3]))));
         }
 
