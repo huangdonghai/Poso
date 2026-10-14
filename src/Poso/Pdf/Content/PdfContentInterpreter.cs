@@ -64,6 +64,10 @@ public sealed class PdfContentInterpreter
     private int _strokeLookupComponents;
     private IccProfile? _fillIcc;
     private IccProfile? _strokeIcc;
+
+    // Scratch reused across text-showing ops to avoid a per-op List allocation (the hot path for a
+    // text-dense page). Only ever live during a non-Type3 ShowText loop, which does not recurse.
+    private readonly List<int> _codesScratch = new();
     private PdfFunction? _fillTint;
     private PdfFunction? _strokeTint;
     private ColorSpaceKind _fillBaseSpace = ColorSpaceKind.DeviceGray;
@@ -1181,14 +1185,20 @@ public sealed class PdfContentInterpreter
             Matrix3x2.CreateTranslation(0f, _state.TextRise);
         Matrix3x2 textToUser = tsMatrix * _textMatrix;
 
-        var codes = new List<int>(bytes.Length);
+        // Reuse a scratch buffer for the decoded codes to avoid a List allocation per text-showing op.
+        // Type3 glyphs execute a nested charproc that can itself show text, so those take a fresh list;
+        // every other font's loop is recursion-free.
+        List<int> codes = font is Type3PdfFont ? new List<int>(bytes.Length) : _codesScratch;
+        codes.Clear();
         font.DecodeCodes(bytes, codes);
         if (codes.Count == 0)
         {
             return;
         }
 
-        GlyphPosition[] glyphs = new GlyphPosition[codes.Count];
+        Span<GlyphPosition> glyphs = codes.Count <= 512
+            ? stackalloc GlyphPosition[codes.Count]
+            : new GlyphPosition[codes.Count];
         int glyphCount = 0;
         float tx = 0f;
         // Glyph positions and the text sink are expressed in text space (em units): they are
@@ -1268,7 +1278,7 @@ public sealed class PdfContentInterpreter
                 };
             }
 
-            _context.DrawGlyphs(graphicsFont, fontSize, glyphs.AsSpan(0, glyphCount), FillPaintColor(), _state.RenderMode, textStroke);
+            _context.DrawGlyphs(graphicsFont, fontSize, glyphs.Slice(0, glyphCount), FillPaintColor(), _state.RenderMode, textStroke);
 
             // Reset the drawing CTM to the current graphics state without popping the state stack:
             // a clip set by a text rendering mode (Tr 4-7) must persist until the next Q, while the
