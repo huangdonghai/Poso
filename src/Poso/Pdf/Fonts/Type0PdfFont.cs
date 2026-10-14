@@ -15,6 +15,7 @@ public sealed class Type0PdfFont : PdfFont
     private readonly ushort[]? _cidToGid;
     private readonly Dictionary<int, float> _cidWidthEm = new();
     private readonly float _defaultWidthEm;
+    private readonly bool _isVertical;
 
     public Type0PdfFont(PdfDocument document, PdfDictionary dictionary, string baseFontName)
         : base(document, dictionary, baseFontName)
@@ -25,6 +26,15 @@ public sealed class Type0PdfFont : PdfFont
             PdfStream stream => CMap.Parse(stream.Decode()) ?? CMap.Identity,
             PdfName => CMap.Identity,
             _ => CMap.Identity,
+        };
+
+        // Vertical writing (WMode 2): either an embedded CMap declaring /WMode 2, or a predefined /
+        // Identity CMap name ending in "-V" (e.g. Identity-V, UniGB-UCS2-V).
+        _isVertical = encodingObject switch
+        {
+            PdfStream => _encoding.IsVertical,
+            PdfName name => name.Value.EndsWith("-V", StringComparison.Ordinal),
+            _ => false,
         };
 
         _descendantFont = (document.Resolve(dictionary.GetArray("DescendantFonts")?[0]) as PdfDictionary);
@@ -71,6 +81,8 @@ public sealed class Type0PdfFont : PdfFont
     public override bool IsSimpleFont => false;
 
     public override bool IsType0 => true;
+
+    public override bool IsVertical => _isVertical;
 
     public override void DecodeCodes(ReadOnlySpan<byte> bytes, List<int> codes)
     {

@@ -13,6 +13,7 @@ public sealed class CMap
     private readonly Dictionary<int, int> _singles = new();
     private readonly List<int> _codeLengths = new();
     private readonly bool _isIdentity;
+    private int _wmode;
 
     private CMap(bool isIdentity)
     {
@@ -21,6 +22,9 @@ public sealed class CMap
 
     /// <summary>Identity encoding: 2-byte big-endian codes map directly to CIDs.</summary>
     public static CMap Identity { get; } = new CMap(true);
+
+    /// <summary>True when the CMap declares vertical writing mode (/WMode 2).</summary>
+    public bool IsVertical => _wmode == 2;
 
     /// <summary>The longest valid code length in bytes (2 for Identity).</summary>
     public int MaxCodeLength => _codeLengths.Count > 0 ? _codeLengths[^1] : 2;
@@ -87,6 +91,19 @@ public sealed class CMap
         while (!lexer.AtEnd)
         {
             PdfToken token = lexer.NextToken();
+
+            // /WMode <n>: vertical writing mode is 2.
+            if (token.Kind == PdfTokenKind.Name && lexer.Match(token, "WMode"u8))
+            {
+                PdfToken value = lexer.NextToken();
+                if (value.Kind == PdfTokenKind.Integer)
+                {
+                    cmap._wmode = (int)value.IntegerValue;
+                }
+
+                continue;
+            }
+
             if (token.Kind != PdfTokenKind.Keyword)
             {
                 continue;

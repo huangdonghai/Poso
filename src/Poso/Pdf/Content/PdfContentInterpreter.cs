@@ -841,7 +841,10 @@ public sealed class PdfContentInterpreter
 
                         case PdfNumber number:
                             float displacement = -(number.AsFloat() / 1000f) * _state.FontSize * _state.HorizontalScale;
-                            _textMatrix = Matrix3x2.CreateTranslation(displacement, 0f) * _textMatrix;
+                            // In vertical writing the TJ kerning displacement advances along the writing axis.
+                            _textMatrix = (_state.Font?.IsVertical == true
+                                ? Matrix3x2.CreateTranslation(0f, displacement)
+                                : Matrix3x2.CreateTranslation(displacement, 0f)) * _textMatrix;
                             break;
                     }
                 }
@@ -1202,7 +1205,11 @@ public sealed class PdfContentInterpreter
                 ushort glyphId = font.GetGlyphId(code);
                 if (glyphId != 0)
                 {
-                    glyphs[glyphCount++] = new GlyphPosition(glyphId, penEm, 0f);
+                    // Vertical writing (WMode 2): glyphs stay upright but advance downward along the
+                    // writing axis (negative text-space Y), rather than left-to-right along X.
+                    glyphs[glyphCount++] = font.IsVertical
+                        ? new GlyphPosition(glyphId, 0f, -penEm)
+                        : new GlyphPosition(glyphId, penEm, 0f);
                 }
 
                 TextSink?.OnGlyph(font, code, glyphId, GetUnicodeUnits(font, code), textToUser, penEm, fontSize, widthEm);
@@ -1260,7 +1267,10 @@ public sealed class PdfContentInterpreter
 
         if (font is not Type3PdfFont)
         {
-            _textMatrix = Matrix3x2.CreateTranslation(tx, 0f) * _textMatrix;
+            // Advance the text matrix along the writing axis: right for horizontal, down for vertical.
+            _textMatrix = (font.IsVertical
+                ? Matrix3x2.CreateTranslation(0f, -tx)
+                : Matrix3x2.CreateTranslation(tx, 0f)) * _textMatrix;
         }
     }
 

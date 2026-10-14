@@ -1,0 +1,154 @@
+using System;
+using System.IO;
+using Poso.Geometry;
+using Poso.Graphics;
+using Poso.Pdf;
+using Poso.Pdf.Fonts;
+using Poso.Skia;
+using Xunit;
+using IOPath = System.IO.Path;
+
+namespace Poso.Tests;
+
+/// <summary>
+/// Vertical-writing (WMode 2) support. Rendering a page whose font is a vertical CID font (/Identity-V or an
+/// embedded CMap with /WMode 2) must lay the upright glyphs down a vertical column, not left-to-right.
+/// Oracle: MuPDF rendering of the pdf.js sample <c>vertical.pdf</c> page 0 (one vertical column of
+/// 'あいうえお日本語' with a second column to its left) gives ink 230, device bbox (214,22)-(237,66) at scale 1.
+/// Exact vertical pitch/origin depends on /W2/DW2 or the TrueType vmtx (P2); P1 asserts orientation, ink and
+/// placement within tolerance (before the fix Poso produced a wide, short, clipped horizontal sliver).
+/// </summary>
+public class VerticalWritingTests
+{
+    private static readonly IGraphicsFactory Factory = SkiaGraphicsFactory.Default;
+
+    [Fact]
+    public void CMap_ParsesWModeVertical()
+    {
+        byte[] vertical = System.Text.Encoding.ASCII.GetBytes(
+            "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapType 2 def /WMode 2 def\n" +
+            "1 begincodespacerange <0000> <FFFF> endcodespacerange\n" +
+            "1 begincidrange <0000> <00FF> 0 endcidrange endcmap");
+        byte[] horizontal = System.Text.Encoding.ASCII.GetBytes(
+            "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapType 2 def /WMode 0 def\n" +
+            "1 begincodespacerange <0000> <FFFF> endcodespacerange\n" +
+            "1 begincidrange <0000> <00FF> 0 endcidrange endcmap");
+
+        Assert.True(CMap.Parse(vertical)?.IsVertical);
+        Assert.False(CMap.Parse(horizontal)?.IsVertical);
+        Assert.False(CMap.Identity.IsVertical);
+    }
+
+    [Fact]
+    public void VerticalIdentityV_RendersTallColumn_MatchesMuPdf()
+    {
+        byte[] pdf = File.ReadAllBytes(PdfSample("vertical.pdf"));
+        using PdfDocument document = PdfDocument.FromArray(pdf);
+        PdfPage page = document.Pages[0];
+
+        using IGraphicsContext context = Factory.CreateContext((int)System.Math.Ceiling(page.Width), (int)System.Math.Ceiling(page.Height));
+        page.Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+        using IImage image = context.Snapshot();
+        int w = image.Width, h = image.Height;
+        byte[] px = new byte[w * h * 4];
+        image.CopyPixels(px);
+
+        int ink = 0, minX = int.MaxValue, minY = int.MaxValue, maxX = -1, maxY = -1;
+        for (int y = 0; y < h; y++)
+        {
+            for (int x = 0; x < w; x++)
+            {
+                if (Dark(px, w, x, y))
+                {
+                    ink++;
+                    minX = Math.Min(minX, x);
+                    maxX = Math.Max(maxX, x);
+                    minY = Math.Min(minY, y);
+                    maxY = Math.Max(maxY, y);
+                }
+            }
+        }
+
+        Assert.True(ink > 0, "vertical column must render glyphs");
+        // The fix: the run is tall (height) rather than wide (width) - a vertical column.
+        int width = maxX - minX + 1;
+        int height = maxY - minY + 1;
+        Assert.True(height > width, $"expected a vertical column, got width {width} > height {height}");
+
+        // Ink and extent track the MuPDF oracle (230 ink; 23x45 bbox), with a small tolerance for the
+        // approximate vertical pitch/origin (exact vmtx/W2 metrics are a P2 refinement).
+        Assert.InRange(ink, 190, 280);
+        Assert.InRange(width, 18, 30);
+        Assert.InRange(height, 38, 52);
+        Assert.InRange(minX, 205, 228);
+        Assert.InRange(maxX, 230, 250);
+        Assert.InRange(minY, 8, 26);
+        Assert.InRange(maxY, 52, 70);
+    }
+
+    /// <summary>
+    /// Vertical text extraction groups glyphs into columns (a line break is a horizontal jump to the next
+    /// column), not into horizontal rows. MuPDF sees 2 columns in vertical.pdf page 0: the right column
+    /// 'あいうえお' (5 glyphs) then the left column '日本語' (3 glyphs) ~15.6 user units to its left.
+    /// (The characters extract as fallback glyphs because Poso has no Adobe-Japan1 CID->Unicode reverse map -
+    /// a separate deferred feature - so this asserts structure/geometry, not the character values.)
+    /// </summary>
+    [Fact]
+    public void VerticalText_ExtractionGroupsByColumn()
+    {
+        byte[] pdf = File.ReadAllBytes(PdfSample("vertical.pdf"));
+        using PdfDocument document = PdfDocument.FromArray(pdf);
+        PdfTextPage text = document.Pages[0].GetText(Factory);
+
+        Assert.Equal(2, text.Lines.Count);
+        Assert.Equal(5, text.Lines[0].Text.Length); // first (right) column: 5 glyphs
+        Assert.Equal(3, text.Lines[1].Text.Length); // second (left) column: 3 glyphs
+
+        RectF col0 = text.Lines[0].Bounds;
+        RectF col1 = text.Lines[1].Bounds;
+        float w0 = System.Math.Abs(col0.Right - col0.Left);
+        float h0 = System.Math.Abs(col0.Top - col0.Bottom);
+        float h1 = System.Math.Abs(col1.Top - col1.Bottom);
+
+        // Each column is tall and narrow (a vertical run), not a horizontal row.
+        Assert.True(h0 > w0, $"first column should be tall: w{w0} h{h0}");
+        Assert.True(h1 > w1(col1), "second column should be tall");
+        Assert.InRange(w0, 5, 15);
+        // The right column comes first and is offset left by the next column (~15.6 user units).
+        Assert.True(col0.Left > col1.Left, "reading order: right column before left column");
+        Assert.InRange(col0.Left - col1.Left, 10, 22);
+        // First column (5 glyphs) is taller than the second (3 glyphs).
+        Assert.True(h0 > h1);
+
+        static float w1(RectF r) => System.Math.Abs(r.Right - r.Left);
+    }
+
+    private static bool Dark(byte[] px, int width, int x, int y)
+    {
+        int o = ((y * width) + x) * 4;
+        return px[o] < 200 || px[o + 1] < 200 || px[o + 2] < 200;
+    }
+
+    private static string PdfSample(string name)
+    {
+        string probe = IOPath.Combine(AppContext.BaseDirectory, "Samples", "Pdf", name);
+        if (File.Exists(probe))
+        {
+            return probe;
+        }
+
+        DirectoryInfo? dir = new(AppContext.BaseDirectory);
+        while (dir is not null)
+        {
+            string candidate = IOPath.Combine(dir.FullName, "tests", "Poso.Tests", "Samples", "Pdf", name);
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+
+            dir = dir.Parent;
+        }
+
+        throw new FileNotFoundException($"PDF sample '{name}' not found.", name);
+    }
+}

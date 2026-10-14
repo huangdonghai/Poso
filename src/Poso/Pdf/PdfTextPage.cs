@@ -150,6 +150,7 @@ internal sealed class TextCollector : ITextSink
 {
     private readonly PdfTextPage _page = new();
     private float _lastBaselineY = float.MinValue;
+    private float _lastColumnX = float.MinValue;
     private bool _hasLast;
 
     public PdfTextPage Page => _page;
@@ -157,26 +158,56 @@ internal sealed class TextCollector : ITextSink
     public void OnGlyph(PdfFont font, int code, ushort glyphId, uint[] unicodeUnits, Matrix3x2 textToUser, float x, float fontSize, float advanceEm)
     {
         // x and advanceEm are in text space (em); textToUser (which folds in the font size) maps them to user space.
-        Vector2 origin = Vector2.Transform(new Vector2(x, 0f), textToUser);
-        Vector2 end = Vector2.Transform(new Vector2(x + advanceEm, 0f), textToUser);
-
-        float width = MathF.Abs(end.X - origin.X) + (MathF.Abs(end.Y - origin.Y) * 0.2f);
-        if (width <= 0f)
+        bool vertical = font.IsVertical;
+        Vector2 origin, end;
+        if (vertical)
         {
-            width = fontSize * 0.5f;
+            // Vertical writing: the pen moves down the writing axis (negative text-space Y); the glyph
+            // box is the em cell, so its horizontal extent is the font size and its vertical extent the advance.
+            origin = Vector2.Transform(new Vector2(0f, -x), textToUser);
+            end = Vector2.Transform(new Vector2(0f, -x - advanceEm), textToUser);
+        }
+        else
+        {
+            origin = Vector2.Transform(new Vector2(x, 0f), textToUser);
+            end = Vector2.Transform(new Vector2(x + advanceEm, 0f), textToUser);
         }
 
         float scaleY = MathF.Sqrt((textToUser.M12 * textToUser.M12) + (textToUser.M22 * textToUser.M22));
-        float ascent = fontSize * 0.8f * scaleY;
-        float descent = fontSize * 0.2f * scaleY;
+        float scaleX = MathF.Sqrt((textToUser.M11 * textToUser.M11) + (textToUser.M21 * textToUser.M21));
 
-        // Page user space is y-up: ascent goes up, descent goes down
-        RectF bounds = RectF.FromLbrb(origin.X, origin.Y - descent, origin.X + width, origin.Y + ascent);
+        RectF bounds;
+        bool newLine;
+        if (vertical)
+        {
+            // scaleX/scaleY are already user-units-per-em (textToUser folds in the font size), so the
+            // em cell is ~scaleX wide; the glyph occupies the advance interval [end.Y .. origin.Y] going down.
+            float cellHalfWidth = scaleX * 0.5f;
+            float top = Math.Max(origin.Y, end.Y);
+            float bottom = Math.Min(origin.Y, end.Y);
+            bounds = RectF.FromLbrb(origin.X - cellHalfWidth, bottom, origin.X + cellHalfWidth, top);
+            // A vertical line break is a column change (horizontal jump), not the per-glyph downward step.
+            newLine = _hasLast && MathF.Abs(origin.X - _lastColumnX) > (scaleX * 0.5f);
+            _lastColumnX = origin.X;
+        }
+        else
+        {
+            float width = MathF.Abs(end.X - origin.X) + (MathF.Abs(end.Y - origin.Y) * 0.2f);
+            if (width <= 0f)
+            {
+                width = fontSize * 0.5f;
+            }
 
-        bool newLine = _hasLast && MathF.Abs(origin.Y - _lastBaselineY) > (fontSize * 0.5f);
+            float ascent = fontSize * 0.8f * scaleY;
+            float descent = fontSize * 0.2f * scaleY;
+
+            // Page user space is y-up: ascent goes up, descent goes down
+            bounds = RectF.FromLbrb(origin.X, origin.Y - descent, origin.X + width, origin.Y + ascent);
+            newLine = _hasLast && MathF.Abs(origin.Y - _lastBaselineY) > (fontSize * 0.5f);
+            _lastBaselineY = origin.Y;
+        }
+
         _page.AddGlyph(bounds, unicodeUnits, newLine);
-
-        _lastBaselineY = origin.Y;
         _hasLast = true;
     }
 
