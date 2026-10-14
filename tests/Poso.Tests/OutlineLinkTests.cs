@@ -65,6 +65,25 @@ public class OutlineLinkTests
     }
 
     [Fact]
+    public void Outline_ResolvesNamedDestinationThroughIndirectNameTree()
+    {
+        byte[] data = PdfFixtures.CreateOutlineNamedTreePdf();
+
+        using PdfDocument document = PdfDocument.FromArray(data);
+
+        PdfOutline? outline = document.Outline;
+        Assert.NotNull(outline);
+        PdfOutline chapter = Assert.Single(outline!.Children);
+        Assert.Equal("Chapter 2", chapter.Title);
+
+        // The /A GoTo action names a destination resolved through an indirect /Names /Dests tree;
+        // before the fix this was null (the tree root was skipped) so the bookmark did nothing.
+        Assert.NotNull(chapter.Destination);
+        Assert.Equal(1, chapter.Destination!.PageIndex);
+        Assert.Equal(PdfDestinationType.Xyz, chapter.Destination.Type);
+    }
+
+    [Fact]
     public void Outline_IsNullWhenAbsent()
     {
         byte[] data = PdfFixtures.CreateSimplePdf();

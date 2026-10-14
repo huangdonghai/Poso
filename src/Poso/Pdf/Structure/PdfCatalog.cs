@@ -53,13 +53,14 @@ public sealed class PdfCatalog
         PdfDictionary? dests = Dests;
         if (dests is not null)
         {
+            // Traditional /Dests dictionary; the value is often an indirect reference to the array.
             if (dests.Get(name) is { } direct)
             {
-                return direct;
+                return _document.Resolve(direct);
             }
 
-            // Some files store named destinations in the /Names subtree of /Dests.
-            if (dests.GetDictionary("Names") is { } namesRoot)
+            // Some files store named destinations in the /Names subtree of /Dests (itself possibly indirect).
+            if (_document.Resolve(dests.Get("Names")) is PdfDictionary namesRoot)
             {
                 PdfObject? found = LookupNameTree(namesRoot, name);
                 if (found is not null)
@@ -69,8 +70,9 @@ public sealed class PdfCatalog
             }
         }
 
-        PdfDictionary? names = Names;
-        if (names?.GetDictionary("Dests") is { } destTree)
+        // /Names /Dests name tree: the root node is normally an indirect reference, so it must be
+        // resolved (GetDictionary would return null for an indirect value and skip the whole tree).
+        if (Names is { } namesDict && _document.Resolve(namesDict.Get("Dests")) is PdfDictionary destTree)
         {
             return LookupNameTree(destTree, name);
         }

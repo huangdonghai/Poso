@@ -481,6 +481,27 @@ public static class PdfFixtures
         new PdfObjectDefinition(12, "<< /Title (Section 2.1) /Parent 9 0 R /Dest [5 0 R /XYZ 0 792 1] >>"));
 
     /// <summary>
+    /// An outline whose bookmark resolves its target through a <c>/Names /Dests</c> name tree reached via
+    /// <b>indirect references</b> (catalog -&gt; /Names -&gt; /Dests -&gt; tree node -&gt; destination array), with the
+    /// action form <c>/A &lt;&lt; /S /GoTo /D (name) &gt;&gt;</c>. Guards the bug where PdfCatalog looked up the
+    /// name tree with a non-resolving <c>GetDictionary("Dests")</c>, so an indirect /Dests value was skipped
+    /// and every named destination came back null (bookmarks did nothing). Real generators (Word, scanned
+    /// books) emit exactly this indirect layout.
+    /// </summary>
+    public static byte[] CreateOutlineNamedTreePdf() => Build(1,
+        new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R /Outlines 7 0 R /Names 20 0 R >>"),
+        new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>"),
+        new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R /Resources << >> >>"),
+        Stream(4, string.Empty, Encoding.ASCII.GetBytes("0 0 0 rg 10 10 50 20 re f")),
+        new PdfObjectDefinition(5, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 6 0 R /Resources << >> >>"),
+        Stream(6, string.Empty, Encoding.ASCII.GetBytes("0 0 0 rg 10 10 50 20 re f")),
+        new PdfObjectDefinition(7, "<< /Type /Outlines /First 8 0 R /Last 8 0 R /Count 1 >>"),
+        new PdfObjectDefinition(8, "<< /Title (Chapter 2) /Parent 7 0 R /A << /S /GoTo /D (chap2) >> >>"),
+        new PdfObjectDefinition(20, "<< /Dests 21 0 R >>"),
+        new PdfObjectDefinition(21, "<< /Names [(chap2) 22 0 R] >>"),
+        new PdfObjectDefinition(22, "[5 0 R /XYZ 0 792 0]"));
+
+    /// <summary>
     /// A page whose content stream uses a shading operator (sh). Lenient rendering skips the
     /// operator and still paints the following rectangle; strict rendering throws.
     /// </summary>
