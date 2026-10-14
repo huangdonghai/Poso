@@ -15,15 +15,26 @@ public sealed class Type1Glyph
 }
 
 /// <summary>
+/// Common shape of a parsed Type 1 program - name-keyed (<see cref="Type1Program"/>) or CID-keyed
+/// (<see cref="Type1CidProgram"/>) - consumed by <see cref="Type1ToCff"/> to emit a Type 2 (CFF) binary.
+/// </summary>
+internal interface IType1Program
+{
+    float[] FontMatrix { get; }
+    float[] FontBBox { get; }
+    IReadOnlyList<Type1Glyph> Glyphs { get; }
+}
+
+/// <summary>
 /// Reader for a binary Type 1 font program (PDF <c>FontFile</c>). It decrypts the <c>eexec</c> block,
 /// extracts the Private dictionary, subroutines and charstrings, and converts every Type 1 charstring
 /// into a Type 2 (CFF) charstring so the result can be wrapped as CFF and handed to the graphics
 /// back end. The algorithm mirrors pdf.js's <c>type1_parser.js</c> (validated against MuPDF).
 /// </summary>
-public sealed class Type1Program
+public sealed class Type1Program : IType1Program
 {
     private const int EexecKey = 55665;
-    private const int CharStringsKey = 4330;
+    internal const int CharStringsKey = 4330;
 
     public float[] FontMatrix { get; }
     public float[] FontBBox { get; }
@@ -284,7 +295,7 @@ public sealed class Type1Program
 
     // ---- Type 1 charstring -> Type 2 charstring (mirrors pdf.js Type1CharString.convert) ----
 
-    private sealed class Type1CharString
+    internal sealed class Type1CharString
     {
         private readonly List<byte> output = [];
         private readonly List<double> stack = [];
@@ -675,7 +686,7 @@ public sealed class Type1Program
         return true;
     }
 
-    private static byte[] Decrypt(byte[] data, int key, int discard)
+    internal static byte[] Decrypt(byte[] data, int key, int discard)
     {
         const int c1 = 52845;
         const int c2 = 22719;
@@ -703,11 +714,17 @@ public sealed class Type1Program
     }
 
     /// <summary>A minimal PostScript tokenizer over a byte buffer, mirroring pdf.js's stream reading.</summary>
-    private sealed class PsStream
+    internal sealed class PsStream
     {
         private readonly byte[] data;
         private int pos;
         private int currentChar;
+
+        /// <summary>Byte offset of the next byte to read (used to locate the StartData binary block).</summary>
+        public int Position => pos;
+
+        /// <summary>Bytes left to read from the buffer.</summary>
+        public int Remaining => System.Math.Max(0, data.Length - pos);
 
         public PsStream(byte[] data)
         {

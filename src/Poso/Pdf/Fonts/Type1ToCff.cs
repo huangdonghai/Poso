@@ -12,7 +12,7 @@ namespace Poso.Pdf.Fonts;
 /// </summary>
 internal static class Type1ToCff
 {
-    public static byte[] Build(Type1Program program, string fontName)
+    public static byte[] Build(IType1Program program, string fontName, bool prependNotdef = true)
     {
         string name = SanitizeName(fontName);
 
@@ -40,20 +40,26 @@ internal static class Type1ToCff
         }
 
         var glyphs = program.Glyphs;
-        int glyphCount = glyphs.Count + 1; // + .notdef
+        // Name-keyed programs have no leading .notdef, so a synthetic one is prepended at glyph 0.
+        // CID programs already carry cid0/.notdef at index 0, which must map to GID 0 so CID == GID
+        // under the Type 0 / Identity mapping.
+        int glyphCount = prependNotdef ? glyphs.Count + 1 : glyphs.Count;
 
-        // CharStrings INDEX: GID 0 = .notdef (a bare "0 endchar"), then the converted glyphs in order.
-        var charstrings = new List<byte[]>(glyphCount) { new byte[] { 0x8b, 0x0e } };
+        var charstrings = new List<byte[]>(glyphCount);
+        if (prependNotdef)
+        {
+            charstrings.Add(new byte[] { 0x8b, 0x0e }); // synthetic .notdef ("0 endchar")
+        }
         foreach (Type1Glyph g in glyphs)
         {
             charstrings.Add(g.Charstring);
         }
 
-        // charset format 0: the SID of every glyph after .notdef.
+        // charset format 0: the SID of every glyph after .notdef (glyph 0 is implicit).
         var charset = new List<byte> { 0 }; // format 0
-        foreach (Type1Glyph g in glyphs)
+        for (int i = prependNotdef ? 0 : 1; i < glyphs.Count; i++)
         {
-            int sid = SidFor(g.Name);
+            int sid = SidFor(glyphs[i].Name);
             charset.Add((byte)(sid >> 8));
             charset.Add((byte)(sid & 0xff));
         }
@@ -110,7 +116,7 @@ internal static class Type1ToCff
         return ms.ToArray();
     }
 
-    private static byte[] BuildTopDict(Type1Program program, int charstringsOff, int charsetOff, int privateLen, int privateOff)
+    private static byte[] BuildTopDict(IType1Program program, int charstringsOff, int charsetOff, int privateLen, int privateOff)
     {
         var d = new List<byte>();
 

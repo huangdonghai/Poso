@@ -31,6 +31,10 @@ public abstract class PdfFont
     /// <summary>True for Type3 fonts.</summary>
     public virtual bool IsType3 => false;
 
+    /// <summary>True when the font writes vertically (WMode 2). The interpreter advances glyphs along
+    /// the writing axis instead of horizontally when this is set.</summary>
+    public virtual bool IsVertical => false;
+
     /// <summary>The graphics backend font (lazily created; null when unavailable).</summary>
     public IFont? GraphicsFont
     {
@@ -135,15 +139,29 @@ public abstract class PdfFont
 
         // A native binary Type 1 (FontFile) program is neither a container nor a CFF: convert its
         // charstrings to Type 2 and rebuild them as a CFF so it renders through the exact same path
-        // as a Type1C font. CID-keyed or malformed programs fall through to the plain-data return.
-        if ((data[0] == 0x25 /* '%' cleartext header */ || (data[0] == 0x80 && data[1] == 0x01 /* .pfb */))
-            && Type1Program.TryCreate(data, out Type1Program? type1) && type1 is not null)
+        // as a Type1C font. Handle both name-keyed and CID-keyed (Adobe TN 5014) variants.
+        if (data[0] == 0x25 /* '%' cleartext header */ || (data[0] == 0x80 && data[1] == 0x01 /* .pfb */))
         {
-            byte[] cff = Type1ToCff.Build(type1, string.IsNullOrEmpty(BaseFontName) ? "PosoType1" : BaseFontName);
-            if (CffProgram.TryCreate(cff, out CffProgram? program) && program is not null)
+            string fontName = string.IsNullOrEmpty(BaseFontName) ? "PosoType1" : BaseFontName;
+            if (Type1Program.TryCreate(data, out Type1Program? type1) && type1 is not null)
             {
-                EmbeddedGlyphNames = program;
-                return BuildCffContainer(cff, program);
+                byte[] cff = Type1ToCff.Build(type1, fontName);
+                if (CffProgram.TryCreate(cff, out CffProgram? program) && program is not null)
+                {
+                    EmbeddedGlyphNames = program;
+                    return BuildCffContainer(cff, program);
+                }
+            }
+            else if (Type1CidProgram.IsCidKeyedProgram(data)
+                && Type1CidProgram.TryCreate(data, out Type1CidProgram? cid) && cid is not null)
+            {
+                // CID program: keep GID == CID (no synthetic .notdef) for the Type 0 Identity mapping.
+                byte[] cff = Type1ToCff.Build(cid, fontName, prependNotdef: false);
+                if (CffProgram.TryCreate(cff, out CffProgram? program) && program is not null)
+                {
+                    EmbeddedGlyphNames = program;
+                    return BuildCffContainer(cff, program);
+                }
             }
         }
 

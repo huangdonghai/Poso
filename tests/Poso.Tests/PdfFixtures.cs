@@ -215,6 +215,114 @@ public static class PdfFixtures
             new PdfObjectDefinition(8, encoding));
     }
 
+    /// <summary>
+    /// A 200x120 page drawing two CID glyphs (codes 1 and 2 under /Identity-H) using a handcrafted
+    /// <b>CID-keyed binary Type 1</b> program (Adobe TN 5014) embedded as <c>FontFile</c> behind a
+    /// Type0 / CIDFontType0 descendant. Each CID glyph is a filled rectangle, so the whole Type 0 decode
+    /// -> CID -> GID -> Type1->CFF -> Skia rasterize pipeline is exercised end to end.
+    /// </summary>
+    public static byte[] CreateCidKeyedType1Pdf()
+    {
+        byte[] program = BuildCidType1Program();
+        string type0 = "<< /Type /Font /Subtype /Type0 /BaseFont /CidTest /Encoding /Identity-H /DescendantFonts [6 0 R] >>";
+        string cid = "<< /Type /Font /Subtype /CIDFontType0 /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> "
+            + "/FontDescriptor 7 0 R /DW 1000 /W [ 1 [600] 2 [600] ] >>";
+        string descriptor = "<< /Type /FontDescriptor /FontName /CidTest /Flags 4 /FontBBox [0 0 1000 1000] "
+            + "/Ascent 800 /Descent -200 /ItalicAngle 0 /StemV 80 /FontFile 8 0 R >>";
+        string content = "BT /F1 100 Tf 10 60 Td <00010002> Tj ET";
+
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 120] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            new PdfObjectDefinition(5, type0),
+            new PdfObjectDefinition(6, cid),
+            new PdfObjectDefinition(7, descriptor),
+            Stream(8, string.Empty, program));
+    }
+
+    // Assembles a minimal CID-keyed Type 1 program: cleartext header + CIDMap + plaintext (lenIV -1)
+    // charstrings. CID 0 is an empty .notdef; CID 1 and 2 are the same filled rectangle path.
+    private static byte[] BuildCidType1Program()
+    {
+        byte[] notdef = [0x8b, 0x0e]; // "0 endchar"
+        byte[] rect = RectCharstring(600, 100, 0, 400, 500);
+
+        int cidMapLen = (3 + 1) * 1; // CIDCount + 1 entries, GDBytes 1, FDBytes 0
+        int dataStart = cidMapLen;
+        int e0 = dataStart;
+        int e1 = e0 + notdef.Length;
+        int e2 = e1 + rect.Length;
+        int e3 = e2 + rect.Length;
+
+        using var bin = new MemoryStream();
+        bin.WriteByte((byte)e0);
+        bin.WriteByte((byte)e1);
+        bin.WriteByte((byte)e2);
+        bin.WriteByte((byte)e3);
+        bin.Write(notdef);
+        bin.Write(rect);
+        bin.Write(rect);
+        byte[] binary = bin.ToArray();
+
+        string header =
+            "%!PS-Adobe-3.0 Resource-CIDFont\n" +
+            "/CIDMapOffset 0 def\n/FDBytes 0 def\n/GDBytes 1 def\n/CIDCount 3 def\n" +
+            "/FontMatrix [0.001 0 0 0.001 0 0] def\n/FontBBox [0 0 1000 1000] def\n" +
+            "/Private 5 dict dup begin /lenIV -1 def end def\n" +
+            $"(Binary) {binary.Length} StartData ";
+
+        byte[] head = Encoding.ASCII.GetBytes(header);
+        var result = new byte[head.Length + binary.Length];
+        head.CopyTo(result, 0);
+        binary.CopyTo(result, head.Length);
+        return result;
+    }
+
+    // A Type 1 charstring for an axis-aligned filled rectangle: sbx wx hsbw, x y rmoveto, four rlineto, endchar.
+    private static byte[] RectCharstring(int width, int x, int y, int w, int h)
+    {
+        var cs = new List<byte>();
+        void Num(int v)
+        {
+            // pdf.js Type 1 / Type 2 charstring operand encoding (the form the converter decodes).
+            if (v is >= -107 and <= 107)
+            {
+                cs.Add((byte)(v + 139));
+            }
+            else if (v is >= 108 and <= 779)
+            {
+                int t = v - 108;
+                cs.Add((byte)((t >> 8) + 247));
+                cs.Add((byte)(t & 0xff));
+            }
+            else if (v is >= -779 and <= -108)
+            {
+                int t = -v - 108;
+                cs.Add((byte)((t >> 8) + 251));
+                cs.Add((byte)(t & 0xff));
+            }
+            else
+            {
+                cs.Add(29);
+                cs.Add((byte)((v >> 24) & 0xff));
+                cs.Add((byte)((v >> 16) & 0xff));
+                cs.Add((byte)((v >> 8) & 0xff));
+                cs.Add((byte)(v & 0xff));
+            }
+        }
+
+        Num(0); Num(width); cs.Add(13); // hsbw (sbx=0, wx=width)
+        Num(x); Num(y); cs.Add(21); // rmoveto to the box corner
+        Num(w); Num(0); cs.Add(5); // rlineto right
+        Num(0); Num(h); cs.Add(5); // rlineto up
+        Num(-w); Num(0); cs.Add(5); // rlineto left
+        Num(0); Num(-h); cs.Add(5); // rlineto down (closes)
+        cs.Add(14); // endchar
+        return cs.ToArray();
+    }
+
     /// <summary>A page with an uncompressed 2x2 RGB image XObject scaled into a 100x50 rect.</summary>
     public static byte[] CreateImagePdf()
     {
