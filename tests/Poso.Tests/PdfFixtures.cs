@@ -25,6 +25,46 @@ public static class PdfFixtures
     public static PdfObjectDefinition Stream(int number, string extraDictionary, byte[] data) =>
         new(number, $"<< /Length {data.Length}{(extraDictionary.Length > 0 ? " " + extraDictionary : string.Empty)} >>", data);
 
+    /// <summary>
+    /// A minimal CID-keyed CFF program (Top DICT has ROS, no FDArray - the reader only needs the ROS,
+    /// charset and CharStrings). Its charset is deliberately NON-identity (GID 1..4 -> CID 300,100,250,7)
+    /// so a test can prove the CID->GID map is read from the charset rather than assumed to be identity.
+    /// Returns the raw CFF bytes plus the expected glyph count and the (CID -> GID) pairs.
+    /// </summary>
+    public static byte[] BuildCidKeyedCffProgram(out int glyphCount, out (int Cid, int Gid)[] cidToGid)
+    {
+        glyphCount = 5; // GID 0..4; the charset covers GID 1..4 (the four CIDs below)
+        cidToGid = [(300, 1), (100, 2), (250, 3), (7, 4)];
+
+        // Top DICT: ROS(12 30) with dummy operands, charset offset (op 15), CharStrings offset (op 17).
+        // Offsets are computed from the fixed layout below: charset at 32, CharStrings at 41.
+        var dict = new List<byte> { 0xef, 0xef, 0xef, 0x0c, 0x1e };        // 100 100 100 ROS
+        dict.AddRange([0x1c, 0x00, 0x20, 0x0f]);                            // 32 charset
+        dict.AddRange([0x1c, 0x00, 0x29, 0x11]);                            // 41 CharStrings
+
+        var cff = new List<byte> { 0x01, 0x00, 0x04, 0x04 };               // header
+        cff.AddRange([0x00, 0x01, 0x01, 0x01, 0x02, (byte)'T']);           // Name INDEX (1 name)
+        cff.AddRange([0x00, 0x01, 0x01, 0x01, (byte)(dict.Count + 1)]);    // Top INDEX header + offsets
+        cff.AddRange(dict);                                               // Top DICT data
+        cff.AddRange([0x00, 0x00]);                                       // String INDEX (empty)
+        cff.AddRange([0x00, 0x00]);                                       // Global subr INDEX (empty)
+        // charset format 0: one 2-byte CID per glyph (GID 1..n)
+        cff.Add(0x00);
+        foreach ((int cid, _) in cidToGid)
+        {
+            cff.Add((byte)(cid >> 8));
+            cff.Add((byte)(cid & 0xff));
+        }
+        // CharStrings INDEX: 5 one-byte charstrings (bare 'endchar')
+        cff.AddRange([0x00, 0x05, 0x01, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06]);
+        for (int i = 0; i < 5; i++)
+        {
+            cff.Add(0x0e);
+        }
+
+        return cff.ToArray();
+    }
+
     /// <summary>Builds a PDF using a traditional xref table (the catalog is object 1 by convention).</summary>
     public static byte[] Build(int rootNumber, params PdfObjectDefinition[] objects)
     {

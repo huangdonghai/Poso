@@ -100,6 +100,13 @@ public abstract class PdfFont
     /// <summary>The embedded name-keyed CFF program, used to resolve glyph names to glyph IDs; null when the font has none.</summary>
     protected CffProgram? EmbeddedGlyphNames { get; private set; }
 
+    /// <summary>
+    /// The CID to glyph-ID map from an embedded CID-keyed CFF (FontFile3 /CIDFontType0C), derived from its
+    /// charset; null when the font has no such program. A Type 0 / Identity font addresses glyphs by CID,
+    /// but the CFF numbers them by GID, so this map is what makes the right outline get drawn.
+    /// </summary>
+    protected Dictionary<int, ushort>? EmbeddedCidToGid { get; private set; }
+
     /// <summary>The embedded font program prepared for a graphics backend (cached); null when the PDF embeds none.</summary>
     protected byte[]? EmbeddedFontData => _embeddedFontData ??= LoadEmbeddedFontData();
 
@@ -128,13 +135,22 @@ public abstract class PdfFont
         // glyph names from the PDF encoding can be resolved to glyph IDs.
         if (data[0] == 1 && data[1] == 0 && data[2] == 4)
         {
-            if (!CffProgram.TryCreate(data, out CffProgram? program) || program is null)
+            if (CffProgram.TryCreate(data, out CffProgram? program) && program is not null)
             {
-                return null;
+                EmbeddedGlyphNames = program;
+                return BuildCffContainer(data, program);
             }
 
-            EmbeddedGlyphNames = program;
-            return BuildCffContainer(data, program);
+            // A CID-keyed CFF (embedded CJK / Adobe-* fonts): the renderer parses its FDArray/FDSelect and
+            // outlines directly once wrapped, so pass the bytes through unchanged and only keep the
+            // charset-derived CID->GID map so the Type 0 codes address the right glyph.
+            if (CidCffProgram.TryCreate(data, out CidCffProgram? cid) && cid is not null)
+            {
+                EmbeddedCidToGid = cid.CidToGid;
+                return BuildCffContainer(data, cid);
+            }
+
+            return null;
         }
 
         // A native binary Type 1 (FontFile) program is neither a container nor a CFF: convert its
@@ -170,7 +186,7 @@ public abstract class PdfFont
 
     /// <summary>Wraps a bare CFF program into the OpenType container the back end loads, using the
     /// FontDescriptor ascent/descent for the vertical metrics.</summary>
-    private byte[] BuildCffContainer(byte[] cff, CffProgram program)
+    private byte[] BuildCffContainer(byte[] cff, ICffMetrics program)
     {
         PdfDictionary? descriptor = FontDescriptor;
         return CffOpenType.Build(

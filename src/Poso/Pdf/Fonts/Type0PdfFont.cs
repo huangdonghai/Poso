@@ -117,6 +117,18 @@ public sealed class Type0PdfFont : PdfFont
             return map[code];
         }
 
+        // A CIDFontType0 with an embedded CID-keyed CFF addresses glyphs by the CFF's own GID order,
+        // which differs from the CID whenever the charset is not the identity mapping (embedded subsets).
+        // Touching EmbeddedFontData lazily parses that program and fills EmbeddedCidToGid.
+        if (_descendantFont?.GetNameValue("Subtype") == "CIDFontType0")
+        {
+            _ = EmbeddedFontData;
+            if (EmbeddedCidToGid is { } cidMap)
+            {
+                return cidMap.TryGetValue(code, out ushort gid) ? gid : (ushort)0;
+            }
+        }
+
         return (ushort)Math.Clamp(code, 0, ushort.MaxValue);
     }
 

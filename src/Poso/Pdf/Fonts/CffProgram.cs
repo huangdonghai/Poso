@@ -1,5 +1,14 @@
 namespace Poso.Pdf.Fonts;
 
+/// <summary>The subset of a CFF program the OpenType wrapper needs: glyph count and design-space metrics.
+/// Implemented by both the name-keyed <see cref="CffProgram"/> and the CID-keyed <see cref="CidCffProgram"/>.</summary>
+internal interface ICffMetrics
+{
+    int GlyphCount { get; }
+    float[] FontMatrix { get; }
+    float[] FontBBox { get; }
+}
+
 /// <summary>
 /// Reader for a name-keyed CFF program (PDF <c>FontFile</c> Type1, or <c>FontFile3</c> with
 /// /Subtype /Type1C or /CFF). It parses the glyph count, the design space and the charset, which
@@ -11,7 +20,7 @@ namespace Poso.Pdf.Fonts;
 /// <see cref="CffStandardStrings"/> is the bridge between the two, and it is the only dependable way
 /// to pick the right outline out of an embedded subset font.
 /// </remarks>
-public sealed class CffProgram
+public sealed class CffProgram : ICffMetrics
 {
     /// <summary>CFF FontMatrix when the program omits the operator (the spec default scales by 1/1000).</summary>
     private static readonly float[] DefaultFontMatrix = [0.001f, 0f, 0f, 0f, 0.001f, 0f];

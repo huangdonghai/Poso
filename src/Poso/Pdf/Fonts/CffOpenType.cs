@@ -17,7 +17,7 @@ internal static class CffOpenType
     /// <summary>Units per em declared by PDF font metrics (Type1C programs are always 1/1000 em).</summary>
     private const int PdfTextSpaceUnits = 1000;
 
-    public static byte[] Build(byte[] cff, CffProgram program, float ascent, float descent, string postScriptName)
+    public static byte[] Build(byte[] cff, ICffMetrics program, float ascent, float descent, string postScriptName)
     {
         int upem = UnitsPerEm(program.FontMatrix);
         float toUnits = upem / (float)PdfTextSpaceUnits;
@@ -117,7 +117,7 @@ internal static class CffOpenType
         return sum;
     }
 
-    private static byte[] Head(CffProgram program, int upem)
+    private static byte[] Head(ICffMetrics program, int upem)
     {
         using var stream = new MemoryStream();
         BigEndian writer = new(stream);
@@ -145,7 +145,7 @@ internal static class CffOpenType
         return stream.ToArray();
     }
 
-    private static byte[] HorizontalHeader(float ascent, float descent, CffProgram program, float toUnits, int glyphCount)
+    private static byte[] HorizontalHeader(float ascent, float descent, ICffMetrics program, float toUnits, int glyphCount)
     {
         using var stream = new MemoryStream();
         BigEndian writer = new(stream);
