@@ -67,6 +67,10 @@ public partial class MainViewModel : ViewModelBase
     [ObservableProperty]
     private bool _isSidebarVisible = true;
 
+    /// <summary>Width of the left sidebar (bookmarks/thumbnails), adjustable by dragging the grip. Clamped 140-520.</summary>
+    [ObservableProperty]
+    private double _sidebarWidth = 220;
+
     [ObservableProperty]
     private int _selectedSidebarTab;
 
@@ -282,7 +286,9 @@ public partial class MainViewModel : ViewModelBase
         try
         {
             using IGraphicsContext context = _graphicsFactory.CreateContext(width, height);
-            page.Render(_graphicsFactory, context, new PdfRenderOptions((float)scale));
+            // White background, matching the main viewer's render pipeline; without it a page that does
+            // not paint its own paper fills the thumbnail with transparent pixels.
+            page.Render(_graphicsFactory, context, new PdfRenderOptions((float)scale, 0f, PosoColor.White));
             using IImage image = context.Snapshot();
             return Poso.Avalonia.Imaging.BitmapConverter.ToWriteableBitmap(image);
         }

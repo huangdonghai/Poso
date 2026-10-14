@@ -13,14 +13,19 @@
     </Design.DataContext>
 
     <Grid RowDefinitions="Auto,*" Background="{DynamicResource SystemRegionBrush}">
-        <!-- Toolbar -->
-        <Grid Grid.Row="0" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*,Auto" Margin="8" Height="40">
+        <!-- Toolbar: elevated chrome surface with a bottom divider so it reads as a distinct bar (and never the same colour as the page region below). -->
+        <Border Grid.Row="0"
+                Background="{DynamicResource SystemControlBackgroundChromeMediumLowBrush}"
+                BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
+                BorderThickness="0,0,0,1">
+            <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*,Auto" Margin="8" Height="40">
             <Button Grid.Column="0" Command="{Binding OpenFileCommand}" Content="Open" />
             <Button Grid.Column="1" Command="{Binding OpenSidebarCommand}" Content="&#9776;" Width="36"
                     ToolTip.Tip="Toggle sidebar" Margin="4,0,0,0" />
             <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4" Margin="8,0,0,0">
                 <Button Command="{Binding PreviousPageCommand}" Content="&#9664;" Width="32" />
-                <TextBox Text="{Binding CurrentPage}" Width="48" TextAlignment="Center" />
+                <TextBox x:Name="PageBox" Text="{Binding CurrentPage, Mode=OneWay}" Width="48" TextAlignment="Center"
+                         ToolTip.Tip="Type a page number and press Enter" GotFocus="OnPageBoxGotFocus" KeyDown="OnPageBoxKeyDown" />
                 <TextBlock Text="/" VerticalAlignment="Center" />
                 <TextBlock Text="{Binding PageCount}" VerticalAlignment="Center" MinWidth="32" />
                 <Button Command="{Binding NextPageCommand}" Content="&#9654;" Width="32" />
@@ -48,11 +53,13 @@
                 <Button Content="&#9654;" Command="{Binding NextHitCommand}" Width="28" />
                 <TextBlock Text="{Binding SearchStatus}" VerticalAlignment="Center" MinWidth="70" />
             </StackPanel>
-        </Grid>
+            </Grid>
+        </Border>
 
-        <Grid Grid.Row="1" ColumnDefinitions="Auto,*">
+        <Grid Grid.Row="1" ColumnDefinitions="Auto,Auto,*">
             <!-- Sidebar: bookmarks and thumbnails -->
-            <Border Grid.Column="0" Width="220" BorderBrush="{DynamicResource SystemBaseLowColor}"
+            <Border Grid.Column="0" Width="{Binding SidebarWidth}" MinWidth="140" MaxWidth="520"
+                    BorderBrush="{DynamicResource SystemBaseLowColor}"
                     BorderThickness="0,0,1,0" IsVisible="{Binding IsSidebarVisible}">
                 <Grid RowDefinitions="Auto,*" Margin="8">
                     <StackPanel Orientation="Horizontal" Spacing="4">
@@ -86,15 +93,21 @@
                 </Grid>
             </Border>
 
+            <!-- Sidebar resize grip -->
+            <Border Grid.Column="1" Width="5" Background="Transparent" Cursor="SizeWestEast"
+                    IsVisible="{Binding IsSidebarVisible}"
+                    PointerPressed="OnSidebarGripPressed"
+                    PointerMoved="OnSidebarGripMoved"
+                    PointerReleased="OnSidebarGripReleased" />
+
             <!-- Viewer -->
-            <controls:PdfView x:Name="Viewer" Grid.Column="1"
+            <controls:PdfView x:Name="Viewer" Grid.Column="2"
                               Source="{Binding Document}"
                               GraphicsFactory="{Binding GraphicsFactory}"
                               Zoom="{Binding Zoom, Mode=TwoWay}"
                               ZoomMode="{Binding ZoomMode, Mode=TwoWay}"
                               Rotation="{Binding Rotation, Mode=TwoWay}"
-                              PageLayout="{Binding PageLayout, Mode=TwoWay}"
-                              CurrentPage="{Binding CurrentPage, Mode=OneWay}" />
+                              PageLayout="{Binding PageLayout, Mode=TwoWay}" />
         </Grid>
     </Grid>
 </UserControl>

@@ -182,6 +182,78 @@ public partial class MainView : UserControl
         Viewer?.GoToPage(pageIndex);
     }
 
+    /// <summary>Selects the current page number on focus so typing a new one replaces it outright.</summary>
+    private void OnPageBoxGotFocus(object? sender, FocusChangedEventArgs e)
+    {
+        PageBox.SelectAll();
+    }
+
+    /// <summary>
+    /// Commits a page number typed into the toolbar box when Enter is pressed: jumps to it when it is a
+    /// valid in-range page, otherwise snaps the box back to the real current page. The box itself is bound
+    /// OneWay to <see cref="MainViewModel.CurrentPage"/>, so it always reflects the viewer after navigation.
+    /// </summary>
+    private void OnPageBoxKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter || ViewModel is not { } viewModel)
+        {
+            return;
+        }
+
+        if (int.TryParse(PageBox.Text, out int page) && page >= 1 && page <= viewModel.PageCount)
+        {
+            viewModel.SelectPageCommand.Execute(page);
+        }
+        else
+        {
+            PageBox.Text = viewModel.CurrentPage.ToString();
+        }
+
+        PageBox.CaretIndex = PageBox.Text.Length;
+        e.Handled = true;
+    }
+
+    // ---- Sidebar resize grip ----
+    private bool _sidebarResizing;
+    private double _sidebarStartWidth;
+    private double _sidebarStartX;
+
+    private void OnSidebarGripPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (ViewModel is not { } viewModel)
+        {
+            return;
+        }
+
+        _sidebarResizing = true;
+        _sidebarStartWidth = viewModel.SidebarWidth;
+        _sidebarStartX = e.GetPosition(null).X;
+        e.Pointer.Capture(sender as IInputElement);
+        e.Handled = true;
+    }
+
+    private void OnSidebarGripMoved(object? sender, PointerEventArgs e)
+    {
+        if (!_sidebarResizing || ViewModel is not { } viewModel)
+        {
+            return;
+        }
+
+        double dx = e.GetPosition(null).X - _sidebarStartX;
+        viewModel.SidebarWidth = Math.Clamp(_sidebarStartWidth + dx, 140, 520);
+    }
+
+    private void OnSidebarGripReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        if (!_sidebarResizing)
+        {
+            return;
+        }
+
+        _sidebarResizing = false;
+        e.Pointer.Capture(null);
+    }
+
     private void OnPageChanged(object? sender, PageChangedEventArgs e)
     {
         if (ViewModel is { } viewModel)
