@@ -130,16 +130,37 @@ public abstract class PdfFont
             }
 
             EmbeddedGlyphNames = program;
-            PdfDictionary? descriptor = FontDescriptor;
-            return CffOpenType.Build(
-                data,
-                program,
-                (float)(descriptor?.GetNumberValue("Ascent") ?? 750d),
-                (float)(descriptor?.GetNumberValue("Descent") ?? -250d),
-                string.IsNullOrEmpty(BaseFontName) ? "PosoFont" : BaseFontName);
+            return BuildCffContainer(data, program);
+        }
+
+        // A native binary Type 1 (FontFile) program is neither a container nor a CFF: convert its
+        // charstrings to Type 2 and rebuild them as a CFF so it renders through the exact same path
+        // as a Type1C font. CID-keyed or malformed programs fall through to the plain-data return.
+        if ((data[0] == 0x25 /* '%' cleartext header */ || (data[0] == 0x80 && data[1] == 0x01 /* .pfb */))
+            && Type1Program.TryCreate(data, out Type1Program? type1) && type1 is not null)
+        {
+            byte[] cff = Type1ToCff.Build(type1, string.IsNullOrEmpty(BaseFontName) ? "PosoType1" : BaseFontName);
+            if (CffProgram.TryCreate(cff, out CffProgram? program) && program is not null)
+            {
+                EmbeddedGlyphNames = program;
+                return BuildCffContainer(cff, program);
+            }
         }
 
         return data;
+    }
+
+    /// <summary>Wraps a bare CFF program into the OpenType container the back end loads, using the
+    /// FontDescriptor ascent/descent for the vertical metrics.</summary>
+    private byte[] BuildCffContainer(byte[] cff, CffProgram program)
+    {
+        PdfDictionary? descriptor = FontDescriptor;
+        return CffOpenType.Build(
+            cff,
+            program,
+            (float)(descriptor?.GetNumberValue("Ascent") ?? 750d),
+            (float)(descriptor?.GetNumberValue("Descent") ?? -250d),
+            string.IsNullOrEmpty(BaseFontName) ? "PosoFont" : BaseFontName);
     }
 
     /// <summary>The FontDescriptor of this font; Type0 fonts keep it on their descendant.</summary>

@@ -162,6 +162,59 @@ public static class PdfFixtures
             new PdfObjectDefinition(5, font));
     }
 
+    /// <summary>
+    /// A 200x100 page drawing a single 'x' (code 120 under StandardEncoding) with a real embedded
+    /// <b>native binary Type 1</b> program (PDF <c>FontFile</c>, eexec-encrypted) supplied as
+    /// <paramref name="fontProgram"/>. Unlike the other text fixtures this font is neither a Standard-14
+    /// name nor a CFF/OpenType container, so it exercises the Type1 -> CFF conversion path end to end.
+    /// </summary>
+    public static byte[] CreateNativeType1Pdf(byte[] fontProgram)
+    {
+        string font = "<< /Type /Font /Subtype /Type1 /BaseFont /TestLucidaX /Encoding /StandardEncoding "
+            + "/FirstChar 120 /LastChar 120 /Widths [600] /FontDescriptor 6 0 R >>";
+        string descriptor = "<< /Type /FontDescriptor /FontName /TestLucidaX /Flags 4 "
+            + "/FontBBox [0 -211 743 940] /Ascent 772 /Descent -193 /ItalicAngle 0 /CapHeight 723 "
+            + "/XHeight 530 /StemV 97 /FontFile 7 0 R >>";
+        string content = "BT /F1 60 Tf 30 30 Td (x) Tj ET";
+
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            new PdfObjectDefinition(5, font),
+            new PdfObjectDefinition(6, descriptor),
+            Stream(7, string.Empty, fontProgram));
+    }
+
+    /// <summary>
+    /// Like <see cref="CreateNativeType1Pdf"/> but the font is <b>symbolic</b> (/Flags 4) and its
+    /// /Encoding is a dictionary carrying /Differences that do NOT cover the drawn code (120). Per
+    /// PDF 32000-1 Table 122 the codes outside /Differences still fall back to StandardEncoding, so
+    /// code 120 must resolve to the glyph named 'x'. Guards the bug where a symbolic font with an
+    /// /Encoding dictionary left those codes unmapped (blank), which dropped lone page-number digits.
+    /// </summary>
+    public static byte[] CreateSymbolicType1EncodingFallbackPdf(byte[] fontProgram)
+    {
+        string font = "<< /Type /Font /Subtype /Type1 /BaseFont /TestLucidaX /FirstChar 120 /LastChar 120 "
+            + "/Widths [600] /FontDescriptor 6 0 R /Encoding 8 0 R >>";
+        string descriptor = "<< /Type /FontDescriptor /FontName /TestLucidaX /Flags 4 "
+            + "/FontBBox [0 -211 743 940] /Ascent 772 /Descent -193 /ItalicAngle 0 /CapHeight 723 "
+            + "/XHeight 530 /StemV 97 /FontFile 7 0 R >>";
+        string encoding = "<< /Type /Encoding /Differences [ 20 /fi 21 /fl ] >>"; // code 120 untouched
+        string content = "BT /F1 60 Tf 30 30 Td (x) Tj ET";
+
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            new PdfObjectDefinition(5, font),
+            new PdfObjectDefinition(6, descriptor),
+            Stream(7, string.Empty, fontProgram),
+            new PdfObjectDefinition(8, encoding));
+    }
+
     /// <summary>A page with an uncompressed 2x2 RGB image XObject scaled into a 100x50 rect.</summary>
     public static byte[] CreateImagePdf()
     {

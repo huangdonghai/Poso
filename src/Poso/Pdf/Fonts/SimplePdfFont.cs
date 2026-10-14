@@ -108,14 +108,13 @@ public sealed class SimplePdfFont : PdfFont
 
         if (encodingDictionary is not null)
         {
-            // /BaseEncoding first, then /Differences overrides individual codes
+            // /BaseEncoding first, then /Differences overrides individual codes. When an /Encoding
+            // dictionary is present but /BaseEncoding is omitted, the base is StandardEncoding for
+            // every code not covered by /Differences (PDF 32000-1 Table 122) - regardless of the
+            // symbolic flag, which only selects the font's built-in encoding when there is no
+            // /Encoding at all. (Otherwise a symbolic subset font leaves digit codes unresolved.)
             string? baseEncoding = encodingDictionary.GetNameValue("BaseEncoding");
-            string?[]? table = baseEncoding is null ? null : SelectEncodingTable(baseEncoding);
-            if (table is null)
-            {
-                table = GetBuiltInEncodingTable();
-            }
-
+            string?[]? table = baseEncoding is null ? PdfEncodings.Standard : SelectEncodingTable(baseEncoding);
             if (table is not null)
             {
                 Array.Copy(table, _codeToName, 256);

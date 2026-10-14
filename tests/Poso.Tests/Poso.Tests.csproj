@@ -26,6 +26,7 @@
     <Content Include="Samples\Jpeg\*.jpg" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Samples\Jpeg\*.cmyk" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Samples\Jpeg\*.rgb" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Samples\Fonts\*.bin" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>
