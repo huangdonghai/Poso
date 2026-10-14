@@ -62,6 +62,8 @@ public sealed class PdfContentInterpreter
     private byte[]? _strokeLookup;
     private int _fillLookupComponents;
     private int _strokeLookupComponents;
+    private IccProfile? _fillIcc;
+    private IccProfile? _strokeIcc;
     private PdfFunction? _fillTint;
     private PdfFunction? _strokeTint;
     private ColorSpaceKind _fillBaseSpace = ColorSpaceKind.DeviceGray;
@@ -913,6 +915,7 @@ public sealed class PdfContentInterpreter
             _fillSpace = ColorSpaceKind.DeviceGray;
             _fillComponents = 1;
             _fillLookup = null;
+            _fillIcc = null;
             _state.FillColor = PosoColor.FromGray(PopNumber(operands));
             operands.Clear();
             return;
@@ -923,6 +926,7 @@ public sealed class PdfContentInterpreter
             _strokeSpace = ColorSpaceKind.DeviceGray;
             _strokeComponents = 1;
             _strokeLookup = null;
+            _strokeIcc = null;
             _state.StrokeColor = PosoColor.FromGray(PopNumber(operands));
             operands.Clear();
             return;
@@ -936,6 +940,7 @@ public sealed class PdfContentInterpreter
             _fillSpace = ColorSpaceKind.DeviceRgb;
             _fillComponents = 3;
             _fillLookup = null;
+            _fillIcc = null;
             _state.FillColor = PosoColor.FromRgb(r, g, b);
             operands.Clear();
             return;
@@ -949,6 +954,7 @@ public sealed class PdfContentInterpreter
             _strokeSpace = ColorSpaceKind.DeviceRgb;
             _strokeComponents = 3;
             _strokeLookup = null;
+            _strokeIcc = null;
             _state.StrokeColor = PosoColor.FromRgb(r, g, b);
             operands.Clear();
             return;
@@ -963,6 +969,7 @@ public sealed class PdfContentInterpreter
             _fillSpace = ColorSpaceKind.DeviceCmyk;
             _fillComponents = 4;
             _fillLookup = null;
+            _fillIcc = null;
             _state.FillColor = PosoColor.FromCmyk(c, m, y, k);
             operands.Clear();
             return;
@@ -977,6 +984,7 @@ public sealed class PdfContentInterpreter
             _strokeSpace = ColorSpaceKind.DeviceCmyk;
             _strokeComponents = 4;
             _strokeLookup = null;
+            _strokeIcc = null;
             _state.StrokeColor = PosoColor.FromCmyk(c, m, y, k);
             operands.Clear();
             return;
@@ -999,7 +1007,7 @@ public sealed class PdfContentInterpreter
             }
             else
             {
-                ApplyColorOperands(operands, _fillSpace, _fillComponents, _fillLookup, _fillLookupComponents, _fillTint, _fillBaseSpace, _fillBaseComponents, _fillLabWhite, _fillLabRange, _fillCal, out _state.FillColor);
+                ApplyColorOperands(operands, _fillSpace, _fillComponents, _fillLookup, _fillLookupComponents, _fillTint, _fillBaseSpace, _fillBaseComponents, _fillLabWhite, _fillLabRange, _fillCal, _fillIcc, out _state.FillColor);
             }
 
             operands.Clear();
@@ -1014,7 +1022,7 @@ public sealed class PdfContentInterpreter
             }
             else
             {
-                ApplyColorOperands(operands, _strokeSpace, _strokeComponents, _strokeLookup, _strokeLookupComponents, _strokeTint, _strokeBaseSpace, _strokeBaseComponents, _strokeLabWhite, _strokeLabRange, _strokeCal, out _state.StrokeColor);
+                ApplyColorOperands(operands, _strokeSpace, _strokeComponents, _strokeLookup, _strokeLookupComponents, _strokeTint, _strokeBaseSpace, _strokeBaseComponents, _strokeLabWhite, _strokeLabRange, _strokeCal, _strokeIcc, out _state.StrokeColor);
             }
 
             operands.Clear();
@@ -1539,6 +1547,7 @@ public sealed class PdfContentInterpreter
         float[] labWhite = DefaultLabWhitePoint;
         float[] labRange = DefaultLabRange;
         CalColor cal = new();
+        IccProfile? icc = null;
 
         switch (resolved)
         {
@@ -1557,7 +1566,11 @@ public sealed class PdfContentInterpreter
                 switch (family.Value)
                 {
                     case "ICCBased":
-                        int n = Math.Max(1, (int)((_document.Resolve(array[1]) as PdfStream)?.Dictionary.GetIntegerValue("N") ?? 3));
+                        PdfStream? iccStream = _document.Resolve(array[1]) as PdfStream;
+                        int n = Math.Max(1, (int)(iccStream?.Dictionary.GetIntegerValue("N") ?? 3));
+                        // Apply the embedded ICC profile for matrix/TRC RGB/Gray; other profile types keep the
+                        // device approximation chosen by component count below.
+                        icc = iccStream is not null ? IccProfile.TryCreate(iccStream.Decode()) : null;
                         (kind, components) = n switch
                         {
                             1 => (ColorSpaceKind.DeviceGray, 1),
@@ -1641,6 +1654,7 @@ public sealed class PdfContentInterpreter
             _strokeLabWhite = labWhite;
             _strokeLabRange = labRange;
             _strokeCal = cal;
+            _strokeIcc = icc;
         }
         else
         {
@@ -1654,6 +1668,7 @@ public sealed class PdfContentInterpreter
             _fillLabWhite = labWhite;
             _fillLabRange = labRange;
             _fillCal = cal;
+            _fillIcc = icc;
         }
 
         // Switching to a non-pattern color space clears any active shading pattern for that side.
@@ -1968,6 +1983,7 @@ public sealed class PdfContentInterpreter
         float[] labWhite,
         float[] labRange,
         CalColor cal,
+        IccProfile? icc,
         out PosoColor color)
     {
         if (kind == ColorSpaceKind.Pattern)
@@ -2002,6 +2018,13 @@ public sealed class PdfContentInterpreter
         if (kind is ColorSpaceKind.CalGray or ColorSpaceKind.CalRgb)
         {
             color = cal.ToRgb(values);
+            return;
+        }
+
+        if (icc is not null)
+        {
+            icc.ToRgb(values, out byte ir, out byte ig, out byte ib);
+            color = new PosoColor(ir, ig, ib);
             return;
         }
 

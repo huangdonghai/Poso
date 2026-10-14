@@ -28,6 +28,8 @@
     <Content Include="Samples\Jpeg\*.rgb" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Samples\Fonts\*.bin" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Samples\Pdf\*.pdf" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Samples\Icc\*.icc" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Samples\Icc\*.csv" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

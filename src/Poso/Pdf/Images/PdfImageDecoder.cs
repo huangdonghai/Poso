@@ -1,5 +1,6 @@
 using System.Linq;
 using Poso.Graphics;
+using Poso.Pdf.Colors;
 using Poso.Pdf.Filters.Codecs;
 using Poso.Pdf.Objects;
 
@@ -217,14 +218,21 @@ public static class PdfImageDecoder
                     }
 
                     ColorSpaceInfo space = colorSpace!;
-                    (r, g, b) = space.Kind switch
+                    if (space.Icc is { } icc)
                     {
-                        ColorSpaceKind.DeviceGray => GrayToRgb(sampleValues[0]),
-                        ColorSpaceKind.DeviceRgb => (ToByte(sampleValues[0]), ToByte(sampleValues[1]), ToByte(sampleValues[2])),
-                        ColorSpaceKind.DeviceCmyk => CmykToRgb(sampleValues[0], sampleValues[1], sampleValues[2], sampleValues[3]),
-                        ColorSpaceKind.Indexed => IndexedToRgb(space, (int)(sampleValues[0] * maxSample)),
-                        _ => GrayToRgb(sampleValues[0]),
-                    };
+                        icc.ToRgb(sampleValues, out r, out g, out b);
+                    }
+                    else
+                    {
+                        (r, g, b) = space.Kind switch
+                        {
+                            ColorSpaceKind.DeviceGray => GrayToRgb(sampleValues[0]),
+                            ColorSpaceKind.DeviceRgb => (ToByte(sampleValues[0]), ToByte(sampleValues[1]), ToByte(sampleValues[2])),
+                            ColorSpaceKind.DeviceCmyk => CmykToRgb(sampleValues[0], sampleValues[1], sampleValues[2], sampleValues[3]),
+                            ColorSpaceKind.Indexed => IndexedToRgb(space, (int)(sampleValues[0] * maxSample)),
+                            _ => GrayToRgb(sampleValues[0]),
+                        };
+                    }
 
                     if (colorKeyMin is not null && colorKeyMax is not null)
                     {
@@ -534,12 +542,13 @@ public static class PdfImageDecoder
 
     private sealed class ColorSpaceInfo
     {
-        public ColorSpaceInfo(ColorSpaceKind kind, int components, byte[] lookup, int baseComponents)
+        public ColorSpaceInfo(ColorSpaceKind kind, int components, byte[] lookup, int baseComponents, IccProfile? icc = null)
         {
             Kind = kind;
             Components = components;
             Lookup = lookup;
             BaseComponents = baseComponents;
+            Icc = icc;
         }
 
         public ColorSpaceKind Kind { get; }
@@ -549,6 +558,9 @@ public static class PdfImageDecoder
         public byte[] Lookup { get; }
 
         public int BaseComponents { get; }
+
+        /// <summary>Embedded ICC profile to apply, when the space is ICCBased and the profile is a supported matrix/TRC type; null otherwise.</summary>
+        public IccProfile? Icc { get; }
     }
 
     private static ColorSpaceInfo? ResolveColorSpace(PdfDocument document, PdfObject? colorSpaceObject)
@@ -572,11 +584,14 @@ public static class PdfImageDecoder
                     case "ICCBased":
                         PdfStream? profileStream = document.Resolve(array[1]) as PdfStream;
                         int n = Math.Max(1, (int)(profileStream?.Dictionary.GetIntegerValue("N") ?? 3));
+                        // Apply the embedded ICC profile for matrix/TRC RGB/Gray; other profile types
+                        // (CLUT, CMYK) fall back to the per-channel device approximation by component count.
+                        IccProfile? icc = profileStream is not null ? IccProfile.TryCreate(profileStream.Decode()) : null;
                         return n switch
                         {
-                            1 => new ColorSpaceInfo(ColorSpaceKind.DeviceGray, 1, Array.Empty<byte>(), 0),
-                            3 => new ColorSpaceInfo(ColorSpaceKind.DeviceRgb, 3, Array.Empty<byte>(), 0),
-                            4 => new ColorSpaceInfo(ColorSpaceKind.DeviceCmyk, 4, Array.Empty<byte>(), 0),
+                            1 => new ColorSpaceInfo(ColorSpaceKind.DeviceGray, 1, Array.Empty<byte>(), 0, icc),
+                            3 => new ColorSpaceInfo(ColorSpaceKind.DeviceRgb, 3, Array.Empty<byte>(), 0, icc),
+                            4 => new ColorSpaceInfo(ColorSpaceKind.DeviceCmyk, 4, Array.Empty<byte>(), 0, icc),
                             _ => null,
                         };
 
