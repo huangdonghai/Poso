@@ -32,6 +32,26 @@ internal sealed class IccProfile
 
     public int Components => _components;
 
+    // Per-channel device->linear look-up tables (256 entries each, indexed by the 8-bit device
+    // value) built lazily on first use. Images call ToRgb per pixel, so evaluating the tone curves
+    // via a LUT instead of a MathF.Pow per channel is the difference between a fast and a slow
+    // colour-managed image. The sRGB encode side is profile-independent and lives in EncodeLut.
+    private float[][]? _trcLut;
+
+    private const int EncodeLutSize = 16384;
+    private static readonly byte[] EncodeLut = BuildEncodeLut();
+
+    private static byte[] BuildEncodeLut()
+    {
+        var lut = new byte[EncodeLutSize];
+        for (int i = 0; i < EncodeLutSize; i++)
+        {
+            lut[i] = EncodeSrgb(i / (float)(EncodeLutSize - 1));
+        }
+
+        return lut;
+    }
+
     /// <summary>Parses a matrix/TRC RGB or Gray ICC profile; returns null for unsupported profiles.</summary>
     public static IccProfile? TryCreate(byte[] data)
     {
@@ -118,28 +138,51 @@ internal sealed class IccProfile
         }
     }
 
-    /// <summary>Converts device components in [0,1] to sRGB bytes.</summary>
+    /// <summary>Converts device components in [0,1] to sRGB bytes (LUT-accelerated).</summary>
     public void ToRgb(ReadOnlySpan<float> components, out byte r, out byte g, out byte b)
     {
+        float[][] trc = _trcLut ??= BuildTrcLut();
+
         if (_components == 1)
         {
-            float lin = _curves[0].Evaluate(components[0]);
-            r = EncodeSrgb(_grayToLinearSrgb[0] * lin);
-            g = EncodeSrgb(_grayToLinearSrgb[1] * lin);
-            b = EncodeSrgb(_grayToLinearSrgb[2] * lin);
+            float lin = trc[0][LutIndex(components[0])];
+            r = EncodeLut[EncodeIndex(_grayToLinearSrgb[0] * lin)];
+            g = EncodeLut[EncodeIndex(_grayToLinearSrgb[1] * lin)];
+            b = EncodeLut[EncodeIndex(_grayToLinearSrgb[2] * lin)];
             return;
         }
 
-        Span<float> deviceLinear = stackalloc float[3];
-        for (int i = 0; i < 3; i++)
+        float lr = trc[0][LutIndex(components.Length > 0 ? components[0] : 0f)];
+        float lg = trc[1][LutIndex(components.Length > 1 ? components[1] : 0f)];
+        float lb = trc[2][LutIndex(components.Length > 2 ? components[2] : 0f)];
+
+        r = EncodeLut[EncodeIndex(_deviceToLinearSrgb[0, 0] * lr + _deviceToLinearSrgb[0, 1] * lg + _deviceToLinearSrgb[0, 2] * lb)];
+        g = EncodeLut[EncodeIndex(_deviceToLinearSrgb[1, 0] * lr + _deviceToLinearSrgb[1, 1] * lg + _deviceToLinearSrgb[1, 2] * lb)];
+        b = EncodeLut[EncodeIndex(_deviceToLinearSrgb[2, 0] * lr + _deviceToLinearSrgb[2, 1] * lg + _deviceToLinearSrgb[2, 2] * lb)];
+    }
+
+    private float[][] BuildTrcLut()
+    {
+        var lut = new float[_components][];
+        for (int c = 0; c < _components; c++)
         {
-            deviceLinear[i] = _curves[i].Evaluate(i < components.Length ? components[i] : 0f);
+            var channel = new float[256];
+            for (int i = 0; i < 256; i++)
+            {
+                channel[i] = _curves[c].Evaluate(i / 255f);
+            }
+
+            lut[c] = channel;
         }
 
-        r = EncodeSrgb(_deviceToLinearSrgb[0, 0] * deviceLinear[0] + _deviceToLinearSrgb[0, 1] * deviceLinear[1] + _deviceToLinearSrgb[0, 2] * deviceLinear[2]);
-        g = EncodeSrgb(_deviceToLinearSrgb[1, 0] * deviceLinear[0] + _deviceToLinearSrgb[1, 1] * deviceLinear[1] + _deviceToLinearSrgb[1, 2] * deviceLinear[2]);
-        b = EncodeSrgb(_deviceToLinearSrgb[2, 0] * deviceLinear[0] + _deviceToLinearSrgb[2, 1] * deviceLinear[1] + _deviceToLinearSrgb[2, 2] * deviceLinear[2]);
+        return lut;
     }
+
+    // Device component in [0,1] -> 8-bit LUT index (exact for 8-bit samples, which are k/255).
+    private static int LutIndex(float x) => (int)MathF.Round(Math.Clamp(x, 0f, 1f) * 255f);
+
+    // Linear sRGB in [0,1] -> EncodeLut index.
+    private static int EncodeIndex(float linear) => (int)MathF.Round(Math.Clamp(linear, 0f, 1f) * (EncodeLutSize - 1));
 
     /// <summary>Converts 8-bit device components to sRGB bytes.</summary>
     public void ToRgb(ReadOnlySpan<byte> components, out byte r, out byte g, out byte b)

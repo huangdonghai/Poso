@@ -53,6 +53,9 @@ public sealed class SkiaFont : IFont
 
     public SKTypeface Typeface => _typeface;
 
+    /// <summary>The underlying unit-size (1em) Skia font, for the batched glyph-run draw path.</summary>
+    internal SKFont Font => _font;
+
     public ushort GetGlyphId(uint codePoint) => (ushort)_font.GetGlyph((int)codePoint);
 
     public float GetAdvanceWidth(ushort glyphId)
