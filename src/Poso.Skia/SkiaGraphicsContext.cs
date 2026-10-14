@@ -229,24 +229,14 @@ public sealed class SkiaGraphicsContext : IGraphicsContext
 
         SKColor skColor = SkiaConversions.ToSKColor(color);
 
-        // Fill-only runs (the overwhelming majority of text) go through a Skia text blob so the
-        // rasterised glyphs are reused from its glyph atlas instead of re-filling an outline path per
-        // glyph. Outlines are supplied in em space under the caller's CTM (which already scales by the
-        // font size and flips y for the page); Skia draws glyphs y-down, so a local Scale(1,-1) with
-        // the pen Y negated reproduces the outline path's orientation exactly. Vertical-writing runs
-        // (per-glyph Y != 0) keep the outline path: the mirrored-matrix atlas renders CJK glyphs with
-        // slightly different ink than the path fill, and those runs are rare enough not to matter.
-        bool baselineAligned = true;
-        foreach (GlyphPosition g in glyphs)
-        {
-            if (g.Y != 0f)
-            {
-                baselineAligned = false;
-                break;
-            }
-        }
-
-        if (fill && !stroke && !clip && baselineAligned)
+        // Fill-only runs (including vertical writing) go through a Skia text blob so the rasterised
+        // glyphs are reused from its glyph atlas instead of re-filling an outline path per glyph -
+        // markedly faster on text-heavy pages. Outlines are supplied in em space under the caller's
+        // CTM (which already scales by the font size and flips y for the page); Skia draws glyphs
+        // y-down, so a local Scale(1,-1) with the pen Y negated reproduces the outline path's
+        // placement exactly. Trade-off: the atlas coverage-AA inks small CJK glyphs a little lighter
+        // than the analytic path fill (geometry unchanged) - accepted for the performance win.
+        if (fill && !stroke && !clip)
         {
             int n = glyphs.Length;
             ushort[] ids = new ushort[n];

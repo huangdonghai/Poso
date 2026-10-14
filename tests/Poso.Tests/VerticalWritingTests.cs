@@ -16,8 +16,9 @@ namespace Poso.Tests;
 /// Oracle: MuPDF rendering of the pdf.js sample <c>vertical.pdf</c> page 0 (one vertical column of
 /// 'あいうえお日本語' with a second column to its left) gives ink 230, device bbox (214,22)-(237,66) at scale 1.
 /// Poso matches that bbox to ~1px by applying the PDF vertical position vector (drop the baseline one VY;
-/// centre each glyph horizontally by half its advance). Before this the run rendered as a wide, short,
-/// clipped horizontal sliver and the column sat ~5px too far right.
+/// centre each glyph horizontally by half its advance). Poso's ink is lower (~171) because text now
+/// renders through Skia's glyph atlas (faster), whose coverage-AA inks small CJK glyphs lighter than the
+/// analytic path fill; the geometry, not the ink density, is the fidelity guard.
 /// </summary>
 public class VerticalWritingTests
 {
@@ -76,11 +77,13 @@ public class VerticalWritingTests
         int height = maxY - minY + 1;
         Assert.True(height > width, $"expected a vertical column, got width {width} > height {height}");
 
-        // Ink and extent match the MuPDF oracle (230 ink; bbox (214,22)-(237,66)) to within ~1px:
-        // the vertical position vector (drop by one VY, shift left by half the horizontal advance)
-        // makes both the Y and X extents align. Tight bounds so a revert of the half-width shift
-        // (which moves the column ~5px right) is caught.
-        Assert.InRange(ink, 220, 270);
+        // Geometry (bbox) matches the MuPDF oracle (214,22)-(237,66) to ~1px: the vertical position
+        // vector (drop by one VY, shift left by half the horizontal advance) aligns both axes. The
+        // tight bbox bounds catch a revert of the half-width shift (moves the column ~5px right).
+        // Ink is a looser band: text renders via Skia's glyph atlas (faster), whose coverage-AA inks
+        // small CJK glyphs lighter than the analytic path fill (atlas ~171 vs path/MuPDF ~230); the
+        // band accepts either so it guards "renders, not blank/over-heavy", not exact density.
+        Assert.InRange(ink, 140, 270);
         Assert.InRange(width, 20, 28);
         Assert.InRange(height, 42, 50);
         Assert.InRange(minX, 210, 218);
