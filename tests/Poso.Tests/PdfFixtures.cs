@@ -323,6 +323,63 @@ public static class PdfFixtures
         return cs.ToArray();
     }
 
+    /// <summary>
+    /// A minimal PDF whose cross-reference is an XREF <b>STREAM</b> object (<c>/Type/XRef</c>, the PDF-1.5
+    /// spelling with a capital R) and has no classic <c>trailer</c> keyword. Guards the bug where
+    /// PdfXref.ParseXrefStream compared the type against "Xref" and rejected valid streams, forcing the
+    /// scan-recovery which (having no trailer) failed to locate the catalog -> the file could not open.
+    /// </summary>
+    public static byte[] CreateXrefStreamPdf()
+    {
+        using var ms = new MemoryStream();
+        void W(string s)
+        {
+            byte[] b = Encoding.GetEncoding("ISO-8859-1").GetBytes(s);
+            ms.Write(b, 0, b.Length);
+        }
+
+        void WB(byte[] b) => ms.Write(b, 0, b.Length);
+
+        W("%PDF-1.5\n%\u00E2\u00E3\u00CF\u00D3\n");
+
+        long[] off = new long[6];
+        off[1] = ms.Length; W("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+        off[2] = ms.Length; W("2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n");
+        off[3] = ms.Length; W("3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << >> /Contents 4 0 R >>\nendobj\n");
+        const string content = "0.5 w 10 10 m 100 50 l 150 20 l S\n";
+        off[4] = ms.Length;
+        W($"4 0 obj\n<< /Length {Encoding.GetEncoding("ISO-8859-1").GetByteCount(content)} >>\nstream\n");
+        W(content);
+        W("endstream\nendobj\n");
+
+        // Cross-reference stream body: /W [1 2 1] -> 1-byte type, 2-byte offset, 1-byte generation, 6 rows.
+        off[5] = ms.Length;
+        using (var xref = new MemoryStream())
+        {
+            void Row(int type, long position, int gen)
+            {
+                xref.WriteByte((byte)type);
+                xref.WriteByte((byte)((position >> 8) & 0xff));
+                xref.WriteByte((byte)(position & 0xff));
+                xref.WriteByte((byte)gen);
+            }
+
+            Row(0, 0, 0); // object 0: free
+            Row(1, off[1], 0);
+            Row(1, off[2], 0);
+            Row(1, off[3], 0);
+            Row(1, off[4], 0);
+            Row(1, off[5], 0); // the xref stream object points at itself
+
+            byte[] body = xref.ToArray();
+            W($"5 0 obj\n<< /Type /XRef /Size 6 /Root 1 0 R /W [1 2 1] /Length {body.Length} >>\nstream\n");
+            WB(body);
+        }
+        W("\nendstream\nendobj\n");
+        W($"startxref\n{off[5]}\n%%EOF\n");
+        return ms.ToArray();
+    }
+
     /// <summary>A page with an uncompressed 2x2 RGB image XObject scaled into a 100x50 rect.</summary>
     public static byte[] CreateImagePdf()
     {

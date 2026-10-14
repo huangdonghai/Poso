@@ -266,7 +266,9 @@ public sealed class PdfXref
         }
 
         PdfDictionary dictionary = stream.Dictionary;
-        if (dictionary.GetNameValue("Type") != "Xref")
+        // The cross-reference stream's type is the spec name /XRef (capital R). Compare case-insensitively
+        // so producers that vary the casing are still accepted (matching MuPDF/pdf.js leniency).
+        if (!string.Equals(dictionary.GetNameValue("Type"), "XRef", StringComparison.OrdinalIgnoreCase))
         {
             return null;
         }
