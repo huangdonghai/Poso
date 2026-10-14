@@ -5,6 +5,7 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
+using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Poso.Avalonia.Imaging;
 using Poso.Avalonia.Rendering;
@@ -105,7 +106,9 @@ public sealed class PdfView : ContentControl
 
         Content = _scrollViewer;
 
-        AddHandler(PointerWheelChangedEvent, OnPointerWheel, RoutingStrategies.Bubble);
+        // handledEventsToo: the inner ScrollViewer consumes the wheel when it can scroll, but single-page
+        // mode still needs the event to turn the page when there is nothing to scroll.
+        AddHandler(PointerWheelChangedEvent, OnPointerWheel, RoutingStrategies.Bubble, handledEventsToo: true);
         AddHandler(PointerPressedEvent, OnPointerPressed, RoutingStrategies.Bubble);
         AddHandler(PointerMovedEvent, OnPointerMoved, RoutingStrategies.Bubble);
         AddHandler(PointerReleasedEvent, OnPointerReleased, RoutingStrategies.Bubble);
@@ -363,7 +366,7 @@ public sealed class PdfView : ContentControl
         }
         else if (change.Property == PageBackgroundProperty)
         {
-            UpdatePageSizes();
+            ApplyPageBackground();
         }
     }
 
@@ -400,9 +403,12 @@ public sealed class PdfView : ContentControl
         _pipeline = new PageRenderPipeline(document, factory);
         _pipeline.Rendered += OnPageRendered;
 
+        SolidColorBrush pageBackground = CreatePageBackgroundBrush();
         for (int i = 0; i < document.PageCount; i++)
         {
-            var view = new PdfPageView { PageIndex = i };
+            // The paper background keeps a not-yet-rendered page a solid sheet instead of letting the
+            // (dark) viewer background show through, which otherwise flashes when paging to an uncached page.
+            var view = new PdfPageView { PageIndex = i, Background = pageBackground };
             view.LinkActivated += OnLinkActivated;
             _pageViews.Add(view);
             _pagesPanel.Children.Add(view);
@@ -856,6 +862,13 @@ public sealed class PdfView : ContentControl
             _scrollViewer.Offset = offset;
             e.Handled = true;
         }
+        else if (PageLayout == PageLayout.SinglePage && _scrollViewer.Extent.Height <= _scrollViewer.Viewport.Height + 1)
+        {
+            // Single-page mode has nothing to scroll while the page fits the viewport, so the wheel turns
+            // the page (scroll down = next). When zoomed past the viewport the ScrollViewer scrolls instead.
+            GoToPage(CurrentPage + (e.Delta.Y < 0 ? 1 : -1));
+            e.Handled = true;
+        }
     }
 
     private void OnPointerPressed(object? sender, PointerPressedEventArgs e)
@@ -898,6 +911,21 @@ public sealed class PdfView : ContentControl
     // ---- Helpers ----
 
     private static double Quantize(double zoom) => Math.Round(ZoomMath.ClampZoom(zoom), 2);
+
+    private SolidColorBrush CreatePageBackgroundBrush()
+    {
+        PosoColor c = PageBackground;
+        return new SolidColorBrush(Color.FromArgb(c.A, c.R, c.G, c.B));
+    }
+
+    private void ApplyPageBackground()
+    {
+        SolidColorBrush brush = CreatePageBackgroundBrush();
+        foreach (PdfPageView view in _pageViews)
+        {
+            view.Background = brush;
+        }
+    }
 
     /// <summary>
     /// Converts a page-space rectangle (y-up, origin at the crop box) into the device rectangle
