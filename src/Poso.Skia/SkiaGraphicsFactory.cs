@@ -6,6 +6,16 @@ namespace Poso.Skia;
 /// <summary>Skia implementation of <see cref="IGraphicsFactory"/>.</summary>
 public sealed class SkiaGraphicsFactory : IGraphicsFactory
 {
+    static SkiaGraphicsFactory()
+    {
+        // Skia's default glyph (font) cache holds only 2048 glyphs. That thrashes on glyph-rich
+        // scripts (CJK books have tens of thousands of distinct glyphs), forcing a ~100us re-raster
+        // of each uncached glyph on every render. Raise the count and byte budgets so rasterised
+        // glyphs persist across pages and zoom levels. These are LRU ceilings, not pre-allocated.
+        SKGraphics.SetFontCacheCountLimit(100_000);
+        SKGraphics.SetFontCacheLimit(64L * 1024 * 1024);
+    }
+
     /// <summary>Shared default instance (stateless, thread-safe).</summary>
     public static SkiaGraphicsFactory Default { get; } = new();
 
