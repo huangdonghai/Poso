@@ -15,8 +15,9 @@ namespace Poso.Tests;
 /// embedded CMap with /WMode 2) must lay the upright glyphs down a vertical column, not left-to-right.
 /// Oracle: MuPDF rendering of the pdf.js sample <c>vertical.pdf</c> page 0 (one vertical column of
 /// 'あいうえお日本語' with a second column to its left) gives ink 230, device bbox (214,22)-(237,66) at scale 1.
-/// Exact vertical pitch/origin depends on /W2/DW2 or the TrueType vmtx (P2); P1 asserts orientation, ink and
-/// placement within tolerance (before the fix Poso produced a wide, short, clipped horizontal sliver).
+/// Poso matches that bbox to ~1px by applying the PDF vertical position vector (drop the baseline one VY;
+/// centre each glyph horizontally by half its advance). Before this the run rendered as a wide, short,
+/// clipped horizontal sliver and the column sat ~5px too far right.
 /// </summary>
 public class VerticalWritingTests
 {
@@ -75,15 +76,17 @@ public class VerticalWritingTests
         int height = maxY - minY + 1;
         Assert.True(height > width, $"expected a vertical column, got width {width} > height {height}");
 
-        // Ink and extent track the MuPDF oracle (230 ink; 23x45 bbox), with a small tolerance for the
-        // approximate vertical pitch/origin (exact vmtx/W2 metrics are a P2 refinement).
-        Assert.InRange(ink, 190, 280);
-        Assert.InRange(width, 18, 30);
-        Assert.InRange(height, 38, 52);
-        Assert.InRange(minX, 205, 228);
-        Assert.InRange(maxX, 230, 250);
-        Assert.InRange(minY, 8, 26);
-        Assert.InRange(maxY, 52, 70);
+        // Ink and extent match the MuPDF oracle (230 ink; bbox (214,22)-(237,66)) to within ~1px:
+        // the vertical position vector (drop by one VY, shift left by half the horizontal advance)
+        // makes both the Y and X extents align. Tight bounds so a revert of the half-width shift
+        // (which moves the column ~5px right) is caught.
+        Assert.InRange(ink, 220, 270);
+        Assert.InRange(width, 20, 28);
+        Assert.InRange(height, 42, 50);
+        Assert.InRange(minX, 210, 218);
+        Assert.InRange(maxX, 233, 241);
+        Assert.InRange(minY, 19, 25);
+        Assert.InRange(maxY, 63, 71);
     }
 
     /// <summary>

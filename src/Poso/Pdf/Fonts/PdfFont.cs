@@ -35,6 +35,13 @@ public abstract class PdfFont
     /// the writing axis instead of horizontally when this is set.</summary>
     public virtual bool IsVertical => false;
 
+    /// <summary>
+    /// The vertical origin (VY) in em: the distance from the writing position down to the glyph
+    /// baseline in vertical mode. MuPDF (and the PDF vertical-writing model) place the em-cell top at
+    /// the writing position, i.e. the baseline sits one ascent below it; 0 for horizontal fonts.
+    /// </summary>
+    public virtual float VerticalOriginEm => 0f;
+
     /// <summary>The graphics backend font (lazily created; null when unavailable).</summary>
     public IFont? GraphicsFont
     {

@@ -1206,9 +1206,12 @@ public sealed class PdfContentInterpreter
                 if (glyphId != 0)
                 {
                     // Vertical writing (WMode 2): glyphs stay upright but advance downward along the
-                    // writing axis (negative text-space Y), rather than left-to-right along X.
+                    // writing axis (negative text-space Y), rather than left-to-right along X. Mirroring
+                    // MuPDF's vertical position vector v = (h.w/2, DW2y): the glyph is shifted left by
+                    // half its horizontal advance to centre it on the vertical baseline (v.x), and the
+                    // baseline is dropped one VY so the em-cell top sits at the pen.
                     glyphs[glyphCount++] = font.IsVertical
-                        ? new GlyphPosition(glyphId, 0f, -penEm)
+                        ? new GlyphPosition(glyphId, -widthEm * 0.5f, -penEm - font.VerticalOriginEm)
                         : new GlyphPosition(glyphId, penEm, 0f);
                 }
 

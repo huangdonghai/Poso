@@ -84,6 +84,13 @@ public sealed class Type0PdfFont : PdfFont
 
     public override bool IsVertical => _isVertical;
 
+    // Vertical origin: the distance from the writing position down to the glyph baseline, i.e. the
+    // vertical position vector VY. This is the descendant CIDFont's /DW2[0], defaulting to the PDF
+    // spec value of 880 (thousandths of an em) - exactly what MuPDF uses (pdf_lookup_vmtx -> dvmtx.y),
+    // not the FontDescriptor ascent.
+    public override float VerticalOriginEm =>
+        _isVertical ? (float)((_descendantFont?.GetArray("DW2")?.GetNumber(0)?.Value ?? 880d) / 1000d) : 0f;
+
     public override void DecodeCodes(ReadOnlySpan<byte> bytes, List<int> codes)
     {
         int i = 0;
