@@ -66,6 +66,11 @@ public sealed class PdfView : ContentControl
     private List<PdfSearchHit> _searchHits = new();
     private int _activeHit = -1;
 
+    // The hosting top-level, tracked so we can re-render at the new device resolution when the
+    // HiDPI scaling factor changes (e.g. the window moves to a monitor with a different DPI).
+    private TopLevel? _topLevel;
+    private double _lastDeviceScale = -1d;
+
     // Top edge of every page in content coordinates (device pixels), filled by UpdatePageSizes
     private double[] _pageOffsets = Array.Empty<double>();
     private double _averagePageHeight;
@@ -485,6 +490,13 @@ public sealed class PdfView : ContentControl
 
         double scale = Quantize(zoom);
 
+        // The bitmap must be rendered at device-pixel resolution: on a HiDPI display the visual's
+        // RenderScaling (>1) would otherwise make the compositor upscale a DIP-sized bitmap and blur it.
+        // Layout and overlay geometry stay in DIP (logical) space; only the render target is scaled up.
+        double deviceScale = DeviceScaleFactor;
+        _lastDeviceScale = deviceScale;
+        double renderScale = Quantize(zoom * deviceScale);
+
         // Overlay geometry only depends on the scale and the rotation, so it is rebuilt when
         // those change - never on each layout pass (re-adding children would dirty the layout
         // again and Avalonia would flag the resulting pass loop).
@@ -534,13 +546,13 @@ public sealed class PdfView : ContentControl
                 view.OverlayRevision = _overlayRevision;
             }
 
-            WriteableBitmap? cached = pipeline.TryGet(i, scale, Rotation);
+            WriteableBitmap? cached = pipeline.TryGet(i, renderScale, Rotation);
             if (cached is not null)
             {
                 view.SetBitmap(cached);
             }
 
-            pipeline.EnsureRendered(i, scale, Rotation);
+            pipeline.EnsureRendered(i, renderScale, Rotation);
         }
     }
 
@@ -638,6 +650,46 @@ public sealed class PdfView : ContentControl
         }
 
         return low;
+    }
+
+    /// <summary>
+    /// The host window's device pixels per DIP (<see cref="TopLevel.RenderScaling"/>), or 1 when the
+    /// control is not yet attached to a top-level. Rendering multiplies the zoom by this so bitmaps are
+    /// produced at native device resolution and stay crisp on HiDPI displays.
+    /// </summary>
+    private double DeviceScaleFactor => _topLevel?.RenderScaling ?? TopLevel.GetTopLevel(this)?.RenderScaling ?? 1d;
+
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnAttachedToVisualTree(e);
+        if (TopLevel.GetTopLevel(this) is { } topLevel)
+        {
+            _topLevel = topLevel;
+            topLevel.PropertyChanged += OnTopLevelPropertyChanged;
+            // Apply the current scaling (the initial layout pass may have run before attachment).
+            UpdateOverlaysAndVisibility();
+        }
+    }
+
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnDetachedFromVisualTree(e);
+        if (_topLevel is not null)
+        {
+            _topLevel.PropertyChanged -= OnTopLevelPropertyChanged;
+            _topLevel = null;
+        }
+    }
+
+    private void OnTopLevelPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
+    {
+        // RenderScaling has no public AvaloniaProperty token to compare against, so detect the change
+        // by value: when the device scale differs from what the last render used, re-render at the new
+        // resolution (the pipeline keys on scale, so fresh high-res bitmaps are scheduled).
+        if (Math.Abs(DeviceScaleFactor - _lastDeviceScale) > 1e-9)
+        {
+            UpdateOverlaysAndVisibility();
+        }
     }
 
     private void OnLayoutUpdated(object? sender, EventArgs e)

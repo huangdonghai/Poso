@@ -86,7 +86,7 @@ public sealed class PdfPage
     }
 
     /// <summary>Concatenated and decoded page content stream (cached).</summary>
-    public byte[] GetContent()
+    public byte[] GetContent(PdfDiagnostics? diagnostics = null)
     {
         if (_contentCache is not null)
         {
@@ -100,14 +100,14 @@ public sealed class PdfPage
         }
         else if (streams.Count == 1)
         {
-            _contentCache = streams[0].Decode();
+            _contentCache = streams[0].Decode(diagnostics);
         }
         else
         {
             using var combined = new MemoryStream();
             foreach (PdfStream stream in streams)
             {
-                byte[] decoded = stream.Decode();
+                byte[] decoded = stream.Decode(diagnostics);
                 combined.Write(decoded, 0, decoded.Length);
                 combined.WriteByte((byte)'\n');
             }
@@ -125,13 +125,17 @@ public sealed class PdfPage
     /// Renders this page into a drawing context. The context should be sized to the rotated
     /// page size multiplied by <see cref="PdfRenderOptions.Scale"/>.
     /// </summary>
-    public void Render(IGraphicsFactory factory, IGraphicsContext context, in PdfRenderOptions options)
+    public void Render(IGraphicsFactory factory, IGraphicsContext context, in PdfRenderOptions options, Action<PdfUnsupportedFeature>? onUnsupported = null)
     {
         ArgumentNullException.ThrowIfNull(factory);
         ArgumentNullException.ThrowIfNull(context);
 
-        var interpreter = new Content.PdfContentInterpreter(Document, factory, context, options);
+        var interpreter = new Content.PdfContentInterpreter(Document, factory, context, options)
+        {
+            OnUnsupported = onUnsupported,
+        };
         interpreter.RenderPage(this);
+        interpreter.RenderAnnotations(this);
     }
 
     /// <summary>Link annotations of this page (lazily loaded).</summary>

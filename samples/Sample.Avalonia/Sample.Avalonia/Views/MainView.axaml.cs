@@ -2,6 +2,7 @@
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -38,6 +39,7 @@ public partial class MainView : UserControl
             current.FindRequested += OnFindRequested;
             current.HitNavigationRequested += OnHitNavigationRequested;
             current.OpenFileRequested += OnOpenFileRequested;
+            current.PasswordRequested += OnPasswordRequestedAsync;
         }
     }
 
@@ -73,7 +75,7 @@ public partial class MainView : UserControl
     }
 
     /// <summary>Loads the bundled sample document on first show.</summary>
-    private void LoadSampleDocument()
+    private async void LoadSampleDocument()
     {
         if (ViewModel is not { } viewModel)
         {
@@ -83,7 +85,7 @@ public partial class MainView : UserControl
         try
         {
             using Stream stream = AssetLoader.Open(new Uri("avares://Sample.Avalonia/Assets/sample.pdf"));
-            viewModel.LoadDocument(stream, "sample.pdf");
+            await viewModel.LoadDocumentAsync(stream, "sample.pdf");
         }
         catch (Exception exception)
         {
@@ -147,16 +149,32 @@ public partial class MainView : UserControl
     }
 
     /// <summary>Opens a document; shows a message in the status bar when the file cannot be parsed.</summary>
-    public void OpenDocument(MainViewModel viewModel, string path)
+    public async void OpenDocument(MainViewModel viewModel, string path)
     {
         try
         {
-            viewModel.LoadDocument(path);
+            await viewModel.LoadDocumentAsync(path);
         }
         catch (Exception exception)
         {
             viewModel.StatusText = $"Cannot open {System.IO.Path.GetFileName(path)}: {exception.Message}";
         }
+    }
+
+    /// <summary>
+    /// Handles a password request from the view model by showing a modal prompt. Returns the password,
+    /// or <c>null</c> to give up. When there is no window to own the dialog the request is declined
+    /// gracefully rather than blocking.
+    /// </summary>
+    private async Task<string?> OnPasswordRequestedAsync(string documentName)
+    {
+        if (TopLevel.GetTopLevel(this) is not Window owner)
+        {
+            return null;
+        }
+
+        var dialog = new PasswordPromptWindow(documentName);
+        return await dialog.ShowDialog<string?>(owner);
     }
 
     private void OnGoToPageRequested(object? sender, int pageIndex)

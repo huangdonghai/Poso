@@ -18,6 +18,7 @@ public sealed class SkiaGraphicsContext : IGraphicsContext
     private readonly SKPaint _fillPaint;
     private readonly SKPaint _strokePaint;
     private readonly SKPaint _imagePaint;
+    private readonly Stack<SKPaint> _layerPaints = new();
     private readonly int _width;
     private readonly int _height;
     private bool _snapshotTaken;
@@ -72,6 +73,91 @@ public sealed class SkiaGraphicsContext : IGraphicsContext
     public void SetMatrix(in Matrix3x2 matrix) => _canvas.SetMatrix(SkiaConversions.ToSKMatrix(matrix));
 
     public void ConcatMatrix(in Matrix3x2 matrix) => _canvas.Concat(SkiaConversions.ToSKMatrix(matrix));
+
+    public void SetBlendMode(BlendMode mode)
+    {
+        SKBlendMode blend = MapBlendMode(mode);
+        _fillPaint.BlendMode = blend;
+        _strokePaint.BlendMode = blend;
+        _imagePaint.BlendMode = blend;
+    }
+
+    public void PushLayer(in RectF? bounds, byte alpha, BlendMode mode, IImage? softMask)
+    {
+        // Isolated transparency group: content composites on an off-surface that is blended back with
+        // the given alpha and mode. The luminosity soft mask is honoured when supplied.
+        SKPaint paint = new()
+        {
+            IsAntialias = true,
+            Color = new SKColor(255, 255, 255, alpha),
+            BlendMode = MapBlendMode(mode),
+        };
+
+        if (softMask is SkiaImage maskImage)
+        {
+            SKShader? maskShader = SKShader.CreateBitmap(
+                maskImage.Bitmap,
+                SKShaderTileMode.Clamp,
+                SKShaderTileMode.Clamp);
+            paint.Shader = maskShader?.WithColorFilter(
+                SKColorFilter.CreateColorMatrix(new float[]
+                {
+                    0, 0, 0, 0, 0,
+                    0, 0, 0, 0, 0,
+                    0, 0, 0, 0, 0,
+                    1, 0, 0, 0, 0, // take the mask's red (luminosity) channel as alpha
+                }));
+        }
+
+        if (bounds is { } b && !b.IsEmpty)
+        {
+            _canvas.SaveLayer(SkiaConversions.ToSKRect(b), paint);
+        }
+        else
+        {
+            _canvas.SaveLayer(paint);
+        }
+
+        _layerPaints.Push(paint);
+    }
+
+    public void PopLayer()
+    {
+        _canvas.Restore();
+        if (_layerPaints.Count > 0)
+        {
+            _layerPaints.Pop().Dispose();
+        }
+    }
+
+    public RectF ClipBounds
+    {
+        get
+        {
+            SKRect bounds = _canvas.DeviceClipBounds;
+            return new RectF(bounds.Left, bounds.Top, bounds.Width, bounds.Height);
+        }
+    }
+
+    private static SKBlendMode MapBlendMode(BlendMode mode) => mode switch
+    {
+        BlendMode.Multiply => SKBlendMode.Multiply,
+        BlendMode.Screen => SKBlendMode.Screen,
+        BlendMode.Overlay => SKBlendMode.Overlay,
+        BlendMode.Darken => SKBlendMode.Darken,
+        BlendMode.Lighten => SKBlendMode.Lighten,
+        BlendMode.ColorBurn => SKBlendMode.ColorBurn,
+        BlendMode.ColorDodge => SKBlendMode.ColorDodge,
+        BlendMode.HardLight => SKBlendMode.HardLight,
+        BlendMode.SoftLight => SKBlendMode.SoftLight,
+        BlendMode.Difference => SKBlendMode.Difference,
+        BlendMode.Exclusion => SKBlendMode.Exclusion,
+        BlendMode.Luminosity => SKBlendMode.Luminosity,
+        BlendMode.Hue => SKBlendMode.Hue,
+        BlendMode.Saturation => SKBlendMode.Saturation,
+        BlendMode.Color => SKBlendMode.Color,
+        _ => SKBlendMode.SrcOver,
+    };
 
     public void ClipRect(in RectF rect)
     {

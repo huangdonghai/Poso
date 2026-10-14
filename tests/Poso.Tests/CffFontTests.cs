@@ -23,6 +23,29 @@ public class CffFontTests
     }
 
     [Fact]
+    public void MacRomanEncoding_CoversThePrintableAsciiRange()
+    {
+        // Regression: MacRoman used to define only 0x80-0xEF, so every lowercase letter (0x61-0x7A)
+        // mapped to a null glyph name. A /Type1 font with /Encoding /MacRomanEncoding backed by a
+        // subsetted Type1C program then failed the code->name->GID lookup and rendered blank.
+        Assert.Equal("space", PdfEncodings.MacRoman[0x20]);
+        Assert.Equal("a", PdfEncodings.MacRoman[0x61]);
+        Assert.Equal("z", PdfEncodings.MacRoman[0x7A]);
+        Assert.Equal("A", PdfEncodings.MacRoman[0x41]);
+        Assert.Equal("zero", PdfEncodings.MacRoman[0x30]);
+        Assert.Equal("quotesingle", PdfEncodings.MacRoman[0x27]); // MacRoman differs from StandardEncoding here
+        Assert.Equal("grave", PdfEncodings.MacRoman[0x60]);
+        Assert.Equal("fi", PdfEncodings.MacRoman[0xDE]);
+        Assert.Equal("ring", PdfEncodings.MacRoman[0xF0]);
+
+        // Every printable ASCII code 0x20-0x7E must resolve to a name (none left null).
+        for (int code = 0x20; code <= 0x7E; code++)
+        {
+            Assert.False(string.IsNullOrEmpty(PdfEncodings.MacRoman[code]), $"MacRoman missing glyph name for code 0x{code:X2}");
+        }
+    }
+
+    [Fact]
     public void TryCreate_ReadsCharsetNamesAndGlyphCount()
     {
         byte[] cff = CffFixture.Build();

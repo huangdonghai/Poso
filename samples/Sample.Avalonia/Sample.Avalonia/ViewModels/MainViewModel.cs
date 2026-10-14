@@ -143,17 +143,43 @@ public partial class MainViewModel : ViewModelBase
         OnPropertyChanged(nameof(HasDocument));
     }
 
-    /// <summary>Opens a document from disk and rebuilds outline and thumbnails.</summary>
-    public void LoadDocument(string path)
+    /// <summary>
+    /// Raised when a document is password protected. The handler returns the password to try, or
+    /// <c>null</c> to give up (the view typically shows a modal input dialog). It may be invoked more
+    /// than once if the first password is rejected.
+    /// </summary>
+    public event Func<string, Task<string?>>? PasswordRequested;
+
+    private Task<string?> PromptPassword(string displayName) =>
+        PasswordRequested?.Invoke(displayName) ?? Task.FromResult<string?>(null);
+
+    /// <summary>Opens a document from disk (prompting for a password when needed) and rebuilds outline and thumbnails.</summary>
+    public async Task LoadDocumentAsync(string path)
     {
-        using FileStream stream = File.OpenRead(path);
-        ApplyDocument(PdfDocument.Open(stream), System.IO.Path.GetFileName(path), $"Loaded {PageCount} page(s) from {path}");
+        string displayName = System.IO.Path.GetFileName(path);
+        try
+        {
+            PdfDocument document = await PdfDocument.OpenAsync(path, () => PromptPassword(displayName));
+            ApplyDocument(document, displayName, $"Loaded {PageCount} page(s) from {path}");
+        }
+        catch (PdfPasswordRejectedException)
+        {
+            StatusText = $"{displayName} is password protected and could not be opened.";
+        }
     }
 
-    /// <summary>Opens a document from a stream (used for the embedded sample asset).</summary>
-    public void LoadDocument(Stream stream, string displayName)
+    /// <summary>Opens a document from a stream (used for the embedded sample asset), prompting for a password when needed.</summary>
+    public async Task LoadDocumentAsync(Stream stream, string displayName)
     {
-        ApplyDocument(PdfDocument.Open(stream), displayName, $"Loaded the sample document ({displayName})");
+        try
+        {
+            PdfDocument document = await PdfDocument.OpenAsync(stream, () => PromptPassword(displayName), leaveOpen: true);
+            ApplyDocument(document, displayName, $"Loaded the sample document ({displayName})");
+        }
+        catch (PdfPasswordRejectedException)
+        {
+            StatusText = $"{displayName} is password protected and could not be opened.";
+        }
     }
 
     private void ApplyDocument(PdfDocument document, string displayName, string status)

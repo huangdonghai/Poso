@@ -144,6 +144,46 @@ public class ContentRenderTests
         Assert.True(leftSpan > rightSpan, $"'b' stem must be on the left: leftSpan={leftSpan}, rightSpan={rightSpan}");
     }
 
+    [Fact]
+    public void Render_StrokedText_KeepsThinOutlineNotBlob()
+    {
+        // Regression: the text line width was scaled by the em-to-user text matrix (font size), so a
+        // thin 0.5pt stroke at 40pt became a ~20px blob that filled the letter's counter.
+        byte[] data = PdfFixtures.CreateStrokedTextPdf();
+        using PdfDocument document = PdfDocument.FromArray(data);
+        using IGraphicsContext context = Factory.CreateContext(120, 100);
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+
+        // Bounding box of the stroked 'O'.
+        int minX = int.MaxValue, maxX = -1, minY = int.MaxValue, maxY = -1;
+        for (int y = 0; y < image.Height; y++)
+        {
+            for (int x = 0; x < image.Width; x++)
+            {
+                (byte b, byte g, byte r, _) = PixelAt(pixels, image.Width, y, x);
+                if (r < 200 || g < 200 || b < 200)
+                {
+                    minX = Math.Min(minX, x);
+                    maxX = Math.Max(maxX, x);
+                    minY = Math.Min(minY, y);
+                    maxY = Math.Max(maxY, y);
+                }
+            }
+        }
+
+        Assert.True(maxX > minX && maxY > minY, "stroked 'O' produced no ink");
+
+        // A correct thin stroke leaves the counter (letter center) white; the blob bug fills it.
+        int cx = (minX + maxX) / 2;
+        int cy = (minY + maxY) / 2;
+        (byte cb, byte cg, byte cr, _) = PixelAt(pixels, image.Width, cy, cx);
+        Assert.True(cr > 200 && cg > 200 && cb > 200,
+            $"stroked 'O' counter must stay white (thin outline); center ({cx},{cy}) was r={cr} g={cg} b={cb}");
+    }
+
     private static byte[] ReadPixels(IImage image)
     {
         byte[] pixels = new byte[image.Width * image.Height * image.BytesPerPixel];

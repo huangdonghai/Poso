@@ -156,8 +156,9 @@ internal sealed class TextCollector : ITextSink
 
     public void OnGlyph(PdfFont font, int code, ushort glyphId, uint[] unicodeUnits, Matrix3x2 textToUser, float x, float fontSize, float advanceEm)
     {
+        // x and advanceEm are in text space (em); textToUser (which folds in the font size) maps them to user space.
         Vector2 origin = Vector2.Transform(new Vector2(x, 0f), textToUser);
-        Vector2 end = Vector2.Transform(new Vector2(x + (advanceEm * fontSize), 0f), textToUser);
+        Vector2 end = Vector2.Transform(new Vector2(x + advanceEm, 0f), textToUser);
 
         float width = MathF.Abs(end.X - origin.X) + (MathF.Abs(end.Y - origin.Y) * 0.2f);
         if (width <= 0f)

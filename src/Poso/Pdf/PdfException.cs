@@ -27,3 +27,14 @@ public sealed class PdfUnsupportedException : PdfException
     {
     }
 }
+
+/// <summary>
+/// A password-protected document could not be opened because no password (or an incorrect one) was
+/// supplied. Raised by the prompt-based <see cref="PdfDocument"/> open helpers when the caller gives up.
+/// </summary>
+public sealed class PdfPasswordRejectedException : PdfException
+{
+    public PdfPasswordRejectedException(string message) : base(message)
+    {
+    }
+}

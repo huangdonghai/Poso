@@ -40,6 +40,17 @@ internal sealed class GraphicsState
 
     public float StrokeAlpha { get; set; } = 1f;
 
+    public BlendMode BlendMode { get; set; } = BlendMode.Normal;
+
+    /// <summary>Soft-mask image (ExtGState /SMask) applied when painting; null when none.</summary>
+    public Objects.PdfStream? SoftMask { get; set; }
+
+    /// <summary>Alpha isolation (ExtGState /AIS): groups do not blend with the backdrop.</summary>
+    public bool AlphaIsolate { get; set; }
+
+    /// <summary>Text knockout (ExtGState /TK).</summary>
+    public bool TextKnockout { get; set; }
+
     public GraphicsState Clone() => new()
     {
         Ctm = Ctm,
@@ -56,6 +67,10 @@ internal sealed class GraphicsState
         RenderMode = RenderMode,
         FillAlpha = FillAlpha,
         StrokeAlpha = StrokeAlpha,
+        BlendMode = BlendMode,
+        SoftMask = SoftMask,
+        AlphaIsolate = AlphaIsolate,
+        TextKnockout = TextKnockout,
     };
 }
 
@@ -71,4 +86,7 @@ internal enum ColorSpaceKind
     DeviceN,
     Pattern,
     IccBased,
+    Lab,
+    CalGray,
+    CalRgb,
 }

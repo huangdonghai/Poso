@@ -19,14 +19,36 @@ public readonly record struct PosoColor(byte R, byte G, byte B, byte A = 255)
 
     public static PosoColor FromRgb(float r, float g, float b) => FromScaled(r, g, b);
 
-    /// <summary>Convert CMYK (0-1) to RGB using a naive conversion formula.</summary>
+    /// <summary>
+    /// Convert CMYK (components 0-1) to RGB using the pdf.js DeviceCmykCS polynomial fit to the US Web
+    /// Coated (SWOP) profile. This tracks a real ICC OutputIntent (e.g. ISO Coated v2 300%) to within a
+    /// few units per channel for typical colours, and is far more faithful than the naive 1-(c+k) model,
+    /// which renders light CMYK fills too dark and over-saturated. Kept identical to the CMYK JPEG path.
+    /// </summary>
     public static PosoColor FromCmyk(float c, float m, float y, float k)
     {
-        float r = 1f - Math.Min(1f, c + k);
-        float g = 1f - Math.Min(1f, m + k);
-        float b = 1f - Math.Min(1f, y + k);
-        return FromScaled(r, g, b);
+        float rr = 255f +
+            c * (-4.387332384609988f * c + 54.48615194189176f * m + 18.82290502165302f * y + 212.25662451639585f * k - 285.2331026137004f) +
+            m * (1.7149763477362134f * m - 5.6096736904047315f * y - 17.873870861415444f * k - 5.497006427196366f) +
+            y * (-2.5217340131683033f * y - 21.248923337353073f * k + 17.5119270841813f) +
+            k * (-21.86122147463605f * k - 189.48180835922747f);
+
+        float gg = 255f +
+            c * (8.841041422036149f * c + 60.118027045597366f * m + 6.871425592049007f * y + 31.159100130055922f * k - 79.2970844816548f) +
+            m * (-15.310361306967817f * m + 17.575251261109482f * y + 131.35250912493976f * k - 190.9453302588951f) +
+            y * (4.444339102852739f * y + 9.8632861493405f * k - 24.86741582555878f) +
+            k * (-20.737325471181034f * k - 187.80453709719578f);
+
+        float bb = 255f +
+            c * (0.8842522430003296f * c + 8.078677503112928f * m + 30.89978309703729f * y - 0.23883238689178934f * k - 14.183576799673286f) +
+            m * (10.49593273432072f * m + 63.02378494754052f * y + 50.606957656360734f * k - 112.23884253719248f) +
+            y * (0.03296041114873217f * y + 115.60384449646641f * k - 193.58209356861505f) +
+            k * (-22.33816807309886f * k - 180.12613974708367f);
+
+        return new PosoColor(Clamp255(rr), Clamp255(gg), Clamp255(bb));
     }
+
+    private static byte Clamp255(float v) => (byte)Math.Clamp((int)MathF.Round(v), 0, 255);
 
     public float Alpha => A / 255f;
 

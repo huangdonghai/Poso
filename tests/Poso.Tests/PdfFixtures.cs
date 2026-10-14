@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.IO.Compression;
 using System.Linq;
 using System.Text;
@@ -87,6 +88,65 @@ public static class PdfFixtures
             new PdfObjectDefinition(5, font));
     }
 
+    /// <summary>
+    /// A three-line text page exercising line-positioning operators: baseline via Td, then a
+    /// TD (which also sets the leading) for line 2, then T* (which must step by that leading) for
+    /// line 3. Guards the TD leading-sign bug where T* moved the wrong way and stacked line 3 on line 1.
+    /// </summary>
+    public static byte[] CreateTextLeadingPdf()
+    {
+        string widths = string.Join(" ", Enumerable.Repeat("500", 95));
+        string font = $"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding /FirstChar 32 /LastChar 126 /Widths [{widths}] >>";
+        string content = "BT /F1 20 Tf 20 200 Td (L1) Tj 0 -20 TD (L2) Tj T* (L3) Tj ET";
+
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 250] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            new PdfObjectDefinition(5, font));
+    }
+
+    /// <summary>
+    /// A single line of wide glyphs drawn at a large Tf size. Guards the double-scaling bug where the
+    /// glyph pen was fed the user-space advance (widthEm * fontSize) and then scaled by the text-space
+    /// matrix again, so spacing blew up proportionally to fontSize squared (visible on the PBRT
+    /// "This page intentionally left blank" line, which uses /F2 10 Tf).
+    /// </summary>
+    public static byte[] CreateScaledTextPdf()
+    {
+        string widths = string.Join(" ", Enumerable.Repeat("500", 95));
+        string font = $"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding /FirstChar 32 /LastChar 126 /Widths [{widths}] >>";
+        string content = "BT /F1 40 Tf 20 50 Td (MMMMM) Tj ET";
+
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 100] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            new PdfObjectDefinition(5, font));
+    }
+
+    /// <summary>
+    /// A single 'O' drawn in stroke-only text mode (Tr 1) at a large font size with a thin line width.
+    /// Guards the text-stroke-width bug where the user-space line width was scaled by the em-to-user
+    /// text matrix, fattening a thin outline into a blob that fills the letter's counter (visible on the
+    /// PBRT "CHAPTER ONE" title, which strokes its heading at a 36x text-matrix scale).
+    /// </summary>
+    public static byte[] CreateStrokedTextPdf()
+    {
+        string widths = string.Join(" ", Enumerable.Repeat("500", 95));
+        string font = $"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding /FirstChar 32 /LastChar 126 /Widths [{widths}] >>";
+        string content = "1 0 0 1 20 20 cm BT 0.5 w 1 Tr /F1 40 Tf 0 0 Td (O) Tj ET";
+
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 120 100] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            new PdfObjectDefinition(5, font));
+    }
+
     /// <summary>A page holding a single glyph of a Helvetica-like font, baseline at user y=20.</summary>
     public static byte[] CreateGlyphPdf(char glyph)
     {
@@ -161,6 +221,401 @@ public static class PdfFixtures
         new PdfObjectDefinition(10, "<< /Type /Annot /Subtype /Link /Rect [10 10 100 30] /Border [0 0 0] /A << /S /URI /URI (https://example.com) >> >>"),
         new PdfObjectDefinition(11, "<< /Type /Annot /Subtype /Link /Rect [10 40 100 60] /Border [0 0 0] /Dest [5 0 R /Fit] >>"),
         new PdfObjectDefinition(12, "<< /Title (Section 2.1) /Parent 9 0 R /Dest [5 0 R /XYZ 0 792 1] >>"));
+
+    /// <summary>
+    /// A page whose content stream uses a shading operator (sh). Lenient rendering skips the
+    /// operator and still paints the following rectangle; strict rendering throws.
+    /// </summary>
+    public static byte[] CreateShadingPdf()
+    {
+        string content = "sh\n0 0 1 rg 5 5 30 30 re f";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)));
+    }
+
+    /// <summary>
+    /// A page that selects a Pattern color space and colors with scn. Pattern is skipped (painted
+    /// black) in lenient mode; strict mode throws.
+    /// </summary>
+    public static byte[] CreatePatternColorPdf()
+    {
+        string content = "/Pattern cs 0 scn\n0 0 1 rg 5 5 30 30 re f";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)));
+    }
+
+    /// <summary>
+    /// A page drawing a JPXDecode image XObject plus a solid rectangle. The unsupported codec is
+    /// skipped (image omitted) in lenient mode; strict mode throws.
+    /// </summary>
+    public static byte[] CreateJpxImagePdf()
+    {
+        byte[] junk = { 0x00, 0x01, 0x02, 0x03 };
+        string content = "q 20 20 60 40 cm /ImJ Do Q\n1 0 0 rg 5 5 20 20 re f";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /XObject << /ImJ 5 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            new PdfObjectDefinition(5, $"<< /Type /XObject /Subtype /Image /Width 4 /Height 4 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /JPXDecode /Length {junk.Length} >>", junk));
+    }
+
+    /// <summary>
+    /// A page whose content stream carries an unknown filter. Lenient mode skips the filter and
+    /// returns the (plain ASCII) bytes unchanged so the page still renders; strict mode throws.
+    /// </summary>
+    public static byte[] CreateUnknownFilterPdf()
+    {
+        byte[] content = Encoding.ASCII.GetBytes("0 0 1 rg 5 5 30 30 re f");
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << >> /Contents 4 0 R >>"),
+            Stream(4, "/Filter /WeirdNotARealFilter", content));
+    }
+
+    /// <summary>
+    /// A page that clips to a glyph outline via text rendering mode 7 (Tr 7), then fills the whole
+    /// page red. The clip must persist, so red appears only inside the 'b' outline and the far
+    /// top-right corner stays white.
+    /// </summary>
+    public static byte[] CreateTextClipPdf()
+    {
+        string widths = string.Join(" ", Enumerable.Repeat("500", 95));
+        string font = $"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding /FirstChar 32 /LastChar 126 /Widths [{widths}] >>";
+        string content = "BT /F1 60 Tf 60 20 Td 7 Tr (b) Tj ET\n1 0 0 rg 0 0 200 100 re f";
+
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            new PdfObjectDefinition(5, font));
+    }
+
+    /// <summary>
+    /// Two overlapping rectangles on a 200x100 page. When <paramref name="multiply"/> is set the
+    /// second (blue) rectangle is painted with an ExtGState blend mode of /Multiply over the first
+    /// (green) one; the overlap is then near-black. Without it the blue simply covers the green.
+    /// </summary>
+    public static byte[] CreateBlendModePdf(bool multiply)
+    {
+        string content = multiply
+            ? "0 1 0 rg 20 20 60 60 re f\n/GS1 gs 0 0 1 rg 40 40 60 60 re f"
+            : "0 1 0 rg 20 20 60 60 re f\n0 0 1 rg 40 40 60 60 re f";
+
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /ExtGState << /GS1 6 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            new PdfObjectDefinition(6, "<< /BM /Multiply >>"));
+    }
+
+    /// <summary>
+    /// A page (200x100) over a light-gray background with two annotations: a /Square whose /AP
+    /// appearance paints a red rectangle into its Rect, and a /Highlight markup (yellow /C) over
+    /// the upper-right area via /QuadPoints.
+    /// </summary>
+    public static byte[] CreateAnnotationPdf()
+    {
+        byte[] appearance = Encoding.ASCII.GetBytes("1 0 0 rg 0 0 10 10 re f");
+        byte[] content = Encoding.ASCII.GetBytes("0.9 0.9 0.9 rg 0 0 200 100 re f");
+
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << >> /Contents 4 0 R /Annots [6 0 R 8 0 R] >>"),
+            Stream(4, string.Empty, content),
+            new PdfObjectDefinition(6, "<< /Type /Annot /Subtype /Square /Rect [20 20 60 60] /AP << /N 7 0 R >> >>"),
+            new PdfObjectDefinition(7, $"<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << >> /Length {appearance.Length} >>", appearance),
+            new PdfObjectDefinition(8, "<< /Type /Annot /Subtype /Highlight /Rect [80 40 150 60] /C [1 1 0] /QuadPoints [80 40 150 40 150 60 80 60] >>"));
+    }
+
+    /// <summary>
+    /// A page using a /Separation color space whose tint transform (a Type 2 exponential, out = t^2)
+    /// maps onto /DeviceGray. Painting at tint 0.5 yields gray ~0.25 (not the tint 0.5 an identity
+    /// approximation would give), proving the tint function is evaluated. A red control rectangle
+    /// follows in DeviceRGB.
+    /// </summary>
+    public static byte[] CreateSeparationPdf()
+    {
+        string content = "/Sep cs 0.5 scn 10 10 50 50 re f\n1 0 0 rg 120 10 50 50 re f";
+        string colorSpace = "[/Separation /Pantone /DeviceGray << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /E 2 >>]";
+
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, $"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /ColorSpace << /Sep {colorSpace} >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)));
+    }
+
+    /// <summary>
+    /// A page filled with an axial (Type 2) shading pattern: a DeviceGray gradient from black at
+    /// user x=0 to white at user x=200 (a Type 2 linear function ramp).
+    /// </summary>
+    public static byte[] CreateAxialShadingPdf()
+    {
+        string content = "[/Pattern /DeviceRGB] cs /ShP scn 0 0 200 100 re f";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Pattern << /ShP 6 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            new PdfObjectDefinition(6, "<< /PatternType 2 /Shading << /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 200 0] /Domain [0 1] /Function 7 0 R >> >>"),
+            new PdfObjectDefinition(7, "<< /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /E 1 >>"));
+    }
+
+    /// <summary>
+    /// A page filled with a radial (Type 3) shading pattern: a concentric DeviceGray gradient from
+    /// black at the centre (user 100,50) fading outward (radius 200).
+    /// </summary>
+    public static byte[] CreateRadialShadingPdf()
+    {
+        string content = "[/Pattern /DeviceRGB] cs /ShR scn 0 0 200 100 re f";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Pattern << /ShR 6 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            new PdfObjectDefinition(6, "<< /PatternType 2 /Shading << /ShadingType 3 /ColorSpace /DeviceGray /Coords [100 50 0 100 50 200] /Domain [0 1] /Function 7 0 R >> >>"),
+            new PdfObjectDefinition(7, "<< /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /E 1 >>"));
+    }
+
+    /// <summary>
+    /// A page drawing a 24x12 CCITT Group 4 (K=-1) bilevel image scaled to fill a 200x100 page.
+    /// <paramref name="codestream"/> is the raw /CCITTFaxDecode data.
+    /// </summary>
+    public static byte[] CreateCcittImagePdf(byte[] codestream)
+    {
+        string parms = "<</K -1/Columns 24/Rows 12/BlackIs1 true>>";
+        string content = "q 200 0 0 100 0 0 cm /Im1 Do Q";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /XObject << /Im1 5 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            new PdfObjectDefinition(5, $"<< /Type /XObject /Subtype /Image /Width 24 /Height 12 /ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /CCITTFaxDecode /DecodeParms {parms} /Length {codestream.Length} >>", codestream));
+    }
+
+    /// <summary>
+    /// A 200x100 page drawing a 40x20 JBIG2 bilevel image (page-information + a single MMR generic
+    /// region) scaled to fill the page. <paramref name="jbig2"/> is the complete JBIG2 page stream.
+    /// </summary>
+    public static byte[] CreateJbig2ImagePdf(byte[] jbig2)
+    {
+        string content = "q 200 0 0 100 0 0 cm /Im1 Do Q";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /XObject << /Im1 5 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            new PdfObjectDefinition(5, $"<< /Type /XObject /Subtype /Image /Width 40 /Height 20 /ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /JBIG2Decode /Length {jbig2.Length} >>", jbig2));
+    }
+
+    /// <summary>
+    /// Like <see cref="CreateJbig2ImagePdf"/> but with the JBIG2 page-information segment moved into a
+    /// separate shared-data stream referenced through /DecodeParms &lt;&lt; /JBIG2Globals N 0 R &gt;&gt;, exercising
+    /// the globals concatenation in the image decode path.
+    /// </summary>
+    public static byte[] CreateJbig2GlobalsPdf(byte[] regionSegment, byte[] globalsSegment)
+    {
+        string content = "q 200 0 0 100 0 0 cm /Im1 Do Q";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /XObject << /Im1 5 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            new PdfObjectDefinition(5, $"<< /Type /XObject /Subtype /Image /Width 40 /Height 20 /ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /JBIG2Decode /DecodeParms << /JBIG2Globals 6 0 R >> /Length {regionSegment.Length} >>", regionSegment),
+            Stream(6, string.Empty, globalsSegment));
+    }
+
+    /// <summary>
+    /// A 200x100 page with two optional-content layers drawn as marked content: "Red" (OCG on,
+    /// a red rectangle at user 10..70) and "Blue" (OCG off, a blue rectangle at user 120..180).
+    /// /OCProperties /D has ON [Red] OFF [Blue].
+    /// </summary>
+    public static byte[] CreateOcgPdf()
+    {
+        string content = "/OC /P0 BDC\n1 0 0 rg 10 10 60 60 re f\nEMC\n/OC /P1 BDC\n0 0 1 rg 120 10 60 60 re f\nEMC";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [6 0 R 7 0 R] /D << /ON [6 0 R] /OFF [7 0 R] >> >> >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Properties << /P0 6 0 R /P1 7 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            new PdfObjectDefinition(6, "<< /Type /OCG /Name (Red) >>"),
+            new PdfObjectDefinition(7, "<< /Type /OCG /Name (Blue) >>"));
+    }
+
+    /// <summary>
+    /// A page filling a rectangle with a /Lab color space color (L=60, a=60, b=-60; D65 white point),
+    /// exercising the CIELAB -> sRGB conversion.
+    /// </summary>
+    public static byte[] CreateLabPdf()
+    {
+        string content = "/LabCs cs 60 60 -60 scn 10 10 60 60 re f";
+        string lab = "[/Lab << /WhitePoint [0.9505 1 1.089] /Range [-100 100 -100 100] >>]";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, $"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /ColorSpace << /LabCs {lab} >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)));
+    }
+
+    /// <summary>
+    /// A 100x100 page: white background, then a Form XObject painted under ExtGState /ca 0.5. The form
+    /// declares a transparency group (/Group /S /Transparency) and fills two OPAQUE overlapping rectangles
+    /// (red x[0,80], then blue x[40,100], both y[0,60]). Because the group is composited as a single unit
+    /// at the boundary opacity, the overlap renders as pure blue @50% (128,128,255) rather than a layered
+    /// red-then-blue blend (which would be purple ~ (128,64,191)). Setting <paramref name="withGroup"/> to
+    /// false drops the /Group entry for the contrast case.
+    /// </summary>
+    public static byte[] CreateTransparencyGroupPdf(bool withGroup = true)
+    {
+        byte[] formContent = Encoding.ASCII.GetBytes("1 0 0 rg 0 0 80 60 re f 0 0 1 rg 40 0 60 60 re f");
+        byte[] pageContent = Encoding.ASCII.GetBytes("1 1 1 rg 0 0 100 100 re f /GS0 gs /F0 Do");
+        string group = withGroup ? " /Group << /S /Transparency /CS /DeviceRGB >>" : string.Empty;
+        string formDict = $"/Type /XObject /Subtype /Form /BBox [0 0 100 100]{group}";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /ExtGState << /GS0 5 0 R >> /XObject << /F0 6 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, pageContent),
+            new PdfObjectDefinition(5, "<< /ca 0.5 /CA 0.5 >>"),
+            Stream(6, formDict, formContent));
+    }
+
+    /// <summary>
+    /// A document with an AcroForm exercising field typing, attribute inheritance, dotted names, widget
+    /// rectangles and choice options:
+    ///   - "name"      text field (value "John Doe") with a child widget supplying /Rect
+    ///   - "person"    text group (/FT /Tx, /V "DefaultV") with children "first" (/V "Ada") and "last"
+    ///                 (no own /V -> inherits "DefaultV")
+    ///   - "color"     dropdown (/Ch + combo flag) with mixed /Opt entries, value "g"
+    ///   - "agree"     check box that is itself the widget, value /On
+    ///   - "gender"    radio group (/Btn + radio flag), value "male"
+    ///   - "langs"     list box (/Ch, no combo flag), value "b"
+    /// </summary>
+    public static byte[] CreateAcroFormPdf()
+    {
+        byte[] content = Encoding.ASCII.GetBytes("q 1 0 0 rg 5 5 10 10 re f Q");
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R /AcroForm 5 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 750] /Annots [11 0 R 16 0 R 17 0 R 19 0 R] /Contents 4 0 R >>"),
+            Stream(4, string.Empty, content),
+            new PdfObjectDefinition(5, "<< /Fields [10 0 R 12 0 R 15 0 R 17 0 R 18 0 R 20 0 R] /DA (/Helv 0 Tf 0 g) >>"),
+
+            // name (text) + widget
+            new PdfObjectDefinition(10, "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /V (John Doe) /Kids [11 0 R] >>"),
+            new PdfObjectDefinition(11, "<< /Type /Annot /Subtype /Widget /Parent 10 0 R /Rect [50 700 250 720] >>"),
+
+            // person group (inherits /FT and /V down) + two text children
+            new PdfObjectDefinition(12, "<< /FT /Tx /T (person) /V (DefaultV) /Kids [13 0 R 14 0 R] >>"),
+            new PdfObjectDefinition(13, "<< /Parent 12 0 R /T (first) /V (Ada) >>"),
+            new PdfObjectDefinition(14, "<< /Parent 12 0 R /T (last) >>"),
+
+            // color dropdown with mixed options + widget
+            new PdfObjectDefinition(15, "<< /FT /Ch /Ff 131072 /T (color) /V (g) /Opt [(Plain)[(r)(Red)][(g)(Green)]] /Kids [16 0 R] >>"),
+            new PdfObjectDefinition(16, "<< /Type /Annot /Subtype /Widget /Parent 15 0 R /Rect [50 650 200 700] >>"),
+
+            // agree check box (field is also the widget)
+            new PdfObjectDefinition(17, "<< /Type /Annot /Subtype /Widget /FT /Btn /T (agree) /V /On /Rect [50 600 62 612] >>"),
+
+            // gender radio group + one widget child
+            new PdfObjectDefinition(18, "<< /FT /Btn /Ff 32768 /T (gender) /V (male) /Kids [19 0 R] >>"),
+            new PdfObjectDefinition(19, "<< /Type /Annot /Subtype /Widget /Parent 18 0 R /Rect [50 550 70 570] >>"),
+
+            // langs list box
+            new PdfObjectDefinition(20, "<< /FT /Ch /T (langs) /V (b) /Opt [(a)(b)(c)] >>"));
+    }
+
+    /// <summary>
+    /// A 100x100 page drawing a 2x2 RGB image scaled to fill the page, with a 2x2 DeviceGray /SMask:
+    /// (0,0)=red/alpha0, (1,0)=green/alpha255, (0,1)=blue/alpha128, (1,1)=white/alpha0. Device top-left
+    /// maps to image (0,0). Background is expected to show through the transparent corners.
+    /// </summary>
+    public static byte[] CreateImageSoftMaskPdf()
+    {
+        byte[] rgb =
+        {
+            255, 0, 0, 0, 255, 0,       // row 0: red, green
+            0, 0, 255, 255, 255, 255,   // row 1: blue, white
+        };
+        byte[] mask = { 0, 255, 128, 0 }; // alpha: 0, 255, 128, 0
+        string imageDict = "/Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceRGB /BitsPerComponent 8 /SMask 6 0 R";
+        string maskDict = "/Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8";
+        string content = "q 100 0 0 100 0 0 cm /Im Do Q";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /XObject << /Im 5 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            Stream(5, imageDict, rgb),
+            Stream(6, maskDict, mask));
+    }
+
+    /// <summary>
+    /// A 100x100 page painted with a Type 7 mesh triangle (lattice) using a single-argument grey
+    /// function. Vertices: (0,0)=black, (100,0)=white, (0,100)=mid-grey, filled with Gouraud shading.
+    /// </summary>
+    public static byte[] CreateMeshTrianglePdf()
+    {
+        var bits = new List<int>();
+        void Put(int value, int count)
+        {
+            for (int i = count - 1; i >= 0; i--)
+            {
+                bits.Add((value >> i) & 1);
+            }
+        }
+
+        Put(1, 2); // flag = new triangle
+        Put(0, 8); Put(0, 8); Put(0, 8);       // vertex 0: coord (0,0), colour t=0 (raw 0 -> black)
+        Put(255, 8); Put(0, 8); Put(255, 8);   // vertex 1: coord (100,0) [raw 255], colour t=1 (raw 255 -> white)
+        Put(0, 8); Put(255, 8); Put(128, 8);   // vertex 2: coord (0,100) [raw 255], colour t~0.5 (raw 128 -> grey)
+
+        var data = new byte[((bits.Count + 7) / 8)];
+        for (int i = 0; i < bits.Count; i++)
+        {
+            if (bits[i] != 0)
+            {
+                data[i / 8] |= (byte)(1 << (7 - (i % 8)));
+            }
+        }
+
+        string shading = "/ShadingType 7 /ColorSpace /DeviceGray /BitsPerCoordinate 8 /BitsPerComponent 8 /BitsPerFlag 2 /Decode [0 100 0 100 0 1] /Function 6 0 R";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Shading << /S0 5 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes("q 0 0 100 100 re W n /S0 sh Q")),
+            Stream(5, shading, data),
+            new PdfObjectDefinition(6, "<< /FunctionType 2 /C0 [0] /C1 [1] /Domain [0 1] /N 1 >>"));
+    }
+
+    /// <summary>
+    /// A 100x100 page filled with a Type 1 tiling pattern. Each 20x20 cell is white with its left
+    /// half (pattern x 0..10) painted red, tiled across the whole page.
+    /// </summary>
+    public static byte[] CreateTilingPdf()
+    {
+        byte[] cellContent = Encoding.ASCII.GetBytes("1 1 1 rg 0 0 20 20 re f\n1 0 0 rg 0 0 10 20 re f\n");
+        string patternDict = "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 20 20] /XStep 20 /YStep 20";
+        string content = "[/Pattern /DeviceRGB] cs /P0 scn 0 0 100 100 re f";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Pattern << /P0 5 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            Stream(5, patternDict, cellContent));
+    }
 
     /// <summary>
     /// A document that stores page objects in an object stream (ObjStm) and describes the

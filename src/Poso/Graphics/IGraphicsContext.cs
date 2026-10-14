@@ -58,4 +58,32 @@ public interface IGraphicsContext : IDisposable
     /// the returned <see cref="IImage"/> owns the pixel data, and disposing the context no longer frees that data.
     /// </summary>
     IImage Snapshot();
+
+    /// <summary>
+    /// Set the compositing blend mode for subsequent draws until the next call. Back-ends without
+    /// support keep the current mode (this default implementation is a no-op).
+    /// </summary>
+    void SetBlendMode(BlendMode mode)
+    {
+    }
+
+    /// <summary>
+    /// Begin an isolated transparency group: subsequent draws composite on an off-surface and are
+    /// blended back with <paramref name="alpha"/> and an optional luminosity <paramref name="softMask"/>
+    /// when <see cref="PopLayer"/> runs. No-op in back-ends without support.
+    /// </summary>
+    void PushLayer(in RectF? bounds, byte alpha, BlendMode mode, IImage? softMask)
+    {
+    }
+
+    /// <summary>Composite and pop the layer started by <see cref="PushLayer"/>. No-op without a matching push.</summary>
+    void PopLayer()
+    {
+    }
+
+    /// <summary>
+    /// The current clip's bounding rectangle in device pixels. Used to size a rasterised shading
+    /// fill. Back-ends without precise clip reporting return the whole canvas.
+    /// </summary>
+    RectF ClipBounds => new RectF(0f, 0f, Width, Height);
 }

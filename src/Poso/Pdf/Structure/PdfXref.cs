@@ -19,6 +19,7 @@ public sealed class PdfXref
     private readonly Dictionary<long, PdfXrefEntry> _entries = new();
     private readonly Dictionary<int, PdfObjectStream> _objectStreams = new();
     private readonly object _gate = new();
+    private Security.PdfEncryptionContext? _encryption;
 
     public PdfXref()
     {
@@ -30,9 +31,9 @@ public sealed class PdfXref
     /// <summary>Whether the table was rebuilt by full-text scanning (when the xref is corrupt).</summary>
     public bool WasRebuilt { get; private set; }
 
-    public static PdfXref Load(byte[] data, Func<PdfIndirectRef, PdfObject?>? resolver)
+    public static PdfXref Load(byte[] data, Func<PdfIndirectRef, PdfObject?>? resolver, Security.PdfEncryptionContext? encryption = null)
     {
-        var xref = new PdfXref();
+        var xref = new PdfXref { _encryption = encryption };
         if (!xref.TryLoadFromStartXref(data, resolver))
         {
             xref.RebuildByScanning(data);
@@ -207,7 +208,7 @@ public sealed class PdfXref
                     return null;
                 }
 
-                var parser = new PdfParser(data, lexer.Position);
+                var parser = new PdfParser(data, lexer.Position) { Encryption = _encryption, DecryptStrings = false };
                 if (parser.ParseObject() is not PdfDictionary trailer)
                 {
                     return null;
@@ -257,7 +258,7 @@ public sealed class PdfXref
     private PdfDictionary? ParseXrefStream(byte[] data, int offset, Func<PdfIndirectRef, PdfObject?>? resolver, out long previous)
     {
         previous = -1;
-        var parser = new PdfParser(data, offset) { Resolver = resolver };
+        var parser = new PdfParser(data, offset) { Resolver = resolver, Encryption = _encryption, DecryptStrings = false };
         var parsed = parser.TryParseIndirectObject();
         if (parsed is null || parsed.Value.Object is not PdfStream stream)
         {
@@ -377,7 +378,7 @@ public sealed class PdfXref
 
             try
             {
-                var parser = new PdfParser(data, trailerIndex + TrailerKeyword.Length);
+                var parser = new PdfParser(data, trailerIndex + TrailerKeyword.Length) { Encryption = _encryption, DecryptStrings = false };
                 if (parser.ParseObject() is PdfDictionary candidate && candidate.Get("Root") is not null)
                 {
                     trailer = candidate;
@@ -414,7 +415,7 @@ public sealed class PdfXref
                 {
                     try
                     {
-                        var probe = new PdfParser(data, headerStart);
+                        var probe = new PdfParser(data, headerStart) { Encryption = _encryption, DecryptStrings = false };
                         var parsed = probe.TryParseIndirectObject();
                         if (parsed?.Object is PdfDictionary dict && dict.GetNameValue("Type") == "Catalog")
                         {

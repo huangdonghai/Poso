@@ -1,4 +1,6 @@
+using System.Linq;
 using Poso.Graphics;
+using Poso.Pdf.Filters.Codecs;
 using Poso.Pdf.Objects;
 
 namespace Poso.Pdf.Images;
@@ -19,7 +21,8 @@ public static class PdfImageDecoder
         IGraphicsFactory factory,
         PdfStream stream,
         PdfDictionary dictionary,
-        PosoColor stencilColor)
+        PosoColor stencilColor,
+        PdfDiagnostics? diagnostics = null)
     {
         int width = (int)(dictionary.GetIntegerValue("Width") ?? 0);
         int height = (int)(dictionary.GetIntegerValue("Height") ?? 0);
@@ -31,34 +34,82 @@ public static class PdfImageDecoder
         List<string> filters = GetFilters(dictionary);
         bool hasDct = filters.Exists(f => f is "DCTDecode" or "DCT");
         bool hasJpx = filters.Exists(f => f is "JPXDecode");
-        bool hasCcitt = filters.Exists(f => f is "CCITTFaxDecode" or "CCF" or "JBIG2Decode");
+        bool hasCcitt = filters.Exists(f => f is "CCITTFaxDecode" or "CCF");
+        bool hasJbig2 = filters.Exists(f => f is "JBIG2Decode");
 
-        if (hasJpx || hasCcitt)
+        if (hasJbig2)
         {
-            throw new PdfUnsupportedException(
-                $"Unsupported image codec: {string.Join(",", filters)} (planned for v0.2)");
+            // Page-information + generic regions (MMR and arithmetic, templates 0-3 with default or custom
+            // GBAT and typical prediction) are decoded and validated against MuPDF. Symbol dictionaries / text
+            // / halftone / refinement regions and XOR/XNOR composition are reported and degraded (null) so
+            // callers skip the image rather than render a partial/incorrect bitmap.
+            byte[] pageData = stream.Decode(diagnostics);
+            byte[]? globals = GetJbig2Globals(document, dictionary, diagnostics);
+            byte[] jbig2Data = globals is null
+                ? pageData
+                : Combine(globals, pageData);
+
+            Jbig2Page? page = Jbig2Decoder.Decode(jbig2Data);
+            if (page is null)
+            {
+                diagnostics?.Report(PdfUnsupportedKind.ImageCodec, "Unsupported JBIG2 features (symbol dictionaries / text / halftone / refinement regions are not decoded)");
+                return null;
+            }
+
+            return CreateBilevelImage(factory, page.Value);
+        }
+
+        if (hasCcitt)
+        {
+            IImage? ccitt = DecodeCcittImage(factory, stream, dictionary, width, height, diagnostics);
+            if (ccitt is null)
+            {
+                diagnostics?.Report(PdfUnsupportedKind.ImageCodec, "CCITTFaxDecode could not be decoded");
+            }
+
+            return ccitt;
         }
 
         bool imageMask = dictionary.GetBooleanValue("ImageMask") ?? false;
 
-        if (hasDct)
+        if (hasDct || hasJpx)
         {
-            // PdfStream.Decode stops at DCTDecode and returns the encoded JPEG bytes
-            IImage? jpeg = factory.DecodeImage(stream.Decode());
-            if (jpeg is null)
+            // PdfStream.Decode stops at the codec header and returns the encoded JPEG/JPEG2000 bytes.
+            byte[] encoded = stream.Decode(diagnostics);
+
+            // CMYK/YCCK (4-component) JPEGs are decoded here rather than delegated to the backend:
+            // native codecs (Skia's SKCodec) omit the Adobe CMYK inversion and produce visibly wrong
+            // colours, and SkiaSharp exposes no CMYK output to recover the raw samples from. 1/3-component
+            // JPEGs and JPEG2000 are unaffected and stay on the backend path.
+            if (hasDct && !hasJpx && JpegDecoder.PeekComponentCount(encoded) == 4)
             {
+                JpegDecoder.Result? jpeg = JpegDecoder.Decode(encoded);
+                byte[]? cmykPixels = jpeg is null ? null : JpegColorConverter.ToBgra32(jpeg);
+                if (cmykPixels is not null)
+                {
+                    return factory.CreateImage(jpeg!.Width, jpeg.Height, PixelFormat.Bgra8888Premul, cmykPixels);
+                }
+                // Fall through to the backend if the self-decode could not complete.
+            }
+
+            IImage? raster = factory.DecodeImage(encoded);
+            if (raster is null)
+            {
+                diagnostics?.Report(
+                    PdfUnsupportedKind.ImageCodec,
+                    $"The backend could not decode {string.Join(",", filters)}");
                 return null;
             }
 
-            using (jpeg)
+            using (raster)
             {
-                byte[] jpegPixels = new byte[jpeg.Width * jpeg.Height * jpeg.BytesPerPixel];
-                jpeg.CopyPixels(jpegPixels);
-                return factory.CreateImage(jpeg.Width, jpeg.Height, PixelFormat.Bgra8888Premul, jpegPixels);
+                byte[] jpegPixels = new byte[raster.Width * raster.Height * raster.BytesPerPixel];
+                raster.CopyPixels(jpegPixels);
+                return factory.CreateImage(raster.Width, raster.Height, PixelFormat.Bgra8888Premul, jpegPixels);
             }
         }
 
-        byte[] data = stream.Decode();
+        byte[] data = stream.Decode(diagnostics);
 
         // Color space resolution (skipped for image masks)
         ColorSpaceInfo? colorSpace = imageMask ? null : ResolveColorSpace(document, dictionary.Get("ColorSpace"));
@@ -92,7 +143,7 @@ public static class PdfImageDecoder
         if (document.Resolve(dictionary.Get("SMask")) is PdfStream softMaskStream)
         {
             PdfDictionary softMaskDictionary = softMaskStream.Dictionary;
-            alpha = DecodeAlphaChannel(document, factory, softMaskStream, softMaskDictionary, width, height);
+            alpha = DecodeAlphaChannel(document, factory, softMaskStream, softMaskDictionary, width, height, diagnostics);
         }
 
         // Hard mask (stencil stream) or color-key mask (array)
@@ -105,11 +156,11 @@ public static class PdfImageDecoder
             case PdfStream maskStream when maskStream.Dictionary.GetNameValue("Subtype") != "Image" &&
                                               maskStream.Dictionary.GetBooleanValue("ImageMask") != true:
                 // A stream mask is an image mask; handled below via stencil decoding
-                stencil = DecodeStencil(document, factory, maskStream, maskStream.Dictionary, width, height);
+                stencil = DecodeStencil(document, factory, maskStream, maskStream.Dictionary, width, height, diagnostics);
                 break;
 
             case PdfStream maskStream:
-                stencil = DecodeStencil(document, factory, maskStream, maskStream.Dictionary, width, height);
+                stencil = DecodeStencil(document, factory, maskStream, maskStream.Dictionary, width, height, diagnostics);
                 break;
 
             case PdfArray maskArray when maskArray.Count >= 2:
@@ -230,10 +281,108 @@ public static class PdfImageDecoder
         IGraphicsFactory factory,
         PdfDictionary dictionary,
         byte[] rawData,
-        PosoColor stencilColor)
+        PosoColor stencilColor,
+        PdfDiagnostics? diagnostics = null)
     {
         var stream = new PdfStream(dictionary, rawData);
-        return Decode(document, factory, stream, dictionary, stencilColor);
+        return Decode(document, factory, stream, dictionary, stencilColor, diagnostics);
+    }
+
+    /// <summary>Decodes a CCITT (Group 3/4) bilevel image XObject into a BGRA image.</summary>
+    private static IImage CreateBilevelImage(IGraphicsFactory factory, Jbig2Page page)
+    {
+        int w = page.Width;
+        int h = page.Height;
+        var pixels = new byte[w * h * 4];
+        for (int y = 0; y < h; y++)
+        {
+            for (int x = 0; x < w; x++)
+            {
+                byte value = page.IsBlack(x, y) ? (byte)0 : (byte)255;
+                int offset = ((y * w) + x) * 4;
+                pixels[offset] = value;
+                pixels[offset + 1] = value;
+                pixels[offset + 2] = value;
+                pixels[offset + 3] = 255;
+            }
+        }
+
+        return factory.CreateImage(w, h, PixelFormat.Bgra8888Premul, pixels);
+    }
+
+    private static IImage? DecodeCcittImage(IGraphicsFactory factory, PdfStream stream, PdfDictionary dictionary, int width, int height, PdfDiagnostics? diagnostics)
+    {
+        PdfDictionary? parms = GetCcittParms(dictionary);
+        int columns = (int)(parms?.GetIntegerValue("Columns") ?? width);
+        int rows = (int)(parms?.GetIntegerValue("Rows") ?? height);
+        int k = (int)(parms?.GetIntegerValue("K") ?? 0);
+        bool byteAlign = parms?.GetBooleanValue("EncodedByteAlign") ?? false;
+        bool blackIs1 = parms?.GetBooleanValue("BlackIs1") ?? false;
+        bool endOfBlock = parms?.GetBooleanValue("EndOfBlock") ?? true;
+        bool endOfLine = parms?.GetBooleanValue("EndOfLine") ?? false;
+        if (columns <= 0 || rows <= 0)
+        {
+            return null;
+        }
+
+        byte[] codestream = stream.Decode(diagnostics);
+        byte[] bits = CcittFaxDecoder.Decode(codestream, columns, rows, k, byteAlign, blackIs1, endOfBlock, endOfLine);
+        int bytesPerRow = (columns + 7) / 8;
+        var pixels = new byte[columns * rows * 4];
+
+        for (int y = 0; y < rows; y++)
+        {
+            for (int x = 0; x < columns; x++)
+            {
+                int bit = (bits[(y * bytesPerRow) + (x / 8)] >> (7 - (x % 8))) & 1;
+                bool isBlack = blackIs1 ? bit == 1 : bit == 0;
+                byte value = isBlack ? (byte)0 : (byte)255;
+                int offset = ((y * columns) + x) * 4;
+                pixels[offset] = value;
+                pixels[offset + 1] = value;
+                pixels[offset + 2] = value;
+                pixels[offset + 3] = 255;
+            }
+        }
+
+        return factory.CreateImage(columns, rows, PixelFormat.Bgra8888Premul, pixels);
+    }
+
+    private static PdfDictionary? GetCcittParms(PdfDictionary dictionary) => dictionary.Get("DecodeParms") switch
+    {
+        PdfDictionary d => d,
+        PdfArray a => a.OfType<PdfDictionary>().FirstOrDefault(),
+        _ => null,
+    };
+
+    // Resolves the /JBIG2Globals shared-data stream (if any) from the image's DecodeParms and returns its
+    // decoded bytes; JBIG2 page streams reference global segments (page-info, symbol dictionaries) out-of-band.
+    private static byte[]? GetJbig2Globals(PdfDocument document, PdfDictionary dictionary, PdfDiagnostics? diagnostics)
+    {
+        PdfObject? parms = document.Resolve(dictionary.Get("DecodeParms")) ?? document.Resolve(dictionary.Get("DP"));
+        PdfDictionary? candidate = parms switch
+        {
+            PdfDictionary d when d.Get("JBIG2Globals") is not null => d,
+            PdfArray a => a.OfType<PdfDictionary>().FirstOrDefault(x => x.Get("JBIG2Globals") is not null),
+            _ => null,
+        };
+
+        if (candidate is null)
+        {
+            return null;
+        }
+
+        return document.Resolve(candidate.Get("JBIG2Globals")) is PdfStream globalsStream
+            ? globalsStream.Decode(diagnostics)
+            : null;
+    }
+
+    private static byte[] Combine(byte[] first, byte[] second)
+    {
+        byte[] result = new byte[first.Length + second.Length];
+        Buffer.BlockCopy(first, 0, result, 0, first.Length);
+        Buffer.BlockCopy(second, 0, result, first.Length, second.Length);
+        return result;
     }
 
     private static byte Premultiply(byte channel, byte alpha) =>
@@ -301,10 +450,11 @@ public static class PdfImageDecoder
         PdfStream stream,
         PdfDictionary dictionary,
         int width,
-        int height)
+        int height,
+        PdfDiagnostics? diagnostics)
     {
         // Soft masks are grayscale images (possibly with their own filters)
-        byte[] data = stream.Decode();
+        byte[] data = stream.Decode(diagnostics);
         int bitsPerComponent = Math.Max(1, (int)(dictionary.GetIntegerValue("BitsPerComponent") ?? 8));
         int maxSample = (1 << bitsPerComponent) - 1;
         int rowBytes = (width * bitsPerComponent + 7) / 8;
@@ -329,9 +479,10 @@ public static class PdfImageDecoder
         PdfStream stream,
         PdfDictionary dictionary,
         int width,
-        int height)
+        int height,
+        PdfDiagnostics? diagnostics)
     {
-        byte[] data = stream.Decode();
+        byte[] data = stream.Decode(diagnostics);
         int bitsPerComponent = Math.Max(1, (int)(dictionary.GetIntegerValue("BitsPerComponent") ?? 1));
         int rowBytes = (width * bitsPerComponent + 7) / 8;
         var stencil = new byte[width * height];

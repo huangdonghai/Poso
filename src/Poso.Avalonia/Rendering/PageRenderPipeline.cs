@@ -249,8 +249,9 @@ internal sealed class PageRenderPipeline
 
     private static long MakeKey(int pageIndex, double scale, int rotationDegrees)
     {
-        // Quantize the scale to 1% steps so tiny zoom changes reuse cached renders
-        int quantized = (int)Math.Round(Math.Clamp(scale, 0.01, 100d) * 100d);
+        // Quantize the scale to 1% steps so tiny zoom changes reuse cached renders. The upper bound
+        // accommodates the HiDPI device scale factor folded into the render scale (zoom * RenderScaling).
+        int quantized = (int)Math.Round(Math.Clamp(scale, 0.01, 1000d) * 100d);
         return ((long)pageIndex << 42) | ((long)(rotationDegrees / 90 + 4) << 36) | (uint)quantized;
     }
 

@@ -114,6 +114,14 @@ public sealed class PdfLexer
                 _pos++;
                 return new PdfToken(PdfTokenKind.ArrayClose, start, 1);
 
+            case (byte)'{':
+                _pos++;
+                return new PdfToken(PdfTokenKind.BraceOpen, start, 1);
+
+            case (byte)'}':
+                _pos++;
+                return new PdfToken(PdfTokenKind.BraceClose, start, 1);
+
             default:
                 if (c is (byte)'+' or (byte)'-' or (byte)'.' || (c >= (byte)'0' && c <= (byte)'9'))
                 {

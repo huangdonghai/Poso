@@ -19,4 +19,13 @@
     <ProjectReference Include="..\..\src\Poso.Skia\Poso.Skia.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Content Include="Samples\Jbig2\*.jbig2" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Samples\Jbig2\*.exp" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Samples\Jbig2\Unverified.txt" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Samples\Jpeg\*.jpg" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Samples\Jpeg\*.cmyk" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Samples\Jpeg\*.rgb" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

@@ -6,9 +6,15 @@ namespace Poso.Pdf.Filters;
 public static class PdfFilters
 {
     /// <summary>Apply the complete filter chain to the raw stream data.</summary>
-    public static byte[] Apply(PdfStream stream)
+    public static byte[] Apply(PdfStream stream) => Apply(stream, null);
+
+    /// <summary>Apply the complete filter chain to the raw stream data, reporting unsupported filters to <paramref name="diagnostics"/>.</summary>
+    public static byte[] Apply(PdfStream stream, PdfDiagnostics? diagnostics) =>
+        Apply(stream.RawData.ToArray(), stream.Dictionary, diagnostics);
+
+    /// <summary>Apply the filter chain described by <paramref name="dictionary"/> to <paramref name="rawBytes"/>.</summary>
+    public static byte[] Apply(byte[] rawBytes, PdfDictionary dictionary, PdfDiagnostics? diagnostics)
     {
-        PdfDictionary dictionary = stream.Dictionary;
         var filters = new List<string>();
         var parms = new List<PdfDictionary?>();
 
@@ -32,11 +38,18 @@ public static class PdfFilters
                 break;
         }
 
-        return ApplyChain(stream.RawData.ToArray(), filters, parms);
+        return ApplyChain(rawBytes, filters, parms, diagnostics);
     }
 
     /// <summary>Apply filters in order; stop and return the current data when an image codec header is encountered.</summary>
-    public static byte[] ApplyChain(byte[] data, List<string> filters, List<PdfDictionary?> parms)
+    public static byte[] ApplyChain(byte[] data, List<string> filters, List<PdfDictionary?> parms) =>
+        ApplyChain(data, filters, parms, null);
+
+    /// <summary>
+    /// Apply filters in order. Unsupported filters (Crypt and unknown) are skipped as a no-op and
+    /// reported through <paramref name="diagnostics"/>, unless that instance is strict (then it throws).
+    /// </summary>
+    public static byte[] ApplyChain(byte[] data, List<string> filters, List<PdfDictionary?> parms, PdfDiagnostics? diagnostics)
     {
         byte[] current = data;
         for (int i = 0; i < filters.Count; i++)
@@ -83,10 +96,12 @@ public static class PdfFilters
                     return current;
 
                 case "Crypt":
-                    throw new PdfUnsupportedException("The Crypt filter (encrypted content) is not supported yet (planned for v0.2)");
+                    diagnostics?.Report(PdfUnsupportedKind.CryptFilter, "The Crypt filter (encrypted content) is not supported yet");
+                    break;
 
                 default:
-                    throw new PdfUnsupportedException($"Unsupported stream filter: {filter}");
+                    diagnostics?.Report(PdfUnsupportedKind.StreamFilter, $"Unsupported stream filter: {filter}");
+                    break;
             }
         }
 

@@ -10,6 +10,8 @@ public sealed class PdfParser
     private const int MaxDepth = 96;
 
     private readonly PdfLexer _lexer;
+    private int _currentObjectNumber;
+    private int _currentObjectGeneration;
 
     public PdfParser(byte[] data, int start = 0)
     {
@@ -18,6 +20,21 @@ public sealed class PdfParser
 
     /// <summary>Resolution callback used when parsing an indirect reference (for example when /Length is an indirect object).</summary>
     public Func<PdfIndirectRef, PdfObject?>? Resolver { get; set; }
+
+    /// <summary>Shared encryption context; when set, strings and stream data are decrypted on creation.</summary>
+    public Security.PdfEncryptionContext? Encryption { get; set; }
+
+    /// <summary>
+    /// When false, dictionary/array <see cref="PdfString"/> values are left encrypted (used for the
+    /// trailer, cross-reference stream dictionaries, and object-stream contents where strings are
+    /// either not encrypted or already decrypted at the stream level). Stream data still decrypts.
+    /// </summary>
+    public bool DecryptStrings { get; set; } = true;
+
+    /// <summary>Object number/generation of the indirect object currently being parsed.</summary>
+    public int CurrentObjectNumber => _currentObjectNumber;
+
+    public int CurrentObjectGeneration => _currentObjectGeneration;
 
     public int Position
     {
@@ -65,10 +82,10 @@ public sealed class PdfParser
                 return new PdfName(PdfName.Decode(_lexer.Data, token.Start, token.Length));
 
             case PdfTokenKind.LiteralString:
-                return new PdfString(PdfString.DecodeLiteral(_lexer.Data, token.Start, token.Length));
+                return new PdfString(DecryptString(PdfString.DecodeLiteral(_lexer.Data, token.Start, token.Length)));
 
             case PdfTokenKind.HexString:
-                return new PdfString(PdfString.DecodeHex(_lexer.Data, token.Start, token.Length));
+                return new PdfString(DecryptString(PdfString.DecodeHex(_lexer.Data, token.Start, token.Length)));
 
             case PdfTokenKind.ArrayOpen:
                 return ParseArray(depth);
@@ -133,6 +150,8 @@ public sealed class PdfParser
         }
 
         var reference = new PdfIndirectRef((int)t1.IntegerValue, (int)t2.IntegerValue);
+        _currentObjectNumber = (int)t1.IntegerValue;
+        _currentObjectGeneration = (int)t2.IntegerValue;
         PdfObject value = ParseObject();
         SkipToEndObj();
         return (reference, value);
@@ -292,7 +311,23 @@ public sealed class PdfParser
         int endStreamIndex = IndexOfKeyword(data, dataEnd, "endstream"u8);
         _lexer.Position = endStreamIndex >= 0 ? endStreamIndex + 9 : (int)Math.Min(dataEnd + 16, data.Length);
 
-        return new PdfStream(new PdfDictionary(map), raw);
+        var stream = new PdfStream(new PdfDictionary(map), raw);
+        if (Encryption is { } encryption)
+        {
+            stream.AttachEncryption(encryption, _currentObjectNumber, _currentObjectGeneration);
+        }
+
+        return stream;
+    }
+
+    private byte[] DecryptString(byte[] value)
+    {
+        if (Encryption is null)
+        {
+            return value;
+        }
+
+        return Encryption.DecryptStringIfNeeded(value, _currentObjectNumber, _currentObjectGeneration, DecryptStrings);
     }
 
     private static bool EndStreamFollows(byte[] data, int position)

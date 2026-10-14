@@ -12,6 +12,7 @@ public sealed class Type0PdfFont : PdfFont
     private readonly CMap _encoding;
     private readonly ToUnicodeCMap? _toUnicode;
     private readonly PdfDictionary? _descendantFont;
+    private readonly ushort[]? _cidToGid;
     private readonly Dictionary<int, float> _cidWidthEm = new();
     private readonly float _defaultWidthEm;
 
@@ -31,8 +32,40 @@ public sealed class Type0PdfFont : PdfFont
             ? ToUnicodeCMap.Parse(toUnicodeStream.Decode())
             : null;
 
+        // /CIDToGIDMap only applies to CIDFontType2 (TrueType collections); CIDFontType0 takes CID->GID
+        // from the CFF program itself, which is addressed by the identity CID order here.
+        string? descendantSubtype = _descendantFont?.GetNameValue("Subtype");
+        if (descendantSubtype == "CIDFontType2")
+        {
+            _cidToGid = LoadCidToGidMap(document.Resolve(_descendantFont?.Get("CIDToGIDMap")) as PdfStream);
+        }
+
         _defaultWidthEm = (float)((_descendantFont?.GetNumberValue("DW") ?? 1000d) / 1000d);
         BuildWidths();
+    }
+
+    /// <summary>Loads a /CIDToGIDMap stream: an array of 2-byte big-endian glyph IDs indexed by CID.</summary>
+    private static ushort[]? LoadCidToGidMap(PdfStream? stream)
+    {
+        if (stream is null)
+        {
+            return null; // /Identity (or absent)
+        }
+
+        byte[] data = stream.Decode();
+        int count = data.Length / 2;
+        if (count == 0)
+        {
+            return null;
+        }
+
+        var map = new ushort[count];
+        for (int i = 0; i < count; i++)
+        {
+            map[i] = (ushort)((data[i * 2] << 8) | data[(i * 2) + 1]);
+        }
+
+        return map;
     }
 
     public override bool IsSimpleFont => false;
@@ -65,7 +98,15 @@ public sealed class Type0PdfFont : PdfFont
         }
     }
 
-    public override ushort GetGlyphId(int code) => (ushort)Math.Clamp(code, 0, ushort.MaxValue);
+    public override ushort GetGlyphId(int code)
+    {
+        if (_cidToGid is { } map && code >= 0 && code < map.Length)
+        {
+            return map[code];
+        }
+
+        return (ushort)Math.Clamp(code, 0, ushort.MaxValue);
+    }
 
     public override float GetWidthEm(int code) =>
         _cidWidthEm.TryGetValue(code, out float width) ? width : _defaultWidthEm;

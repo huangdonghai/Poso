@@ -21,6 +21,10 @@ public enum PdfTokenKind
     ArrayClose,
     DictOpen,
     DictClose,
+    /// <summary>PostScript procedure delimiter <c>{</c> (used by Type 4 functions).</summary>
+    BraceOpen,
+    /// <summary>PostScript procedure delimiter <c>}</c>.</summary>
+    BraceClose,
 }
 
 /// <summary>

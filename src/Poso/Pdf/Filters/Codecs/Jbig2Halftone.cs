@@ -1,0 +1,283 @@
+namespace Poso.Pdf.Filters.Codecs;
+
+/// <summary>
+/// A JBIG2 pattern dictionary (ITU-T T.88 §6.7, segment type 16): a set of HPW×HPH gray-level patterns
+/// decoded from one collective bitmap. Reused as the <see cref="Jbig2Symbol"/> holder for each pattern.
+/// </summary>
+internal sealed class Jbig2PatternDict
+{
+    public required int Hpw;
+    public required int Hph;
+    public required Jbig2Symbol[] Patterns;
+}
+
+/// <summary>
+/// JBIG2 pattern-dictionary (type 16) and halftone-region (types 22/23) decoders, ported from jbig2dec's
+/// <c>jbig2_halftone.c</c>. The pattern dictionary's collective bitmap and the halftone region's gray-scale
+/// bitplanes are decoded via the already-validated arithmetic generic-region kernel (Annex C.5). Patterns
+/// are then composited onto the region by gray-level index. Restricted to the arithmetic (non-MMR), no-skip
+/// path; anything else returns null so the caller degrades rather than mis-renders.
+/// </summary>
+internal static class Jbig2Halftone
+{
+    /// <summary>Decodes a pattern dictionary segment body. Returns null for MMR/unsupported.</summary>
+    public static Jbig2PatternDict? DecodeDictionary(byte[] data, int bodyStart, int bodyEnd)
+    {
+        if (bodyEnd - bodyStart < 7)
+        {
+            return null;
+        }
+
+        byte flags = data[bodyStart];
+        bool hdMmr = (flags & 1) != 0;
+        int hdTemplate = (flags >> 1) & 3;
+        int hdpw = data[bodyStart + 1];
+        int hdph = data[bodyStart + 2];
+        uint grayMax = ReadUInt32(data, bodyStart + 3);
+        if (hdMmr)
+        {
+            return null; // MMR pattern dictionary not yet supported
+        }
+
+        int n = (int)grayMax + 1;
+        if (hdpw <= 0 || hdph <= 0 || n <= 0 || n > 65536 || (long)hdpw * n > 100000)
+        {
+            return null;
+        }
+
+        int collectiveWidth = hdpw * n;
+        int stride = (collectiveWidth + 7) / 8;
+        sbyte[] gbat =
+        [
+            (sbyte)(-hdpw), 0, -3, -1, 2, -2, -2, -2,
+        ];
+        int gbStatsSize = hdTemplate == 0 ? 1 << 16 : hdTemplate == 1 ? 1 << 13 : 1 << 10;
+        byte[] gbStats = new byte[gbStatsSize];
+        int bodyData = bodyStart + 7;
+        var mq = new Jbig2MqDecoder(data, bodyData, bodyEnd);
+
+        byte[]? collective = Jbig2GenericArithmetic.DecodeShared(hdTemplate, gbat, mq, gbStats, collectiveWidth, hdph);
+        if (collective is null)
+        {
+            return null;
+        }
+
+        // Split the collective bitmap into n patterns of hdpw×hdph each (REPLACE-clipped, per 6.7.5(4)).
+        Jbig2Symbol[] patterns = new Jbig2Symbol[n];
+        int patStride = (hdpw + 7) / 8;
+        for (int i = 0; i < n; i++)
+        {
+            byte[] pat = new byte[patStride * hdph];
+            int originX = i * hdpw;
+            for (int y = 0; y < hdph; y++)
+            {
+                for (int x = 0; x < hdpw; x++)
+                {
+                    int sx = originX + x;
+                    int bit = (collective[y * stride + (sx >> 3)] >> (7 - (sx & 7))) & 1;
+                    if (bit != 0)
+                    {
+                        pat[y * patStride + (x >> 3)] |= (byte)(1 << (7 - (x & 7)));
+                    }
+                }
+            }
+            patterns[i] = new Jbig2Symbol(hdpw, hdph, pat);
+        }
+
+        return new Jbig2PatternDict { Hpw = hdpw, Hph = hdph, Patterns = patterns };
+    }
+
+    /// <summary>
+    /// Decodes a halftone region segment body and composites the resulting region bitmap onto the page.
+    /// Returns false on unsupported features (MMR/skip) or error.
+    /// </summary>
+    public static bool DecodeRegion(
+        byte[] data, int bodyStart, int bodyEnd, Jbig2PatternDict? patterns,
+        byte[] page, int pageWidth, int pageHeight, int rowBytes)
+    {
+        if (patterns is null || page is null || bodyEnd - bodyStart < 38)
+        {
+            return false;
+        }
+
+        // region_info (17 bytes) at bodyStart
+        int regW = (int)ReadUInt32(data, bodyStart);
+        int regH = (int)ReadUInt32(data, bodyStart + 4);
+        int regX = (int)ReadUInt32(data, bodyStart + 8);
+        int regY = (int)ReadUInt32(data, bodyStart + 12);
+        int regOp = data[bodyStart + 16] & 0x07;
+        int cursor = bodyStart + 17;
+
+        byte flags = data[cursor];
+        bool hMmr = (flags & 1) != 0;
+        int hTemplate = (flags >> 1) & 3;
+        bool hEnableSkip = (flags & 8) != 0;
+        int hCombop = (flags >> 4) & 7;
+        bool hDefPixel = (flags & 0x80) != 0;
+        cursor += 1;
+
+        // MMR bitplanes are not yet validated against the oracle: degrade. Skip (arithmetic) is supported.
+        if (hMmr)
+        {
+            return false;
+        }
+
+        if (cursor + 20 > bodyEnd)
+        {
+            return false;
+        }
+        int hgw = (int)ReadUInt32(data, cursor);
+        int hgh = (int)ReadUInt32(data, cursor + 4);
+        int hgx = (int)ReadUInt32(data, cursor + 8);
+        int hgy = (int)ReadUInt32(data, cursor + 12);
+        cursor += 16;
+        int hrx = (data[cursor] << 8) | data[cursor + 1];
+        int hry = (data[cursor + 2] << 8) | data[cursor + 3];
+        cursor += 4;
+
+        if (hgw <= 0 || hgh <= 0 || hgw > 100000 || hgh > 100000)
+        {
+            return false;
+        }
+
+        // HBPP = smallest number such that 2^HBPP >= n_patterns (6.6.5 point 3).
+        int numPats = patterns.Patterns.Length;
+        int hbpp = 0;
+        while ((1U << hbpp) < (uint)numPats)
+        {
+            hbpp++;
+        }
+        if (hbpp > 16 || hbpp == 0)
+        {
+            return false;
+        }
+
+        // Decode gray-scale bitplanes (Annex C.5): shared MQ + stats, high plane first, cumulative XOR.
+        sbyte[] gbat =
+        [
+            (sbyte)(hTemplate <= 1 ? 3 : 2), -1, -3, -1, 2, -2, -2, -2,
+        ];
+        int gbStatsSize = hTemplate == 0 ? 1 << 16 : hTemplate == 1 ? 1 << 13 : 1 << 10;
+        byte[] gbStats = new byte[gbStatsSize];
+        var mq = new Jbig2MqDecoder(data, cursor, bodyEnd);
+        int gsStride = (hgw + 7) / 8;
+
+        // §6.6.5.1: when skip is enabled, HSKIP is COMPUTED geometrically — grid cells whose pattern falls
+        // entirely off the region canvas are marked to skip (their gray pixel is forced to 0 during plane decode).
+        byte[]? skip = null;
+        int skipStride = 0;
+        if (hEnableSkip)
+        {
+            skipStride = (hgw + 7) / 8;
+            skip = new byte[skipStride * hgh];
+            int hpw = patterns.Hpw;
+            int hph = patterns.Hph;
+            for (int mg = 0; mg < hgh; mg++)
+            {
+                for (int ng = 0; ng < hgw; ng++)
+                {
+                    long x = ((long)hgx + (long)mg * hry + (long)ng * hrx) >> 8;
+                    long y = ((long)hgy + (long)mg * hrx - (long)ng * hry) >> 8;
+                    bool isSkip = x + hpw <= 0 || x >= regW || y + hph <= 0 || y >= regH;
+                    if (isSkip)
+                    {
+                        skip[mg * skipStride + (ng >> 3)] |= (byte)(1 << (7 - (ng & 7)));
+                    }
+                }
+            }
+        }
+
+        byte[][] planes = new byte[hbpp][];
+        for (int j = hbpp - 1; j >= 0; j--)
+        {
+            byte[]? plane = skip is not null
+                ? Jbig2GenericArithmetic.DecodeSharedWithSkip(hTemplate, gbat, mq, gbStats, hgw, hgh, skip, skipStride)
+                : Jbig2GenericArithmetic.DecodeShared(hTemplate, gbat, mq, gbStats, hgw, hgh);
+            if (plane is null)
+            {
+                return false;
+            }
+            if (j < hbpp - 1)
+            {
+                // C.5 step 3(b): GSPLANES[j] ^= GSPLANES[j+1]
+                byte[] higher = planes[j + 1];
+                for (int i = 0; i < gsStride * hgh; i++)
+                {
+                    plane[i] ^= higher[i];
+                }
+            }
+            planes[j] = plane;
+        }
+
+        // Build the region image, fill with HDEFPIXEL (jbig2dec/mupdf do a byte-fill of the 0/1 value).
+        int regStride = (regW + 7) / 8;
+        byte[] region = new byte[regStride * regH];
+        if (hDefPixel)
+        {
+            Array.Fill(region, (byte)0x01);
+        }
+
+        // For each grid cell, read the gray value and compose the corresponding pattern.
+        for (int mg = 0; mg < hgh; mg++)
+        {
+            for (int ng = 0; ng < hgw; ng++)
+            {
+                long x = ((long)hgx + (long)mg * hry + (long)ng * hrx) >> 8;
+                long y = ((long)hgy + (long)mg * hrx - (long)ng * hry) >> 8;
+
+                // GSVALS[ng][mg] = sum over planes of bit << j.
+                int gray = 0;
+                for (int j = 0; j < hbpp; j++)
+                {
+                    gray |= ((planes[j][mg * gsStride + (ng >> 3)] >> (7 - (ng & 7))) & 1) << j;
+                }
+                if (gray >= numPats)
+                {
+                    gray = numPats - 1;
+                }
+
+                ComposeSymbol(region, regW, regH, regStride, patterns.Patterns[gray], (int)x, (int)y, hCombop);
+            }
+        }
+
+        // Composite the region onto the page with the region's own combination operator.
+        return Jbig2SymbolDict.CompositeRegionOntoPage(page, pageWidth, rowBytes, region, regW, regH, regX, regY, regOp);
+    }
+
+    private static void ComposeSymbol(byte[] image, int imgW, int imgH, int imgStride, Jbig2Symbol sym, int x, int y, int combOp)
+    {
+        int symStride = sym.Stride;
+        for (int sy = 0; sy < sym.Height; sy++)
+        {
+            int iy = y + sy;
+            if (iy < 0 || iy >= imgH)
+            {
+                continue;
+            }
+            for (int sx = 0; sx < sym.Width; sx++)
+            {
+                int ix = x + sx;
+                if (ix < 0 || ix >= imgW)
+                {
+                    continue;
+                }
+                bool symBlack = ((sym.Packed[sy * symStride + (sx >> 3)] >> (7 - (sx & 7))) & 1) != 0;
+                int idx = iy * imgStride + (ix >> 3);
+                int mask = 1 << (7 - (ix & 7));
+                bool cur = (image[idx] & mask) != 0;
+                bool result = combOp switch
+                {
+                    0 => cur || symBlack,
+                    1 => cur && symBlack,
+                    2 => cur ^ symBlack,
+                    3 => cur == symBlack,
+                    _ => symBlack,
+                };
+                image[idx] = result ? (byte)(image[idx] | mask) : (byte)(image[idx] & ~mask);
+            }
+        }
+    }
+
+    private static uint ReadUInt32(byte[] data, int offset) =>
+        ((uint)data[offset] << 24) | ((uint)data[offset + 1] << 16) | ((uint)data[offset + 2] << 8) | data[offset + 3];
+}

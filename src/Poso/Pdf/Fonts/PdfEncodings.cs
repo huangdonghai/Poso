@@ -89,9 +89,26 @@ public static class PdfEncodings
         (0xFC, "udieresis"), (0xFD, "yacute"), (0xFE, "thorn"), (0xFF, "ydieresis"),
     });
 
-    /// <summary>MacRomanEncoding (classic Mac encoding; the common 0x80-0xDF range).</summary>
+    /// <summary>MacRomanEncoding (classic Mac encoding; PDF 32000-1 Table D.2).</summary>
     public static readonly string[] MacRoman = BuildTable(new (int Code, string Name)[]
     {
+        // 0x20-0x7E printable ASCII: identical to WinAnsiEncoding's low range.
+        (0x20, "space"), (0x21, "exclam"), (0x22, "quotedbl"), (0x23, "numbersign"), (0x24, "dollar"),
+        (0x25, "percent"), (0x26, "ampersand"), (0x27, "quotesingle"), (0x28, "parenleft"), (0x29, "parenright"),
+        (0x2A, "asterisk"), (0x2B, "plus"), (0x2C, "comma"), (0x2D, "hyphen"), (0x2E, "period"),
+        (0x2F, "slash"), (0x30, "zero"), (0x31, "one"), (0x32, "two"), (0x33, "three"), (0x34, "four"),
+        (0x35, "five"), (0x36, "six"), (0x37, "seven"), (0x38, "eight"), (0x39, "nine"), (0x3A, "colon"),
+        (0x3B, "semicolon"), (0x3C, "less"), (0x3D, "equal"), (0x3E, "greater"), (0x3F, "question"),
+        (0x40, "at"), (0x41, "A"), (0x42, "B"), (0x43, "C"), (0x44, "D"), (0x45, "E"), (0x46, "F"),
+        (0x47, "G"), (0x48, "H"), (0x49, "I"), (0x4A, "J"), (0x4B, "K"), (0x4C, "L"), (0x4D, "M"),
+        (0x4E, "N"), (0x4F, "O"), (0x50, "P"), (0x51, "Q"), (0x52, "R"), (0x53, "S"), (0x54, "T"),
+        (0x55, "U"), (0x56, "V"), (0x57, "W"), (0x58, "X"), (0x59, "Y"), (0x5A, "Z"),
+        (0x5B, "bracketleft"), (0x5C, "backslash"), (0x5D, "bracketright"), (0x5E, "asciicircum"),
+        (0x5F, "underscore"), (0x60, "grave"), (0x61, "a"), (0x62, "b"), (0x63, "c"), (0x64, "d"),
+        (0x65, "e"), (0x66, "f"), (0x67, "g"), (0x68, "h"), (0x69, "i"), (0x6A, "j"), (0x6B, "k"),
+        (0x6C, "l"), (0x6D, "m"), (0x6E, "n"), (0x6F, "o"), (0x70, "p"), (0x71, "q"), (0x72, "r"),
+        (0x73, "s"), (0x74, "t"), (0x75, "u"), (0x76, "v"), (0x77, "w"), (0x78, "x"), (0x79, "y"),
+        (0x7A, "z"), (0x7B, "braceleft"), (0x7C, "bar"), (0x7D, "braceright"), (0x7E, "asciitilde"),
         (0x80, "Adieresis"), (0x81, "Aring"), (0x82, "Ccedilla"), (0x83, "Eacute"), (0x84, "Ntilde"),
         (0x85, "Odieresis"), (0x86, "Udieresis"), (0x87, "aacute"), (0x88, "agrave"), (0x89, "acircumflex"),
         (0x8A, "adieresis"), (0x8B, "atilde"), (0x8C, "aring"), (0x8D, "ccedilla"), (0x8E, "eacute"),
@@ -117,6 +134,7 @@ public static class PdfEncodings
         (0xE4, "perthousand"), (0xE5, "Acircumflex"), (0xE6, "Ecircumflex"), (0xE7, "Aacute"),
         (0xE8, "Edieresis"), (0xE9, "Egrave"), (0xEA, "Iacute"), (0xEB, "Icircumflex"), (0xEC, "Idieresis"),
         (0xED, "Igrave"), (0xEE, "Oacute"), (0xEF, "Ocircumflex"),
+        (0xF0, "ring"), (0xF1, "cedilla"), (0xF2, "hungarumlaut"), (0xF3, "ogonek"), (0xF4, "caron"),
     });
 
     private static string[] BuildTable((int Code, string Name)[] entries)
