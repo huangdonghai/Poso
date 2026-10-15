@@ -9,6 +9,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="Poso.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="PeachDrawing" />
     <PackageReference Include="PeachDrawing.Text" />
   </ItemGroup>

@@ -1,4 +1,5 @@
-﻿using System.Text;
+﻿using System.Buffers.Binary;
+using System.Text;
 using Poso.Graphics;
 
 namespace Poso.PeachDrawing;
@@ -61,6 +62,12 @@ public sealed class PeachFont : IFont
     {
         // Copy: FontSet keeps the memory alive and the caller's span may be a temporary.
         byte[] data = fontData.ToArray();
+        byte[]? repaired = WithEmptyCmap(data);
+        if (repaired is not null)
+        {
+            data = repaired;
+        }
+
         string familyName = "poso-embedded-" + Guid.NewGuid().ToString("n");
         try
         {
@@ -88,6 +95,144 @@ public sealed class PeachFont : IFont
             // the caller falls back to the name-based system lookup rather than losing the page.
             return null;
         }
+    }
+
+    /// <summary>
+    /// PeachDrawing.Text reads the cmap while building a typeface's metrics and throws for a TrueType
+    /// program that has none, which loses the font and substitutes a system family. Subsets addressed
+    /// purely by glyph ID are exactly that shape - every CID-keyed PDF font with an Identity
+    /// CIDToGIDMap, which is how CJK body text arrives - so give those programs an empty cmap. Nothing
+    /// becomes reachable by character that was not already, and the renderer only ever asks for glyph
+    /// IDs. Returns null when the program needs no repair.
+    /// </summary>
+    internal static byte[]? WithEmptyCmap(byte[] data)
+    {
+        // 0x00010000 is the TrueType (glyf) sfnt version; 'OTTO' CFF and collection headers are left alone.
+        if (data.Length < 12 || BinaryPrimitives.ReadUInt32BigEndian(data) != 0x00010000)
+        {
+            return null;
+        }
+
+        int tableCount = BinaryPrimitives.ReadUInt16BigEndian(data.AsSpan(4));
+        if (data.Length < 12 + (tableCount * 16))
+        {
+            return null;
+        }
+
+        var tables = new List<(string Tag, uint CheckSum, int Offset, int Length)>(tableCount + 1);
+        for (int i = 0; i < tableCount; i++)
+        {
+            int entry = 12 + (i * 16);
+            string tag = Encoding.ASCII.GetString(data, entry, 4);
+            if (tag == "cmap")
+            {
+                return null;
+            }
+
+            tables.Add((
+                tag,
+                BinaryPrimitives.ReadUInt32BigEndian(data.AsSpan(entry + 4)),
+                (int)BinaryPrimitives.ReadUInt32BigEndian(data.AsSpan(entry + 8)),
+                (int)BinaryPrimitives.ReadUInt32BigEndian(data.AsSpan(entry + 12))));
+        }
+
+        byte[] cmap = BuildEmptyCmap();
+        tables.Add(("cmap", CheckSum(cmap), 0, cmap.Length));
+        tables.Sort((left, right) => string.CompareOrdinal(left.Tag, right.Tag));
+
+        int count = tables.Count;
+        int selector = 0;
+        while ((1 << (selector + 1)) <= count)
+        {
+            selector++;
+        }
+
+        int[] lengths = tables.Select(t => t.Tag == "cmap" ? t.Length : Math.Min(t.Length, data.Length - t.Offset)).ToArray();
+        int dataStart = 12 + (count * 16);
+        int total = dataStart;
+        foreach (int length in lengths)
+        {
+            total += length + (Pad(length));
+        }
+
+        var output = new byte[total];
+        BinaryPrimitives.WriteUInt32BigEndian(output.AsSpan(0), 0x00010000);
+        BinaryPrimitives.WriteUInt16BigEndian(output.AsSpan(4), (ushort)count);
+        BinaryPrimitives.WriteUInt16BigEndian(output.AsSpan(6), (ushort)(16 << selector));
+        BinaryPrimitives.WriteUInt16BigEndian(output.AsSpan(8), (ushort)selector);
+        BinaryPrimitives.WriteUInt16BigEndian(output.AsSpan(10), (ushort)((count * 16) - (16 << selector)));
+
+        int offset = dataStart;
+        for (int i = 0; i < count; i++)
+        {
+            (string tag, uint checkSum, int sourceOffset, int _) = tables[i];
+            int length = lengths[i];
+            int directory = 12 + (i * 16);
+            Encoding.ASCII.GetBytes(tag).CopyTo(output, directory);
+            BinaryPrimitives.WriteUInt32BigEndian(output.AsSpan(directory + 4), tag == "cmap" ? checkSum : CheckSum(data.AsSpan(sourceOffset, length)));
+            BinaryPrimitives.WriteUInt32BigEndian(output.AsSpan(directory + 8), (uint)offset);
+            BinaryPrimitives.WriteUInt32BigEndian(output.AsSpan(directory + 12), (uint)length);
+
+            if (tag == "cmap")
+            {
+                cmap.CopyTo(output, offset);
+            }
+            else
+            {
+                Array.Copy(data, sourceOffset, output, offset, length);
+            }
+
+            offset += length + Pad(length);
+        }
+
+        // head.checkSumAdjustment must be recomputed for any sfnt whose layout changed: zero it, sum the
+        // whole file and store the difference from the magic constant.
+        int headIndex = tables.FindIndex(t => t.Tag == "head");
+        if (headIndex >= 0)
+        {
+            int headOffset = (int)BinaryPrimitives.ReadUInt32BigEndian(output.AsSpan(12 + (headIndex * 16) + 8));
+            BinaryPrimitives.WriteUInt32BigEndian(output.AsSpan(headOffset + 8), 0u);
+            BinaryPrimitives.WriteUInt32BigEndian(output.AsSpan(headOffset + 8), 0xB105u - CheckSum(output));
+        }
+
+        return output;
+    }
+
+    /// <summary>An empty format 4 cmap (one 0xFFFF segment) for platform 3 / encoding 1.</summary>
+    private static byte[] BuildEmptyCmap()
+    {
+        var cmap = new byte[36];
+        BinaryPrimitives.WriteUInt16BigEndian(cmap.AsSpan(2), 1); // one subtable
+        BinaryPrimitives.WriteUInt16BigEndian(cmap.AsSpan(4), 3); // platform: Windows
+        BinaryPrimitives.WriteUInt16BigEndian(cmap.AsSpan(6), 1); // encoding: Unicode BMP
+        BinaryPrimitives.WriteUInt32BigEndian(cmap.AsSpan(8), 12); // subtable offset
+        BinaryPrimitives.WriteUInt16BigEndian(cmap.AsSpan(12), 4); // format
+        BinaryPrimitives.WriteUInt16BigEndian(cmap.AsSpan(14), 24); // length
+        BinaryPrimitives.WriteUInt16BigEndian(cmap.AsSpan(18), 2); // segCountX2
+        BinaryPrimitives.WriteUInt16BigEndian(cmap.AsSpan(20), 2); // searchRange
+        BinaryPrimitives.WriteUInt16BigEndian(cmap.AsSpan(26), 0xFFFF); // endCode
+        BinaryPrimitives.WriteUInt16BigEndian(cmap.AsSpan(30), 0xFFFF); // startCode
+        BinaryPrimitives.WriteUInt16BigEndian(cmap.AsSpan(32), 1); // idDelta
+        return cmap;
+    }
+
+    private static int Pad(int length) => (4 - (length % 4)) % 4;
+
+    private static uint CheckSum(ReadOnlySpan<byte> data)
+    {
+        uint sum = 0;
+        for (int i = 0; i < data.Length; i += 4)
+        {
+            uint word = 0;
+            for (int b = 0; b < 4; b++)
+            {
+                word = (word << 8) | (uint)(i + b < data.Length ? data[i + b] : 0);
+            }
+
+            sum += word;
+        }
+
+        return sum;
     }
 
     private static PeachFont? CreateFallback(string baseFontName)
