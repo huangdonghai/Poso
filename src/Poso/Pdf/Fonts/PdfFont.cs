@@ -204,10 +204,17 @@ public abstract class PdfFont
             string.IsNullOrEmpty(BaseFontName) ? "PosoFont" : BaseFontName);
     }
 
+    /// <summary>The descendant CIDFont of a Type0 font. /DescendantFonts is legal as an indirect
+    /// reference to the array as well as an inline array, so the value itself is resolved first.</summary>
+    protected PdfDictionary? DescendantFont =>
+        Document.Resolve(Dictionary.Get("DescendantFonts")) is PdfArray { Count: > 0 } array
+            ? Document.Resolve(array[0]) as PdfDictionary
+            : null;
+
     /// <summary>The FontDescriptor of this font; Type0 fonts keep it on their descendant.</summary>
     protected PdfDictionary? FontDescriptor =>
         Document.Resolve(Dictionary.Get("FontDescriptor")) as PdfDictionary
-        ?? Document.Resolve((Document.Resolve(Dictionary.GetArray("DescendantFonts")?[0]) as PdfDictionary)?.Get("FontDescriptor")) as PdfDictionary;
+        ?? Document.Resolve(DescendantFont?.Get("FontDescriptor")) as PdfDictionary;
 
     /// <summary>Reads the embedded font program (FontFile / FontFile2 / FontFile3).</summary>
     protected bool TryGetEmbeddedFontData(out byte[]? data)
@@ -236,7 +243,7 @@ public abstract class PdfFont
     {
         double? firstChar = Dictionary.GetNumberValue("FirstChar");
         double? lastChar = Dictionary.GetNumberValue("LastChar");
-        PdfArray? widths = Dictionary.GetArray("Widths");
+        PdfArray? widths = Document.Resolve(Dictionary.Get("Widths")) as PdfArray;
 
         if (widths is not null && firstChar is not null && lastChar is not null && code >= firstChar && code <= lastChar)
         {

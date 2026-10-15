@@ -142,12 +142,13 @@ public sealed class ToUnicodeCMap
             {
                 // String form: <lo> <hi> <dst>, incrementing the last unit per code
                 PdfToken destination = lexer.NextToken();
-                if (destination.Kind != PdfTokenKind.HexString)
+                if (destination.Kind is not (PdfTokenKind.HexString or PdfTokenKind.LiteralString))
                 {
                     continue;
                 }
 
-                uint[] baseUnits = DecodeUtf16(lexer.Data, destination.Start, destination.Length);
+                byte[] destinationBytes = ReadStringBytes(lexer, destination);
+                uint[] baseUnits = DecodeUtf16(destinationBytes, 0, destinationBytes.Length);
                 for (int code = low; code <= high; code++)
                 {
                     map[code] = IncrementUnits(baseUnits, code - low);
@@ -161,19 +162,22 @@ public sealed class ToUnicodeCMap
     {
         lexer.SkipWhiteSpace();
         PdfToken token = lexer.NextToken();
-        switch (token.Kind)
+        if (token.Kind is not (PdfTokenKind.HexString or PdfTokenKind.LiteralString))
         {
-            case PdfTokenKind.HexString:
-                return DecodeUtf16(lexer.Data, token.Start, token.Length);
-
-            case PdfTokenKind.LiteralString:
-                byte[] literal = PdfString.DecodeLiteral(lexer.Data, token.Start, token.Length);
-                return DecodeUtf16(literal, 0, literal.Length);
-
-            default:
-                return null;
+            return null;
         }
+
+        byte[] bytes = ReadStringBytes(lexer, token);
+        return DecodeUtf16(bytes, 0, bytes.Length);
     }
+
+    /// <summary>Reads a string token's bytes: a hex string is hex-decoded, so the UTF-16 units are
+    /// read from the value rather than from the ASCII digits that spell it.</summary>
+    private static byte[] ReadStringBytes(PdfLexer lexer, PdfToken token) => token.Kind switch
+    {
+        PdfTokenKind.HexString => PdfString.DecodeHex(lexer.Data, token.Start, token.Length),
+        _ => PdfString.DecodeLiteral(lexer.Data, token.Start, token.Length),
+    };
 
     /// <summary>
     /// Decodes a destination string to UTF-16BE code units: a FE FF BOM forces UTF-16BE;

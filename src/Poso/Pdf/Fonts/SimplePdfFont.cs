@@ -74,7 +74,7 @@ public sealed class SimplePdfFont : PdfFont
             float width = GetWidthFromWidths(code);
             _codeWidthEm[code] = width != 0f
                 ? width / 1000f
-                : Dictionary.GetArray("Widths") is not null
+                : Document.Resolve(Dictionary.Get("Widths")) is not null
                     ? GetMissingWidthEm()
                     : GetGraphicsAdvanceEm(code);
             _widthResolved[code] = true;
@@ -103,8 +103,8 @@ public sealed class SimplePdfFont : PdfFont
 
     private void BuildEncoding()
     {
-        PdfObject? encodingObject = Dictionary.Get("Encoding");
-        PdfDictionary? encodingDictionary = Document.Resolve(encodingObject) as PdfDictionary;
+        PdfObject? encodingObject = Document.Resolve(Dictionary.Get("Encoding"));
+        PdfDictionary? encodingDictionary = encodingObject as PdfDictionary;
 
         if (encodingDictionary is not null)
         {
@@ -120,7 +120,7 @@ public sealed class SimplePdfFont : PdfFont
                 Array.Copy(table, _codeToName, 256);
             }
 
-            ApplyDifferences(encodingDictionary.GetArray("Differences"));
+            ApplyDifferences(Document.Resolve(encodingDictionary.Get("Differences")) as PdfArray);
         }
         else
         {

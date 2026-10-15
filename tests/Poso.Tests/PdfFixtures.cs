@@ -282,6 +282,44 @@ public static class PdfFixtures
             Stream(8, string.Empty, program));
     }
 
+    /// <summary>
+    /// The CID-keyed Type 1 page again, but with every font attribute that is legal as an indirect
+    /// reference written as one: <c>/DescendantFonts</c> refers to the array, and the array's CIDFont
+    /// refers to its <c>/W</c>. Repaired and subsetted producers emit exactly this shape. A reader that
+    /// only accepts an inline array loses the descendant font, and with it the embedded program, the
+    /// widths and the ToUnicode mapping - the page then renders as random glyphs of a system substitute.
+    /// The ToUnicode CMap uses hex destinations, which must be hex-decoded before being read as UTF-16.
+    /// </summary>
+    public static byte[] CreateIndirectReferenceType0Pdf()
+    {
+        byte[] program = BuildCidType1Program();
+        string toUnicode =
+            "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n"
+            + "1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n"
+            + "2 beginbfchar\n<0001> <0041>\n<0002> <4E00>\nendbfchar\n"
+            + "1 beginbfrange\n<0010> <0011> <0061>\nendbfrange\nendcmap\nCMapName currentdict /CMap defineresource pop\nend\nend";
+
+        string type0 = "<< /Type /Font /Subtype /Type0 /BaseFont /CidTest /Encoding /Identity-H "
+            + "/DescendantFonts 6 0 R /ToUnicode 10 0 R >>";
+        string descendantArray = "[ << /Type /Font /Subtype /CIDFontType0 /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> "
+            + "/FontDescriptor 7 0 R /DW 1000 /W 9 0 R >> ]";
+        string descriptor = "<< /Type /FontDescriptor /FontName /CidTest /Flags 4 /FontBBox [0 0 1000 1000] "
+            + "/Ascent 800 /Descent -200 /ItalicAngle 0 /StemV 80 /FontFile 8 0 R >>";
+        string content = "BT /F1 100 Tf 10 60 Td <00010002> Tj ET";
+
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 120] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            new PdfObjectDefinition(5, type0),
+            new PdfObjectDefinition(6, descendantArray),
+            new PdfObjectDefinition(7, descriptor),
+            Stream(8, string.Empty, program),
+            new PdfObjectDefinition(9, "[ 1 [600] 2 [600] ]"),
+            Stream(10, string.Empty, Encoding.ASCII.GetBytes(toUnicode)));
+    }
+
     // Assembles a minimal CID-keyed Type 1 program: cleartext header + CIDMap + plaintext (lenIV -1)
     // charstrings. CID 0 is an empty .notdef; CID 1 and 2 are the same filled rectangle path.
     private static byte[] BuildCidType1Program()

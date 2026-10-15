@@ -37,7 +37,7 @@ public sealed class Type0PdfFont : PdfFont
             _ => false,
         };
 
-        _descendantFont = (document.Resolve(dictionary.GetArray("DescendantFonts")?[0]) as PdfDictionary);
+        _descendantFont = DescendantFont;
         _toUnicode = document.Resolve(dictionary.Get("ToUnicode")) is PdfStream toUnicodeStream
             ? ToUnicodeCMap.Parse(toUnicodeStream.Decode())
             : null;
@@ -89,7 +89,7 @@ public sealed class Type0PdfFont : PdfFont
     // spec value of 880 (thousandths of an em) - exactly what MuPDF uses (pdf_lookup_vmtx -> dvmtx.y),
     // not the FontDescriptor ascent.
     public override float VerticalOriginEm =>
-        _isVertical ? (float)((_descendantFont?.GetArray("DW2")?.GetNumber(0)?.Value ?? 880d) / 1000d) : 0f;
+        _isVertical ? (float)(((Document.Resolve(_descendantFont?.Get("DW2")) as PdfArray)?.GetNumber(0)?.Value ?? 880d) / 1000d) : 0f;
 
     public override void DecodeCodes(ReadOnlySpan<byte> bytes, List<int> codes)
     {
@@ -160,7 +160,7 @@ public sealed class Type0PdfFont : PdfFont
     /// <summary>Parses the /W width array on the descendant CIDFont.</summary>
     private void BuildWidths()
     {
-        PdfArray? widths = _descendantFont?.GetArray("W");
+        PdfArray? widths = Document.Resolve(_descendantFont?.Get("W")) as PdfArray;
         if (widths is null)
         {
             return;

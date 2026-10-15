@@ -20,7 +20,7 @@ public sealed class Type3PdfFont : PdfFont
     {
         _charProcs = Document.Resolve(dictionary.Get("CharProcs")) as PdfDictionary ?? new PdfDictionary();
 
-        Matrix3x2? matrix = ParseMatrix(dictionary.GetArray("FontMatrix"));
+        Matrix3x2? matrix = ParseMatrix(Document.Resolve(dictionary.Get("FontMatrix")) as PdfArray);
         _fontMatrix = matrix ?? Matrix3x2.CreateScale(0.001f);
         _glyphSpaceScale = Math.Abs(_fontMatrix.M11);
 
@@ -67,7 +67,7 @@ public sealed class Type3PdfFont : PdfFont
     {
         // Type3 fonts have no base encoding; only /Differences applies
         PdfDictionary? encodingDictionary = Document.Resolve(Dictionary.Get("Encoding")) as PdfDictionary;
-        PdfArray? differences = encodingDictionary?.GetArray("Differences");
+        PdfArray? differences = Document.Resolve(encodingDictionary?.Get("Differences")) as PdfArray;
 
         if (differences is null)
         {
@@ -98,7 +98,7 @@ public sealed class Type3PdfFont : PdfFont
     private void BuildWidths()
     {
         // /Widths on Type3 fonts are in glyph space units (1/1000 of the glyph space by convention)
-        PdfArray? widths = Dictionary.GetArray("Widths");
+        PdfArray? widths = Document.Resolve(Dictionary.Get("Widths")) as PdfArray;
         double? firstChar = Dictionary.GetNumberValue("FirstChar");
         double? lastChar = Dictionary.GetNumberValue("LastChar");
 
