@@ -26,18 +26,30 @@ internal static class JpegColorConverter
             return null;
         }
 
-        int count = image.Width * image.Height;
-        var bgra = new byte[count * 4];
+        var bgra = new byte[image.Width * image.Height * 4];
+        CmykToBgra32(cmyk, bgra);
+        return bgra;
+    }
+
+    /// <summary>
+    /// Converts interleaved CMYK samples (W*H*4 bytes) into tightly packed BGRA (premultiplied,
+    /// opaque) pixels using the shared DeviceCMYK conversion. Shared by the managed JPEG path and
+    /// by back-ends that decode Adobe JPEGs themselves, so both produce identical colours.
+    /// </summary>
+    internal static void CmykToBgra32(ReadOnlySpan<byte> cmyk, byte[] bgra)
+    {
+        const float Inv255 = 1f / 255f;
+        int count = bgra.Length >> 2;
         for (int i = 0; i < count; i++)
         {
-            CmykToRgb(cmyk[i * 4], cmyk[i * 4 + 1], cmyk[i * 4 + 2], cmyk[i * 4 + 3], out byte r, out byte g, out byte b);
+            PosoColor rgb = PosoColor.FromCmyk(
+                cmyk[i * 4] * Inv255, cmyk[i * 4 + 1] * Inv255, cmyk[i * 4 + 2] * Inv255, cmyk[i * 4 + 3] * Inv255);
             int o = i * 4;
-            bgra[o] = b;       // premultiplied with alpha 255 == straight colour
-            bgra[o + 1] = g;
-            bgra[o + 2] = r;
+            bgra[o] = rgb.B;       // premultiplied with alpha 255 == straight colour
+            bgra[o + 1] = rgb.G;
+            bgra[o + 2] = rgb.R;
             bgra[o + 3] = 255;
         }
-        return bgra;
     }
 
     /// <summary>
@@ -95,15 +107,5 @@ internal static class JpegColorConverter
     {
         int r = (int)MathF.Round(v);
         return (byte)(r < 0 ? 0 : r > 255 ? 255 : r);
-    }
-
-    // pdf.js DeviceCmykCS polynomial fit to SWOP CMYK. Delegates to the shared PosoColor.FromCmyk so the
-    // CMYK JPEG path and the DeviceCMYK graphics fills (k/K) use one identical conversion.
-    private static void CmykToRgb(byte c, byte m, byte y, byte k, out byte r, out byte g, out byte b)
-    {
-        PosoColor rgb = PosoColor.FromCmyk(c / 255f, m / 255f, y / 255f, k / 255f);
-        r = rgb.R;
-        g = rgb.G;
-        b = rgb.B;
     }
 }
