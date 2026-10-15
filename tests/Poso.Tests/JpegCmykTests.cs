@@ -20,7 +20,7 @@ namespace Poso.Tests;
 /// </summary>
 public class JpegCmykTests
 {
-    private static string VectorsDir()
+    internal static string VectorsDir()
     {
         var probe = Path.Combine(AppContext.BaseDirectory, "Samples", "Jpeg");
         if (Directory.Exists(probe))

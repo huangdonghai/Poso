@@ -1,4 +1,5 @@
 ﻿using Poso.Graphics;
+using Poso.Pdf.Filters.Codecs;
 
 namespace Poso.PeachDrawing;
 
@@ -37,9 +38,15 @@ public sealed class PeachGraphicsFactory : IGraphicsFactory
             return null;
         }
 
+        byte[] bytes = data.ToArray();
         try
         {
-            using var stream = new MemoryStream(data.ToArray());
+            if (JpegDecoder.PeekComponentCount(bytes) == 4)
+            {
+                return DecodeAdobeCmykJpeg(bytes);
+            }
+
+            using var stream = new MemoryStream(bytes);
             PeachCore.Image? image = RenderContext.ImageFromStream(stream);
             if (image is null)
             {
@@ -80,6 +87,47 @@ public sealed class PeachGraphicsFactory : IGraphicsFactory
             return null;
         }
     }
+
+    /// <summary>
+    /// Decodes an Adobe 4-component JPEG through PeachImage's optimised kernels into raw Cmyk32
+    /// samples and converts them with the shared Poso CMYK→BGRA converter, so the colours match the
+    /// managed decoder's validated pipeline exactly. Only YCCK (Adobe transform 2) takes this path:
+    /// PeachImage's plain-CMYK (transform 0) inversion disagrees with the MuPDF/pdf.js references,
+    /// so those defer to the managed decoder by returning null (PdfImageDecoder falls back). Small
+    /// images also defer: PeachImage has a fixed startup cost that beats the managed decoder only
+    /// from roughly half a megapixel up (measured crossover on the CMYK validation vectors).
+    /// </summary>
+    private IImage? DecodeAdobeCmykJpeg(byte[] bytes)
+    {
+        if (JpegDecoder.PeekAdobeTransform(bytes) != 2)
+        {
+            return null;
+        }
+
+        using var identifyStream = new MemoryStream(bytes);
+        global::PeachImage.ImageInfo info = global::PeachImage.Image.Identify(identifyStream);
+        if ((long)info.Width * info.Height < 512 * 512)
+        {
+            return null;
+        }
+
+        using var stream = new MemoryStream(bytes);
+        // global:: qualification: the PeachImage namespace vs the local PeachImage image class.
+        using global::PeachImage.Image image = global::PeachImage.Image.Load(stream);
+        if (image.PixelFormat != global::PeachImage.PixelFormat.Cmyk32)
+        {
+            return null;
+        }
+
+        ReadOnlySpan<byte> cmyk = image.GetPixelSpan();
+        int count = image.Width * image.Height;
+        var bgra = new byte[count * 4];
+        JpegColorConverter.CmykToBgra32(cmyk, bgra);
+        return new PeachImage(image.Width, image.Height, bgra, premultiplied: true);
+    }
+
+    /// <summary>The Peach stack decodes Adobe CMYK/YCCK JPEGs itself (see <see cref="DecodeAdobeCmykJpeg"/>).</summary>
+    bool IGraphicsFactory.HandlesAdobeCmykJpeg => true;
 
     public IFont? CreateFont(ReadOnlySpan<byte> fontData, string baseFontName) =>
         PeachFont.Create(fontData, baseFontName);

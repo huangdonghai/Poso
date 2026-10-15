@@ -20,4 +20,12 @@ public interface IGraphicsFactory
 
     /// <summary>Creates an image from tightly packed pixel data (stride = width * BytesPerPixel).</summary>
     IImage CreateImage(int width, int height, PixelFormat format, ReadOnlySpan<byte> pixels);
+
+    /// <summary>
+    /// Whether <see cref="DecodeImage"/> correctly decodes Adobe CMYK/YCCK (4-component) JPEGs by
+    /// itself, including the Adobe colour transform. When false (the default), the PDF image layer
+    /// decodes those with its own managed JPEG decoder instead of delegating; a capable back-end
+    /// still receives the managed decode as a fallback whenever its own decode fails.
+    /// </summary>
+    bool HandlesAdobeCmykJpeg => false;
 }

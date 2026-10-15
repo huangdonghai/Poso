@@ -80,9 +80,16 @@ public static class PdfImageDecoder
 
             // CMYK/YCCK (4-component) JPEGs are decoded here rather than delegated to the backend:
             // native codecs (Skia's SKCodec) omit the Adobe CMYK inversion and produce visibly wrong
-            // colours, and SkiaSharp exposes no CMYK output to recover the raw samples from. 1/3-component
-            // JPEGs and JPEG2000 are unaffected and stay on the backend path.
-            if (hasDct && !hasJpx && JpegDecoder.PeekComponentCount(encoded) == 4)
+            // colours, and SkiaSharp exposes no CMYK output to recover the raw samples from. Backends
+            // that declare HandlesAdobeCmykJpeg get the first crack instead (faster, progressive-capable),
+            // with the managed decoder kept as the fallback when the backend cannot produce pixels.
+            // 1/3-component JPEGs and JPEG2000 are unaffected and stay on the backend path.
+            bool cmykJpeg = hasDct && !hasJpx && JpegDecoder.PeekComponentCount(encoded) == 4;
+            IImage? backendCmyk = cmykJpeg && factory.HandlesAdobeCmykJpeg
+                ? DecodeViaBackend(factory, encoded)
+                : null;
+
+            if (cmykJpeg && backendCmyk is null)
             {
                 JpegDecoder.Result? jpeg = JpegDecoder.Decode(encoded);
                 byte[]? cmykPixels = jpeg is null ? null : JpegColorConverter.ToBgra32(jpeg);
@@ -91,6 +98,11 @@ public static class PdfImageDecoder
                     return factory.CreateImage(jpeg!.Width, jpeg.Height, PixelFormat.Bgra8888Premul, cmykPixels);
                 }
                 // Fall through to the backend if the self-decode could not complete.
+            }
+
+            if (backendCmyk is not null)
+            {
+                return backendCmyk;
             }
 
             IImage? raster = factory.DecodeImage(encoded);
@@ -104,9 +116,7 @@ public static class PdfImageDecoder
 
             using (raster)
             {
-                byte[] jpegPixels = new byte[raster.Width * raster.Height * raster.BytesPerPixel];
-                raster.CopyPixels(jpegPixels);
-                return factory.CreateImage(raster.Width, raster.Height, PixelFormat.Bgra8888Premul, jpegPixels);
+                return CopyBackendRaster(factory, raster);
             }
         }
 
@@ -383,6 +393,29 @@ public static class PdfImageDecoder
         return document.Resolve(candidate.Get("JBIG2Globals")) is PdfStream globalsStream
             ? globalsStream.Decode(diagnostics)
             : null;
+    }
+
+    // Runs a capable back-end's own decode for a CMYK JPEG and re-wraps the raster into the
+    // pipeline's standard Bgra8888Premul image; null when the back-end cannot decode it.
+    private static IImage? DecodeViaBackend(IGraphicsFactory factory, byte[] encoded)
+    {
+        IImage? raster = factory.DecodeImage(encoded);
+        if (raster is null)
+        {
+            return null;
+        }
+
+        using (raster)
+        {
+            return CopyBackendRaster(factory, raster);
+        }
+    }
+
+    private static IImage CopyBackendRaster(IGraphicsFactory factory, IImage raster)
+    {
+        byte[] pixels = new byte[raster.Width * raster.Height * raster.BytesPerPixel];
+        raster.CopyPixels(pixels);
+        return factory.CreateImage(raster.Width, raster.Height, PixelFormat.Bgra8888Premul, pixels);
     }
 
     private static byte[] Combine(byte[] first, byte[] second)

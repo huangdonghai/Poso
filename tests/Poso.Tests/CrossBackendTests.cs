@@ -1,3 +1,5 @@
+using System;
+using System.IO;
 using Poso.Graphics;
 using Poso.Pdf;
 using Poso.PeachDrawing;
@@ -93,6 +95,79 @@ public class CrossBackendTests
 
         double iou = (double)both / either;
         Assert.True(iou >= 0.85d, $"{page}: ink mask IoU {iou:F3} (skia/peach disagree beyond AA noise)");
+    }
+
+    /// <summary>
+    /// Adobe CMYK/YCCK (4-component) JPEGs must render to the same (correct) colours on both
+    /// back-ends. Skia always takes the managed decoder (it cannot apply the Adobe inversion);
+    /// Peach decodes YCCK through PeachImage's kernels and falls back to the managed decoder for
+    /// plain CMYK (its transform-0 inversion disagrees with the MuPDF/pdf.js references). Each
+    /// path must match the reference RGB dumps, and the two back-ends must agree with each other.
+    /// </summary>
+    [Theory]
+    [InlineData("flutter-cover", 1306, 921)]
+    [InlineData("rust-a", 418, 268)]
+    [InlineData("rust-tall", 140, 535)]
+    [InlineData("cmykjpeg", 200, 150)]
+    public void CmykJpeg_BackendsAgreeOnReferenceColours(string name, int width, int height)
+    {
+        string vectorsDir = JpegCmykTests.VectorsDir();
+        byte[] jpeg = File.ReadAllBytes(System.IO.Path.Combine(vectorsDir, name + ".jpg"));
+        byte[] data = PdfFixtures.CreateDctDecodeImagePdf(jpeg, width, height);
+
+        byte[] skiaPixels = Render(data, Skia, width, height);
+        byte[] peachPixels = Render(data, Peach, width, height);
+
+        // Absolute correctness: both back-ends against the reference RGB dump (the JpegCmykTests
+        // oracle tolerance; the inverted/buggy decode shows ~120 mean error, so 10 still bites).
+        double skiaMean = MeanAbsDiffVsReferenceRgb(skiaPixels, name);
+        double peachMean = MeanAbsDiffVsReferenceRgb(peachPixels, name);
+        Assert.True(skiaMean < 10, $"{name}: skia path mean diff {skiaMean:F2} vs reference RGB");
+        Assert.True(peachMean < 10, $"{name}: peach path mean diff {peachMean:F2} vs reference RGB");
+
+        // Cross-backend agreement: YCCK goes through two independent decoders on Peach (PeachImage
+        // kernels, filtered chroma upsampling) vs Skia (the managed decoder, box upsampling), so
+        // per-pixel agreement is relaxed to the level the existing cross-backend rules use for
+        // implementation noise: low mean, few strongly-differing pixels. A mis-applied Adobe
+        // inversion (the bug this guards) shows mean >100 with worst 255 across the image.
+        long sum = 0;
+        int strong = 0;
+        int worst = 0;
+        int pixels = width * height;
+        for (int i = 0; i < pixels; i++)
+        {
+            int o = i * 4;
+            int delta = Math.Max(Math.Abs(skiaPixels[o] - peachPixels[o]),
+                Math.Max(Math.Abs(skiaPixels[o + 1] - peachPixels[o + 1]),
+                         Math.Abs(skiaPixels[o + 2] - peachPixels[o + 2])));
+            sum += delta;
+            worst = Math.Max(worst, delta);
+            if (delta > 48)
+            {
+                strong++;
+            }
+        }
+
+        double mean = (double)sum / pixels;
+        double strongRatio = (double)strong / pixels;
+        Assert.True(mean <= 10 && strongRatio <= 0.05,
+            $"{name}: back-ends disagree (mean {mean:F2}, worst {worst}, {strongRatio:P2} pixels > 48)");
+    }
+
+    /// <summary>Mean absolute per-channel difference between BGRA pixels and a .rgb vector dump.</summary>
+    private static double MeanAbsDiffVsReferenceRgb(byte[] bgra, string name)
+    {
+        byte[] reference = File.ReadAllBytes(System.IO.Path.Combine(JpegCmykTests.VectorsDir(), name + ".rgb"));
+        int count = reference.Length / 3 - 2; // 8-byte header of two ints, then RGB triples
+        long sum = 0;
+        for (int i = 0; i < count; i++)
+        {
+            sum += Math.Abs(bgra[i * 4 + 2] - reference[8 + i * 3])
+                + Math.Abs(bgra[i * 4 + 1] - reference[8 + i * 3 + 1])
+                + Math.Abs(bgra[i * 4] - reference[8 + i * 3 + 2]);
+        }
+
+        return (double)sum / count / 3;
     }
 
     /// <summary>

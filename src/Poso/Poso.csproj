@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Poso.Tests" />
+    <InternalsVisibleTo Include="Poso.PeachDrawing" />
   </ItemGroup>
 
 </Project>
