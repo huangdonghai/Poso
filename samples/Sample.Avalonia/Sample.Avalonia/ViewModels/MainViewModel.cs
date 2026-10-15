@@ -15,16 +15,40 @@ namespace Sample.Avalonia.ViewModels;
 
 public partial class MainViewModel : ViewModelBase
 {
-    private readonly IGraphicsFactory _graphicsFactory;
     private CancellationTokenSource? _thumbnailCancellation;
+
+    [ObservableProperty]
+    private IGraphicsFactory _graphicsFactory;
 
     public MainViewModel(IGraphicsFactory graphicsFactory)
     {
         _graphicsFactory = graphicsFactory;
     }
 
-    /// <summary>The graphics backend injected by the application (e.g. the Skia backend).</summary>
-    public IGraphicsFactory GraphicsFactory => _graphicsFactory;
+    /// <summary>The graphics backend used for rendering; toggled at runtime between the Skia and PeachDrawing back-ends.</summary>
+    public string BackendName => GraphicsFactory is Poso.PeachDrawing.PeachGraphicsFactory ? "Peach" : "Skia";
+
+    partial void OnGraphicsFactoryChanged(IGraphicsFactory value)
+    {
+        OnPropertyChanged(nameof(BackendName));
+
+        // Thumbnails were baked with the previous back-end: regenerate them through the new one.
+        if (Document is { } document)
+        {
+            _thumbnailCancellation?.Cancel();
+            Thumbnails.Clear();
+            _ = BuildThumbnailsAsync(document);
+        }
+    }
+
+    [RelayCommand]
+    private void ToggleBackend()
+    {
+        GraphicsFactory = GraphicsFactory is Poso.Skia.SkiaGraphicsFactory
+            ? Poso.PeachDrawing.PeachGraphicsFactory.Default
+            : Poso.Skia.SkiaGraphicsFactory.Default;
+        StatusText = $"Graphics backend: {BackendName}";
+    }
 
     [ObservableProperty]
     private PdfDocument? _document;
@@ -285,10 +309,11 @@ public partial class MainViewModel : ViewModelBase
 
         try
         {
-            using IGraphicsContext context = _graphicsFactory.CreateContext(width, height);
+            IGraphicsFactory factory = GraphicsFactory;
+            using IGraphicsContext context = factory.CreateContext(width, height);
             // White background, matching the main viewer's render pipeline; without it a page that does
             // not paint its own paper fills the thumbnail with transparent pixels.
-            page.Render(_graphicsFactory, context, new PdfRenderOptions((float)scale, 0f, PosoColor.White));
+            page.Render(factory, context, new PdfRenderOptions((float)scale, 0f, PosoColor.White));
             using IImage image = context.Snapshot();
             return Poso.Avalonia.Imaging.BitmapConverter.ToWriteableBitmap(image);
         }

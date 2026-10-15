@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using Poso.Graphics;
 using Poso.Pdf;
+using Poso.PeachDrawing;
 using Poso.Skia;
 using Xunit;
 using IOPath = System.IO.Path;
@@ -74,6 +75,56 @@ public class NativeType1Tests
     {
         int o = ((y * width) + x) * 4;
         return px[o] < 200 || px[o + 1] < 200 || px[o + 2] < 200;
+    }
+
+    /// <summary>
+    /// Regression guard for the PeachDrawing back-end: an embedded native-Type 1 font is rebuilt as a
+    /// CFF wrapped in an OpenType container, and PeachDrawing throws (falling back to a system font that
+    /// renders the wrong glyph) unless that container carries a <c>post</c> table. Rendering the same
+    /// 'x' fixture through Peach must reproduce the Skia/MuPDF outline, not a fallback blob.
+    /// </summary>
+    [Fact]
+    public void NativeType1_EmbeddedGlyph_PeachBackendMatchesSkia()
+    {
+        byte[] program = File.ReadAllBytes(FontsFile("lucida-typewriter-x.bin"));
+        byte[] pdf = PdfFixtures.CreateNativeType1Pdf(program);
+
+        using var document = PdfDocument.FromArray(pdf);
+        using IGraphicsContext context = PeachGraphicsFactory.Default.CreateContext(200, 100);
+        document.Pages[0].Render(PeachGraphicsFactory.Default, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+        using IImage image = context.Snapshot();
+        byte[] px = new byte[image.Width * image.Height * 4];
+        image.CopyPixels(px);
+
+        int minX = int.MaxValue, minY = int.MaxValue, maxX = -1, maxY = -1, ink = 0;
+        for (int y = 0; y < image.Height; y++)
+        {
+            for (int x = 0; x < image.Width; x++)
+            {
+                if (Dark(px, image.Width, x, y))
+                {
+                    ink++;
+                    minX = Math.Min(minX, x);
+                    maxX = Math.Max(maxX, x);
+                    minY = Math.Min(minY, y);
+                    maxY = Math.Max(maxY, y);
+                }
+            }
+        }
+
+        // Same outline geometry the Skia back-end reaches (MuPDF oracle ink=554, x[32..70] y[38..69]).
+        Assert.True(ink > 400 && ink < 700, $"Peach 'x' ink {ink} should match the embedded outline (554), not a fallback glyph.");
+        Assert.InRange(minX, 29, 35);
+        Assert.InRange(maxX, 67, 74);
+        Assert.InRange(minY, 35, 41);
+        Assert.InRange(maxY, 66, 72);
+
+        // A genuine 'x' crosses at its centre and is empty mid-left and mid-top; a fallback box/blob would ink those.
+        int cx = (minX + maxX) / 2;
+        int cy = (minY + maxY) / 2;
+        Assert.True(Dark(px, image.Width, cx, cy), "the 'x' diagonals must cross at the centre");
+        Assert.False(Dark(px, image.Width, minX + 2, cy), "mid-left of an 'x' is empty");
+        Assert.False(Dark(px, image.Width, cx, minY + 2), "mid-top of an 'x' is empty");
     }
 
     /// <summary>

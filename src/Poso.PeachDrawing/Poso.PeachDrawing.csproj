@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- Direct in-memory pixel copies (BGRA/RGBA conversions) -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="PeachDrawing" />
+    <PackageReference Include="PeachDrawing.Text" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Poso\Poso.csproj" />
+  </ItemGroup>
+
+</Project>

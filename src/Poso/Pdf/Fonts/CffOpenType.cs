@@ -32,6 +32,7 @@ internal static class CffOpenType
             Table("hmtx", HorizontalMetrics(program.GlyphCount, upem)),
             Table("maxp", Maxp(program.GlyphCount)),
             Table("name", Names(postScriptName)),
+            Table("post", Post()),
         ];
 
         Array.Sort(tables, static (left, right) => string.CompareOrdinal(Tag(left), Tag(right)));
@@ -197,6 +198,30 @@ internal static class CffOpenType
             writer.UInt16(0);
         }
 
+        return stream.ToArray();
+    }
+
+    /// <summary>
+    /// A post format 3.0 table. Some back ends (notably PeachDrawing) read the post table
+    /// unconditionally when computing metrics and throw on its absence; the PDF FontDescriptor's
+    /// /ItalicAngle is not threaded here, and a real italic CFF already has its slant baked into the
+    /// charstrings, so italicAngle is left 0 (no synthetic skew) with conventional underline metrics.
+    /// </summary>
+    private static byte[] Post()
+    {
+        using var stream = new MemoryStream();
+        BigEndian writer = new(stream);
+
+        writer.UInt32(0x00030000); // version 3.0 (no glyph names)
+        writer.Int16(0); // italicAngle (16.16 fixed) high word
+        writer.Int16(0); // italicAngle low word
+        writer.Int16(-100); // underlinePosition
+        writer.Int16(50); // underlineThickness
+        writer.UInt32(0); // isFixedPitch
+        writer.UInt32(0); // minMemType42
+        writer.UInt32(0); // maxMemType42
+        writer.UInt32(0); // minMemType1
+        writer.UInt32(0); // maxMemType1
         return stream.ToArray();
     }
 

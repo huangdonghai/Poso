@@ -17,6 +17,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Poso\Poso.csproj" />
     <ProjectReference Include="..\..\src\Poso.Skia\Poso.Skia.csproj" />
+    <ProjectReference Include="..\..\src\Poso.PeachDrawing\Poso.PeachDrawing.csproj" />
   </ItemGroup>
 
   <ItemGroup>

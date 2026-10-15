@@ -9,6 +9,10 @@
     <PackageVersion Include="Avalonia" Version="12.1.2" />
     <!-- 3.119.4 is the version resolved by the Avalonia 12.1.2 desktop stack: share one native Skia build. -->
     <PackageVersion Include="SkiaSharp" Version="3.119.4" />
+    <!-- PeachDrawing pure-managed raster backend (src/Poso.PeachDrawing). 0.x line: pin centrally, upgrades must pass the full regression. -->
+    <PackageVersion Include="PeachDrawing" Version="0.9.22" />
+    <PackageVersion Include="PeachDrawing.Core" Version="0.9.22" />
+    <PackageVersion Include="PeachDrawing.Text" Version="0.9.22" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
     <PackageVersion Include="xunit" Version="2.9.2" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="2.8.2" />

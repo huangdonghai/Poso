@@ -17,7 +17,7 @@ public sealed class PdfDocument : IDisposable
     private PdfXref _xref;
     private readonly Dictionary<long, PdfObject> _objectCache = new();
     private readonly object _gate = new();
-    private readonly Dictionary<int, Fonts.PdfFont> _fontCache = new();
+    private readonly Dictionary<(int, Graphics.IGraphicsFactory), Fonts.PdfFont> _fontCache = new();
     private readonly object _fontGate = new();
     private bool _disposed;
     private bool _hasEncrypt;
@@ -53,21 +53,24 @@ public sealed class PdfDocument : IDisposable
     /// the backend typeface) exactly once under a lock. Without this, every page render builds a fresh
     /// interpreter and re-parses each embedded font (decompress + CFF/OpenType build + typeface), which
     /// dominates cost for font-heavy documents; sharing the parsed font removes that repetition.
-    /// Assumes one graphics factory per document. Type3 fonts are excluded by the caller (they hold
+    /// Cached per (object, factory) pair: a backend font object only renders in the backend that made
+    /// it, so switching factories mid-document (e.g. a live back-end toggle) must not hand out the
+    /// previous back-end's typeface. Type3 fonts are excluded by the caller (they hold
     /// mutable glyph-width state accumulated while their charprocs run).
     /// </summary>
     internal Fonts.PdfFont GetOrAddFont(int objectNumber, Graphics.IGraphicsFactory factory, PdfDictionary dictionary)
     {
         lock (_fontGate)
         {
-            if (_fontCache.TryGetValue(objectNumber, out Fonts.PdfFont? cached))
+            var key = (objectNumber, factory);
+            if (_fontCache.TryGetValue(key, out Fonts.PdfFont? cached))
             {
                 return cached;
             }
 
             Fonts.PdfFont font = Fonts.PdfFont.Create(this, factory, dictionary);
             _ = font.GraphicsFont; // realise the backend typeface once, here, so shared instances stay immutable
-            _fontCache[objectNumber] = font;
+            _fontCache[key] = font;
             return font;
         }
     }
@@ -168,7 +171,7 @@ public sealed class PdfDocument : IDisposable
 
     /// <summary>
     /// True when the document declares encryption (has an /Encrypt entry) but the current password does
-    /// not verify the user-password entry — i.e. a correct password is still required to open it. This is
+    /// not verify the user-password entry �?i.e. a correct password is still required to open it. This is
     /// computable even when a wrong key prevented the cross-reference from decoding (AES-256 path).
     /// </summary>
     public bool NeedsPassword => _hasEncrypt && !UserPasswordVerified;

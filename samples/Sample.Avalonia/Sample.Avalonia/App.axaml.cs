@@ -23,8 +23,12 @@ public partial class App : Application
 
     public override void OnFrameworkInitializationCompleted()
     {
-        // The graphics backend is injected once and shared by the viewer and thumbnails
-        var graphicsFactory = new Poso.Skia.SkiaGraphicsFactory();
+        // The graphics backend is injected once and shared by the viewer and thumbnails.
+        // POSO_BACKEND=peach switches to the pure-managed PeachDrawing raster back-end (experimental).
+        Poso.Graphics.IGraphicsFactory graphicsFactory =
+            Environment.GetEnvironmentVariable("POSO_BACKEND")?.Equals("peach", StringComparison.OrdinalIgnoreCase) is true
+                ? new Poso.PeachDrawing.PeachGraphicsFactory()
+                : new Poso.Skia.SkiaGraphicsFactory();
 
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {

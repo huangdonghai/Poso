@@ -17,6 +17,11 @@
 
         <PackageVersion Include="CommunityToolkit.Mvvm" Version="8.4.2" />
 
+        <!-- PeachDrawing backend (keep in sync with root Directory.Packages.props) -->
+        <PackageVersion Include="PeachDrawing" Version="0.9.22" />
+        <PackageVersion Include="PeachDrawing.Core" Version="0.9.22" />
+        <PackageVersion Include="PeachDrawing.Text" Version="0.9.22" />
+
         <PackageVersion Include="Xamarin.AndroidX.Core.SplashScreen" Version="1.0.1.15" />
     </ItemGroup>
 </Project>

@@ -1,6 +1,7 @@
 <Solution>
   <Project Path="src/Poso/Poso.csproj" />
   <Project Path="src/Poso.Skia/Poso.Skia.csproj" />
+  <Project Path="src/Poso.PeachDrawing/Poso.PeachDrawing.csproj" />
   <Project Path="src/Poso.Avalonia/Poso.Avalonia.csproj" />
   <Project Path="tests/Poso.Tests/Poso.Tests.csproj" />
   <Project Path="samples/Sample.Avalonia/Sample.Avalonia/Sample.Avalonia.csproj" />

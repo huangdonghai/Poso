@@ -44,6 +44,9 @@
                 <Button Command="{Binding RotateClockwiseCommand}" Content="&#8635;" Width="32" />
                 <ComboBox ItemsSource="{Binding ZoomModes}" SelectedItem="{Binding ZoomMode}" />
                 <ComboBox ItemsSource="{Binding PageLayouts}" SelectedItem="{Binding PageLayout}" />
+                <Button Command="{Binding ToggleBackendCommand}" MinWidth="64"
+                        ToolTip.Tip="Graphics backend: click to switch between Skia and PeachDrawing (re-renders live)"
+                        Content="{Binding BackendName, StringFormat='Backend: {0}'}" />
             </StackPanel>
 
             <StackPanel Grid.Column="5" Orientation="Horizontal" Spacing="4" HorizontalAlignment="Right">
