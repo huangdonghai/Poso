@@ -35,11 +35,36 @@ public class TilingPatternTests
         AssertWhite(Sample(px, image.Width, 50, 35), "col 35 (cell1 right)");
     }
 
+    [Fact]
+    public void DeviceColorAfterPatternSelection_ReplacesPatternForLaterFills()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateTilingThenSolidFillPdf());
+        using IGraphicsContext context = Factory.CreateContext(100, 100);
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] px = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(px);
+
+        // The blue rectangle covers user x 0..50, and it must be flat: every column of the tiled cell.
+        foreach (int x in new[] { 5, 15, 25, 35, 45 })
+        {
+            AssertBlue(Sample(px, image.Width, 50, x), $"col {x} inside the solid fill");
+        }
+
+        // The unoverlapped right half still shows the tiling (cell phase: col 55 is 15 into a 20pt cell).
+        AssertWhite(Sample(px, image.Width, 50, 55), "col 55 (cell right half)");
+        AssertRed(Sample(px, image.Width, 50, 65), "col 65 (cell left half)");
+    }
+
     private static (byte B, byte G, byte R) Sample(byte[] px, int width, int y, int x)
     {
         int offset = ((y * width) + x) * 4;
         return (px[offset], px[offset + 1], px[offset + 2]);
     }
+
+    private static void AssertBlue((byte B, byte G, byte R) c, string where) =>
+        Assert.True(c.B > 170 && c.R < 90 && c.G < 90, $"{where} expected blue, got R={c.R} G={c.G} B={c.B}");
 
     private static void AssertRed((byte B, byte G, byte R) c, string where) =>
         Assert.True(c.R > 170 && c.G < 90 && c.B < 90, $"{where} expected red, got R={c.R} G={c.G} B={c.B}");

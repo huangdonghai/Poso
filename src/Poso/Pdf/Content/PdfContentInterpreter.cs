@@ -913,13 +913,14 @@ public sealed class PdfContentInterpreter
             return;
         }
 
-        // Colors
+        // Colors. Each of these names a non-pattern space, so it also deselects any pattern.
         if (lexer.Match(token, "g"u8))
         {
             _fillSpace = ColorSpaceKind.DeviceGray;
             _fillComponents = 1;
             _fillLookup = null;
             _fillIcc = null;
+            ClearPatternColor(stroke: false);
             _state.FillColor = PosoColor.FromGray(PopNumber(operands));
             operands.Clear();
             return;
@@ -931,6 +932,7 @@ public sealed class PdfContentInterpreter
             _strokeComponents = 1;
             _strokeLookup = null;
             _strokeIcc = null;
+            ClearPatternColor(stroke: true);
             _state.StrokeColor = PosoColor.FromGray(PopNumber(operands));
             operands.Clear();
             return;
@@ -945,6 +947,7 @@ public sealed class PdfContentInterpreter
             _fillComponents = 3;
             _fillLookup = null;
             _fillIcc = null;
+            ClearPatternColor(stroke: false);
             _state.FillColor = PosoColor.FromRgb(r, g, b);
             operands.Clear();
             return;
@@ -959,6 +962,7 @@ public sealed class PdfContentInterpreter
             _strokeComponents = 3;
             _strokeLookup = null;
             _strokeIcc = null;
+            ClearPatternColor(stroke: true);
             _state.StrokeColor = PosoColor.FromRgb(r, g, b);
             operands.Clear();
             return;
@@ -974,6 +978,7 @@ public sealed class PdfContentInterpreter
             _fillComponents = 4;
             _fillLookup = null;
             _fillIcc = null;
+            ClearPatternColor(stroke: false);
             _state.FillColor = PosoColor.FromCmyk(c, m, y, k);
             operands.Clear();
             return;
@@ -989,6 +994,7 @@ public sealed class PdfContentInterpreter
             _strokeComponents = 4;
             _strokeLookup = null;
             _strokeIcc = null;
+            ClearPatternColor(stroke: true);
             _state.StrokeColor = PosoColor.FromCmyk(c, m, y, k);
             operands.Clear();
             return;
@@ -1011,6 +1017,7 @@ public sealed class PdfContentInterpreter
             }
             else
             {
+                ClearPatternColor(stroke: false);
                 ApplyColorOperands(operands, _fillSpace, _fillComponents, _fillLookup, _fillLookupComponents, _fillTint, _fillBaseSpace, _fillBaseComponents, _fillLabWhite, _fillLabRange, _fillCal, _fillIcc, out _state.FillColor);
             }
 
@@ -1026,6 +1033,7 @@ public sealed class PdfContentInterpreter
             }
             else
             {
+                ClearPatternColor(stroke: true);
                 ApplyColorOperands(operands, _strokeSpace, _strokeComponents, _strokeLookup, _strokeLookupComponents, _strokeTint, _strokeBaseSpace, _strokeBaseComponents, _strokeLabWhite, _strokeLabRange, _strokeCal, _strokeIcc, out _state.StrokeColor);
             }
 
@@ -1693,15 +1701,26 @@ public sealed class PdfContentInterpreter
         // Switching to a non-pattern color space clears any active shading pattern for that side.
         if (kind != ColorSpaceKind.Pattern)
         {
-            if (stroke)
-            {
-                _strokeShading = null;
-            }
-            else
-            {
-                _fillShading = null;
-                _fillTiling = null;
-            }
+            ClearPatternColor(stroke);
+        }
+    }
+
+    /// <summary>
+    /// Drops the selected tiling/shading pattern for one side of the graphics state. Every colour
+    /// operator that names a device or ICC space (g, rg, k, sc, ...) replaces the current pattern
+    /// colour, so the pattern must not survive it - otherwise a later solid fill paints the leftover
+    /// tiling cell instead of the colour (PDF 32000-1:2008 8.6.8).
+    /// </summary>
+    private void ClearPatternColor(bool stroke)
+    {
+        if (stroke)
+        {
+            _strokeShading = null;
+        }
+        else
+        {
+            _fillShading = null;
+            _fillTiling = null;
         }
     }
 

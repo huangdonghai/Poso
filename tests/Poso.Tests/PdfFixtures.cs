@@ -948,6 +948,25 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// The tiling page again, but the pattern fill is followed by a <c>rg</c> colour and a second solid
+    /// rectangle over the left half. A device colour operator replaces the current pattern colour, so the
+    /// second rectangle must be flat blue - a tiling selection that survives <c>rg</c> repaints it with the
+    /// red/white cell instead, which is how a book's solid chapter header band came out as a dot grid.
+    /// </summary>
+    public static byte[] CreateTilingThenSolidFillPdf()
+    {
+        byte[] cellContent = Encoding.ASCII.GetBytes("1 1 1 rg 0 0 20 20 re f\n1 0 0 rg 0 0 10 20 re f\n");
+        string patternDict = "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 20 20] /XStep 20 /YStep 20";
+        string content = "[/Pattern /DeviceRGB] cs /P0 scn 0 0 100 100 re f\n0 0 1 rg 0 0 50 100 re f";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Pattern << /P0 5 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            Stream(5, patternDict, cellContent));
+    }
+
+    /// <summary>
     /// A document that stores page objects in an object stream (ObjStm) and describes the
     /// cross-reference with an xref stream.
     /// Object layout: 1=Catalog, 3/4 inside object stream 5, 6=content stream, 7=xref stream.
