@@ -7,6 +7,13 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- The only external dependency of the core: JPEG 2000 (JPXDecode) is not decodable by either
+         graphics back end, and the PDF image layer needs it to be back-end agnostic like the other
+         managed codecs here (Jpeg, Jbig2, Ccitt). Pure managed, BSD-3. -->
+    <PackageReference Include="CoreJ2K" />
+  </ItemGroup>
+
+  <ItemGroup>
     <InternalsVisibleTo Include="Poso.Tests" />
     <InternalsVisibleTo Include="Poso.PeachDrawing" />
   </ItemGroup>

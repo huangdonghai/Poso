@@ -13,6 +13,9 @@
     <PackageVersion Include="PeachDrawing" Version="0.9.22" />
     <PackageVersion Include="PeachDrawing.Core" Version="0.9.22" />
     <PackageVersion Include="PeachDrawing.Text" Version="0.9.22" />
+    <!-- Pure-managed JPEG 2000 (JPXDecode) decoder: neither SkiaSharp's native build nor PeachDrawing decodes it.
+         BSD-3, no native dependencies. Upgrades must re-run JpxImageTests against MuPDF's output. -->
+    <PackageVersion Include="CoreJ2K" Version="2.4.1.108" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
     <PackageVersion Include="xunit" Version="2.9.2" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="2.8.2" />

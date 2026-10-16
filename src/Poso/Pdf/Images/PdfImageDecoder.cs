@@ -9,7 +9,8 @@ namespace Poso.Pdf.Images;
 /// <summary>
 /// Decodes PDF image XObjects (and inline images) into tightly packed BGRA (premultiplied) pixels.
 /// Handles DeviceGray/RGB/CMYK/Indexed/ICCBased sample data, image masks, color-key masks and
-/// soft masks; DCTDecode (JPEG) is delegated to the backend factory.
+/// soft masks; DCTDecode (JPEG) is delegated to the backend factory, while JPXDecode (JPEG 2000) is
+/// decoded here because no backend can.
 /// </summary>
 public static class PdfImageDecoder
 {
@@ -73,9 +74,20 @@ public static class PdfImageDecoder
 
         bool imageMask = dictionary.GetBooleanValue("ImageMask") ?? false;
 
-        if (hasDct || hasJpx)
+        if (hasJpx)
         {
-            // PdfStream.Decode stops at the codec header and returns the encoded JPEG/JPEG2000 bytes.
+            IImage? jpx = DecodeJpx(factory, stream, dictionary, width, height, diagnostics);
+            if (jpx is null)
+            {
+                diagnostics?.Report(PdfUnsupportedKind.ImageCodec, "JPXDecode image could not be decoded");
+            }
+
+            return jpx;
+        }
+
+        if (hasDct)
+        {
+            // PdfStream.Decode stops at the codec header and returns the encoded JPEG bytes.
             byte[] encoded = stream.Decode(diagnostics);
 
             // CMYK/YCCK (4-component) JPEGs are decoded here rather than delegated to the backend:
@@ -83,8 +95,8 @@ public static class PdfImageDecoder
             // colours, and SkiaSharp exposes no CMYK output to recover the raw samples from. Backends
             // that declare HandlesAdobeCmykJpeg get the first crack instead (faster, progressive-capable),
             // with the managed decoder kept as the fallback when the backend cannot produce pixels.
-            // 1/3-component JPEGs and JPEG2000 are unaffected and stay on the backend path.
-            bool cmykJpeg = hasDct && !hasJpx && JpegDecoder.PeekComponentCount(encoded) == 4;
+            // 1/3-component JPEGs are unaffected and stay on the backend path.
+            bool cmykJpeg = JpegDecoder.PeekComponentCount(encoded) == 4;
             IImage? backendCmyk = cmykJpeg && factory.HandlesAdobeCmykJpeg
                 ? DecodeViaBackend(factory, encoded)
                 : null;
@@ -397,6 +409,102 @@ public static class PdfImageDecoder
 
     // Runs a capable back-end's own decode for a CMYK JPEG and re-wraps the raster into the
     // pipeline's standard Bgra8888Premul image; null when the back-end cannot decode it.
+    /// <summary>
+    /// Decodes a JPEG 2000 (JPXDecode) image with the managed CoreJ2K codec. Neither graphics back end
+    /// can: SkiaSharp's native build omits OpenJPEG and PeachDrawing has no codec at all, so without this
+    /// a page whose only content is a JPX image - a book cover, typically - renders blank. CoreJ2K has
+    /// already applied the codestream's own palette and colour transform by the time it hands back
+    /// components, so what is left is gray or RGB samples.
+    /// </summary>
+    private static IImage? DecodeJpx(
+        IGraphicsFactory factory,
+        PdfStream stream,
+        PdfDictionary dictionary,
+        int width,
+        int height,
+        PdfDiagnostics? diagnostics)
+    {
+        if (dictionary.GetBooleanValue("ImageMask") ?? false)
+        {
+            diagnostics?.Report(PdfUnsupportedKind.ImageCodec, "JPXDecode used as an image mask is not supported");
+            return null;
+        }
+
+        byte[] encoded = stream.Decode(diagnostics);
+
+        CoreJ2K.Util.InterleavedImage image;
+        try
+        {
+            image = CoreJ2K.J2kImage.FromStream(new MemoryStream(encoded));
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
+        {
+            // A damaged or unusual codestream costs its image, never the page around it.
+            diagnostics?.Report(PdfUnsupportedKind.ImageCodec, $"JPXDecode failed: {ex.Message}");
+            return null;
+        }
+
+        using (image)
+        {
+            int components = image.NumberOfComponents;
+
+            // /SMaskInData (PDF 32000-1:2008 11.4.4) is the only explicit statement that the image carries
+            // alpha in its own channels; without it, four components are CMYK, which is reported rather
+            // than guessed at - rendering CMYK samples as RGB is silently wrong.
+            bool hasAlpha = (dictionary.GetIntegerValue("SMaskInData") ?? 0) >= 1;
+            int colorChannels = hasAlpha ? components - 1 : components;
+            if (colorChannels is not (1 or 3) || components > 4)
+            {
+                diagnostics?.Report(
+                    PdfUnsupportedKind.ImageCodec,
+                    $"JPXDecode with {components} components (alpha: {hasAlpha}) is not supported");
+                return null;
+            }
+
+            int[] red = image.GetComponent(0);
+            int[] green = colorChannels == 3 ? image.GetComponent(1) : red;
+            int[] blue = colorChannels == 3 ? image.GetComponent(2) : red;
+            int[] alpha = hasAlpha ? image.GetComponent(components - 1) : Array.Empty<int>();
+            int redDepth = image.GetBitDepth(0);
+            int greenDepth = colorChannels == 3 ? image.GetBitDepth(1) : redDepth;
+            int blueDepth = colorChannels == 3 ? image.GetBitDepth(2) : redDepth;
+            int alphaDepth = alpha.Length > 0 ? image.GetBitDepth(components - 1) : 8;
+
+            var pixels = new byte[width * height * 4];
+            int samples = Math.Min(red.Length, green.Length);
+            samples = Math.Min(samples, blue.Length);
+            for (int i = 0; i < samples; i++)
+            {
+                byte r = ToByte(red[i], redDepth);
+                byte g = ToByte(green[i], greenDepth);
+                byte b = ToByte(blue[i], blueDepth);
+                byte a = i < alpha.Length ? ToByte(alpha[i], alphaDepth) : (byte)0xFF;
+
+                // BGRA, premultiplied: the surfaces are opaque unless the codestream said otherwise.
+                int offset = i * 4;
+                pixels[offset] = (byte)(b * a / 255);
+                pixels[offset + 1] = (byte)(g * a / 255);
+                pixels[offset + 2] = (byte)(r * a / 255);
+                pixels[offset + 3] = a;
+            }
+
+            return factory.CreateImage(width, height, PixelFormat.Bgra8888Premul, pixels);
+        }
+    }
+
+    /// <summary>Rebases a decoded sample of <paramref name="bitDepth"/> bits to a byte.</summary>
+    private static byte ToByte(int sample, int bitDepth)
+    {
+        if (bitDepth >= 8)
+        {
+            return (byte)Math.Clamp(sample >> (bitDepth - 8), 0, 255);
+        }
+
+        // Scale the whole range up, so 1-bit becomes 0 or 255 and 4-bit becomes 0..255 in steps of 17.
+        int max = (1 << bitDepth) - 1;
+        return (byte)(((sample * 255) + (max / 2)) / max);
+    }
+
     private static IImage? DecodeViaBackend(IGraphicsFactory factory, byte[] encoded)
     {
         IImage? raster = factory.DecodeImage(encoded);
