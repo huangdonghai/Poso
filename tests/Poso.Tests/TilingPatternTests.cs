@@ -35,6 +35,29 @@ public class TilingPatternTests
         AssertWhite(Sample(px, image.Width, 50, 35), "col 35 (cell1 right)");
     }
 
+    /// <summary>
+    /// The cell artwork comes from an image XObject reached through an indirect /Resources dictionary.
+    /// Unresolved, the cell's /Im1 Do found nothing and the entire pattern fill stayed blank.
+    /// </summary>
+    [Fact]
+    public void TilingCellWithIndirectResources_PaintsItsImage()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateTilingWithIndirectResourcesPdf());
+        using IGraphicsContext context = Factory.CreateContext(100, 100);
+        var features = new List<PdfUnsupportedFeature>();
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White), features.Add);
+
+        Assert.DoesNotContain(features, f => f.Kind == PdfUnsupportedKind.PatternColorSpace);
+
+        using IImage image = context.Snapshot();
+        byte[] px = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(px);
+
+        Assert.True(Dark(Sample(px, image.Width, 50, 5)), "col 5: the cell image's dark half");
+        Assert.False(Dark(Sample(px, image.Width, 50, 15)), "col 15: the cell image's light half");
+        Assert.True(Dark(Sample(px, image.Width, 50, 25)), "col 25: the next cell, proving repetition");
+    }
+
     [Fact]
     public void DeviceColorAfterPatternSelection_ReplacesPatternForLaterFills()
     {
@@ -56,6 +79,8 @@ public class TilingPatternTests
         AssertWhite(Sample(px, image.Width, 50, 55), "col 55 (cell right half)");
         AssertRed(Sample(px, image.Width, 50, 65), "col 65 (cell left half)");
     }
+
+    private static bool Dark((byte B, byte G, byte R) c) => (c.B + c.G + c.R) / 3 < 128;
 
     private static (byte B, byte G, byte R) Sample(byte[] px, int width, int y, int x)
     {

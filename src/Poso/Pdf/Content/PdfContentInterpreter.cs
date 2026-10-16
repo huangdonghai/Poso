@@ -1950,7 +1950,7 @@ public sealed class PdfContentInterpreter
         using (IGraphicsContext cell = _factory.CreateContext(tw, th))
         {
             var nested = new PdfContentInterpreter(_document, _factory, cell, _options) { OnUnsupported = OnUnsupported };
-            nested.RenderCell(stream.Decode(_diag), dict.GetDictionary("Resources"), tileMatrix);
+            nested.RenderCell(stream.Decode(_diag), _document.Resolve(dict.Get("Resources")) as PdfDictionary, tileMatrix);
             tile = cell.Snapshot();
         }
 

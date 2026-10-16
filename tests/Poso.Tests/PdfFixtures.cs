@@ -1038,6 +1038,34 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// The same tiling page, but the cell's <c>/Resources</c> is an <b>indirect</b> dictionary and the cell
+    /// paints through an image XObject it declares - the shape generators use for the cell artwork. Reading
+    /// the resources without resolving the reference left the cell's <c>Do</c> unresolvable and the whole
+    /// fill blank.
+    /// </summary>
+    public static byte[] CreateTilingWithIndirectResourcesPdf()
+    {
+        byte[] samples = new byte[40]; // 10 columns x 20 rows, 1 bit per sample: ink (0) on the left half
+        for (int row = 0; row < 20; row++)
+        {
+            samples[(row * 2)] = 0x07;
+            samples[(row * 2) + 1] = 0xF0;
+        }
+
+        byte[] cellContent = Encoding.ASCII.GetBytes("q 20 0 0 20 0 0 cm /Im1 Do Q\n");
+        string patternDict = "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 20 20] /XStep 20 /YStep 20 /Resources 6 0 R";
+        string content = "[/Pattern /DeviceRGB] cs /P0 scn 0 0 100 100 re f";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Pattern << /P0 5 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            Stream(5, patternDict, cellContent),
+            new PdfObjectDefinition(6, "<< /XObject << /Im1 7 0 R >> >>"),
+            new PdfObjectDefinition(7, $"<< /Type /XObject /Subtype /Image /Width 10 /Height 20 /ColorSpace /DeviceGray /BitsPerComponent 1 /Length {samples.Length} >>", samples));
+    }
+
+    /// <summary>
     /// The tiling page again, but the pattern fill is followed by a <c>rg</c> colour and a second solid
     /// rectangle over the left half. A device colour operator replaces the current pattern colour, so the
     /// second rectangle must be flat blue - a tiling selection that survives <c>rg</c> repaints it with the
