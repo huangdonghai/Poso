@@ -20,23 +20,26 @@ public sealed class PeachFont : IFont
     private readonly PeachText.Typeface _typeface;
     private readonly int _unitsPerEm;
 
-    private PeachFont(PeachText.Typeface typeface, int unitsPerEm)
+    private PeachFont(PeachText.Typeface typeface, int unitsPerEm, bool usedFallback)
     {
         _typeface = typeface;
         _unitsPerEm = unitsPerEm;
+        UsedFallback = usedFallback;
     }
+
+    public bool UsedFallback { get; }
 
     /// <summary>
     /// Probes the lazily-initialized metrics and wraps the typeface. PeachDrawing loads font tables on
     /// first access and some malformed embedded programs throw (NRE inside its OpenType descriptor);
     /// such a font must fail here, at load, so the caller can fall back instead of crashing mid-render.
     /// </summary>
-    private static PeachFont? From(PeachText.Typeface typeface)
+    private static PeachFont? From(PeachText.Typeface typeface, bool usedFallback)
     {
         try
         {
             int unitsPerEm = typeface.Metrics.UnitsPerEm;
-            return unitsPerEm > 0 ? new PeachFont(typeface, unitsPerEm) : null;
+            return unitsPerEm > 0 ? new PeachFont(typeface, unitsPerEm, usedFallback) : null;
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
         {
@@ -53,9 +56,11 @@ public sealed class PeachFont : IFont
             {
                 return embedded;
             }
+
+            return CreateFallback(baseFontName, usedFallback: true);
         }
 
-        return CreateFallback(baseFontName);
+        return CreateFallback(baseFontName, usedFallback: false);
     }
 
     private static PeachFont? LoadEmbedded(ReadOnlySpan<byte> fontData)
@@ -86,7 +91,7 @@ public sealed class PeachFont : IFont
                     return null;
                 }
 
-                return From(match.Typeface);
+                return From(match.Typeface, usedFallback: false);
             }
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
@@ -388,32 +393,32 @@ public sealed class PeachFont : IFont
         return sum;
     }
 
-    private static PeachFont? CreateFallback(string baseFontName)
+    private static PeachFont? CreateFallback(string baseFontName, bool usedFallback)
     {
         string family = PeachStandardFonts.MapFamily(baseFontName);
         PeachText.TypefaceQuery query = PeachStandardFonts.MapQuery(baseFontName);
 
         lock (FontSetLock)
         {
-            if (TryMatchFamily(family, query) is { } matched)
+            if (TryMatchFamily(family, query, usedFallback) is { } matched)
             {
                 return matched;
             }
 
             // Broaden progressively: default style, then a generic sans, then anything the set can name.
-            if (TryMatchFamily(family, default) is { } plain)
+            if (TryMatchFamily(family, default, usedFallback) is { } plain)
             {
                 return plain;
             }
 
-            if (TryMatchFamily("Arial", default) is { } arial)
+            if (TryMatchFamily("Arial", default, usedFallback) is { } arial)
             {
                 return arial;
             }
 
             foreach (string name in PeachText.FontSet.InstalledFamilyNames)
             {
-                if (TryMatchFamily(name, default) is { } first)
+                if (TryMatchFamily(name, default, usedFallback) is { } first)
                 {
                     return first;
                 }
@@ -425,12 +430,13 @@ public sealed class PeachFont : IFont
 
     private static PeachFont? TryMatchFamily(
         string family,
-        in PeachText.TypefaceQuery query)
+        in PeachText.TypefaceQuery query,
+        bool usedFallback)
     {
         if (SharedFontSet.TryFindFamily(family, out PeachText.TypefaceFamily? found) && found is not null
             && found.TryMatch(query, out PeachText.TypefaceMatch match))
         {
-            return From(match.Typeface);
+            return From(match.Typeface, usedFallback);
         }
 
         return null;

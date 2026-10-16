@@ -11,10 +11,11 @@ public sealed class SkiaFont : IFont
     // Unit font size (1f): advance widths are returned directly in em units
     private readonly SKFont _font;
 
-    private SkiaFont(SKTypeface typeface)
+    private SkiaFont(SKTypeface typeface, bool usedFallback)
     {
         _typeface = typeface;
         _font = new SKFont(typeface, 1f);
+        UsedFallback = usedFallback;
     }
 
     public static SkiaFont? Create(ReadOnlySpan<byte> fontData, string baseFontName)
@@ -24,32 +25,36 @@ public sealed class SkiaFont : IFont
             using var skData = SKData.CreateCopy(fontData);
             if (SKTypeface.FromData(skData) is { } embedded)
             {
-                return new SkiaFont(embedded);
+                return new SkiaFont(embedded, usedFallback: false);
             }
+
+            return CreateFallback(baseFontName, usedFallback: true);
         }
 
-        return CreateFallback(baseFontName);
+        return CreateFallback(baseFontName, usedFallback: false);
     }
 
-    private static SkiaFont? CreateFallback(string baseFontName)
+    private static SkiaFont? CreateFallback(string baseFontName, bool usedFallback)
     {
         string family = StandardFonts.MapFamily(baseFontName);
         SKFontStyle style = StandardFonts.MapStyle(baseFontName);
 
         if (SKTypeface.FromFamilyName(family, style) is { } styled)
         {
-            return new SkiaFont(styled);
+            return new SkiaFont(styled, usedFallback);
         }
 
         if (SKTypeface.FromFamilyName(family) is { } plain)
         {
-            return new SkiaFont(plain);
+            return new SkiaFont(plain, usedFallback);
         }
 
-        return SKTypeface.Default is { } fallback ? new SkiaFont(fallback) : null;
+        return SKTypeface.Default is { } fallback ? new SkiaFont(fallback, usedFallback) : null;
     }
 
     public string Name => _typeface.FamilyName ?? "Unknown";
+
+    public bool UsedFallback { get; }
 
     public SKTypeface Typeface => _typeface;
 

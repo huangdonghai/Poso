@@ -290,9 +290,9 @@ public static class PdfFixtures
     /// widths and the ToUnicode mapping - the page then renders as random glyphs of a system substitute.
     /// The ToUnicode CMap uses hex destinations, which must be hex-decoded before being read as UTF-16.
     /// </summary>
-    public static byte[] CreateIndirectReferenceType0Pdf()
+    public static byte[] CreateIndirectReferenceType0Pdf(byte[]? program = null)
     {
-        byte[] program = BuildCidType1Program();
+        program ??= BuildCidType1Program();
         string toUnicode =
             "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n"
             + "1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n"

@@ -22,6 +22,13 @@ public abstract class PdfFont
 
     public string BaseFontName { get; }
 
+    /// <summary>
+    /// Set the first time a render reports this font's fallback, so a document that draws the same font a
+    /// thousand times yields one diagnostic rather than a thousand. Fonts are cached per document, which
+    /// makes this a document-wide latch; a lost race only duplicates the report.
+    /// </summary>
+    internal int FallbackReported;
+
     /// <summary>True for simple (single-byte encoded) fonts.</summary>
     public abstract bool IsSimpleFont { get; }
 

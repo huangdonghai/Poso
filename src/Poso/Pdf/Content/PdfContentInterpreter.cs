@@ -1266,6 +1266,13 @@ public sealed class PdfContentInterpreter
 
         if (draw && glyphCount > 0 && !_suppressContent && font.GraphicsFont is { } graphicsFont)
         {
+            if (graphicsFont.UsedFallback && System.Threading.Interlocked.Exchange(ref font.FallbackReported, 1) == 0)
+            {
+                // The PDF carried a glyph program the back end could not load. Text still draws, but in a
+                // face with different coverage, so a script the substitute lacks comes out as .notdef boxes.
+                _diag.Report(PdfUnsupportedKind.FontFallback, $"'{font.BaseFontName}': its embedded program could not be loaded and text drew in '{graphicsFont.Name}'");
+            }
+
             Matrix3x2 drawMatrix = tsMatrix * _textMatrix;
             _context.ConcatMatrix(drawMatrix);
 

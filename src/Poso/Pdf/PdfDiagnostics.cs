@@ -9,6 +9,7 @@ public enum PdfUnsupportedKind
     CryptFilter,
     StreamFilter,
     Annotation,
+    FontFallback,
     Other,
 }
 

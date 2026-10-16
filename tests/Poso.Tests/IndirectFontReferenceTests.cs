@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using Poso.Graphics;
 using Poso.Pdf;
 using Poso.Pdf.Fonts;
@@ -78,6 +80,35 @@ public class IndirectFontReferenceTests
         // Both CID glyphs are 500x400-unit filled boxes at 100pt: the substitute path draws nothing
         // here (the codes are unmapped in Arial), so any real ink means the embedded program rendered.
         Assert.True(ink > 1000, $"expected the embedded rectangles to render, got {ink} dark pixels");
+    }
+
+    /// <summary>
+    /// Substituting a system face is the right thing to draw with, but it is silent by nature: widths stay
+    /// and glyphs change, which is how a page of CJK ends up as .notdef boxes with nothing reported. An
+    /// unreadable program must therefore announce itself - once per font, not once per glyph run.
+    /// </summary>
+    [Fact]
+    public void UnreadableEmbeddedProgram_ReportsTheFallbackOnce()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateIndirectReferenceType0Pdf(new byte[64]));
+        PdfPage page = document.Pages[0];
+        using IGraphicsContext context = Factory.CreateContext((int)page.Width, (int)page.Height);
+        var features = new List<PdfUnsupportedFeature>();
+        page.Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White), features.Add);
+
+        Assert.Equal(1, features.Count(f => f.Kind == PdfUnsupportedKind.FontFallback));
+    }
+
+    [Fact]
+    public void ReadableEmbeddedProgram_ReportsNoFallback()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateIndirectReferenceType0Pdf());
+        PdfPage page = document.Pages[0];
+        using IGraphicsContext context = Factory.CreateContext((int)page.Width, (int)page.Height);
+        var features = new List<PdfUnsupportedFeature>();
+        page.Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White), features.Add);
+
+        Assert.DoesNotContain(features, f => f.Kind == PdfUnsupportedKind.FontFallback);
     }
 
     private static PdfFont CreateFont(PdfDocument document)
