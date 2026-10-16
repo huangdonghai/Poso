@@ -104,19 +104,12 @@ public class SoftMaskTests
         Assert.True(right.R > 200 && right.G > 200 && right.B > 200, $"white mask must erase the element (got {right})");
     }
 
-    // PeachDrawing composites its groups on an offscreen surface it owns, so the mask can be cut in
-    // before the layer is drawn back. Skia's equivalent, SKCanvas.SaveLayer, ignores the paint's
-    // shader, so a spatial mask needs the context to own an SKSurface and swap its canvas - see the
-    // skipped case below.
+    // Both back ends composite their groups on an off-surface they own, so the mask can be cut in
+    // before the layer is drawn back.
     public static IEnumerable<object[]> MaskCapableFactories()
     {
         yield return [Poso.PeachDrawing.PeachGraphicsFactory.Default];
-    }
-
-    [Fact(Skip = "SkiaGraphicsContext.PushLayer passes the mask as a SaveLayer paint shader, which Skia ignores; the layer needs its own SKSurface.")]
-    public void ExtGStateLuminosityMask_NotSupportedBySkia()
-    {
-        ExtGStateLuminosityMask_KeepsOnlyTheBlackHalf(SkiaGraphicsFactory.Default);
+        yield return [SkiaGraphicsFactory.Default];
     }
 
     private static (byte B, byte G, byte R) Sample(byte[] px, int width, int y, int x)

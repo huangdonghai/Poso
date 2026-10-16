@@ -13,12 +13,13 @@ namespace Poso.Skia;
 public sealed class SkiaGraphicsContext : IGraphicsContext
 {
     private readonly SKBitmap? _bitmap;
-    private readonly SKCanvas _canvas;
+    private readonly SKCanvas _baseCanvas;
+    private SKCanvas _canvas;
     private readonly bool _ownsCanvas;
     private readonly SKPaint _fillPaint;
     private readonly SKPaint _strokePaint;
     private readonly SKPaint _imagePaint;
-    private readonly Stack<SKPaint> _layerPaints = new();
+    private readonly Stack<Layer> _layers = new();
     private readonly int _width;
     private readonly int _height;
     private bool _snapshotTaken;
@@ -34,7 +35,8 @@ public sealed class SkiaGraphicsContext : IGraphicsContext
         _width = width;
         _height = height;
         _bitmap = new SKBitmap(width, height, SKColorType.Bgra8888, SKAlphaType.Premul);
-        _canvas = new SKCanvas(_bitmap);
+        _baseCanvas = new SKCanvas(_bitmap);
+        _canvas = _baseCanvas;
         _ownsCanvas = true;
 
         _fillPaint = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Fill };
@@ -48,7 +50,8 @@ public sealed class SkiaGraphicsContext : IGraphicsContext
     /// <summary>Wraps an external canvas (does not own the bitmap; the caller manages its lifetime).</summary>
     public SkiaGraphicsContext(SKCanvas canvas)
     {
-        _canvas = canvas ?? throw new ArgumentNullException(nameof(canvas));
+        _baseCanvas = canvas ?? throw new ArgumentNullException(nameof(canvas));
+        _canvas = _baseCanvas;
         _width = (int)canvas.LocalClipBounds.Width;
         _height = (int)canvas.LocalClipBounds.Height;
 
@@ -84,50 +87,142 @@ public sealed class SkiaGraphicsContext : IGraphicsContext
 
     public void PushLayer(in RectF? bounds, byte alpha, BlendMode mode, IImage? softMask)
     {
-        // Isolated transparency group: content composites on an off-surface that is blended back with
-        // the given alpha and mode. The luminosity soft mask is honoured when supplied.
-        SKPaint paint = new()
+        if (softMask is not SkiaImage maskImage)
         {
-            IsAntialias = true,
-            Color = new SKColor(255, 255, 255, alpha),
-            BlendMode = MapBlendMode(mode),
-        };
+            // An isolated group with no spatial mask is exactly what SaveLayer gives: the layer is
+            // composited back once, with this paint's alpha and blend mode.
+            SKPaint paint = new()
+            {
+                IsAntialias = true,
+                Color = new SKColor(255, 255, 255, alpha),
+                BlendMode = MapBlendMode(mode),
+            };
 
-        if (softMask is SkiaImage maskImage)
-        {
-            SKShader? maskShader = SKShader.CreateBitmap(
-                maskImage.Bitmap,
-                SKShaderTileMode.Clamp,
-                SKShaderTileMode.Clamp);
-            paint.Shader = maskShader?.WithColorFilter(
-                SKColorFilter.CreateColorMatrix(new float[]
-                {
-                    0, 0, 0, 0, 0,
-                    0, 0, 0, 0, 0,
-                    0, 0, 0, 0, 0,
-                    1, 0, 0, 0, 0, // take the mask's red (luminosity) channel as alpha
-                }));
+            if (bounds is { } b && !b.IsEmpty)
+            {
+                _canvas.SaveLayer(SkiaConversions.ToSKRect(b), paint);
+            }
+            else
+            {
+                _canvas.SaveLayer(paint);
+            }
+
+            _layers.Push(new Layer(paint, null, null, 0, 0, 0, 0, alpha, mode, null));
+            return;
         }
 
-        if (bounds is { } b && !b.IsEmpty)
-        {
-            _canvas.SaveLayer(SkiaConversions.ToSKRect(b), paint);
-        }
-        else
-        {
-            _canvas.SaveLayer(paint);
-        }
+        // SaveLayer composites with the paint's alpha and blend mode but never consults the paint's
+        // shader, so a soft mask has to be multiplied into the group's own pixels. That needs a surface
+        // this context owns, on the same pixel pitch as the device, so compositing back is a 1:1 copy.
+        SKRect clip = _canvas.DeviceClipBounds;
+        int x = Math.Clamp((int)MathF.Floor(clip.Left), 0, _width);
+        int y = Math.Clamp((int)MathF.Floor(clip.Top), 0, _height);
+        int layerWidth = Math.Clamp((int)MathF.Ceiling(clip.Right), x, _width) - x;
+        int layerHeight = Math.Clamp((int)MathF.Ceiling(clip.Bottom), y, _height) - y;
 
-        _layerPaints.Push(paint);
+        // A layer whose clip fell outside the device still has to absorb its content, so it gets a
+        // 1x1 surface and is dropped on pop.
+        SKSurface surface = SKSurface.Create(new SKImageInfo(
+            Math.Max(1, layerWidth), Math.Max(1, layerHeight), SKColorType.Bgra8888, SKAlphaType.Premul))!;
+        SKCanvas layerCanvas = surface.Canvas;
+        layerCanvas.SetMatrix(_canvas.TotalMatrix);
+        layerCanvas.Translate(-x, -y);
+
+        _layers.Push(new Layer(null, surface, _canvas, x, y, layerWidth, layerHeight, alpha, mode, maskImage));
+        _canvas = layerCanvas;
     }
 
     public void PopLayer()
     {
-        _canvas.Restore();
-        if (_layerPaints.Count > 0)
+        if (_layers.Count == 0)
         {
-            _layerPaints.Pop().Dispose();
+            return;
         }
+
+        Layer layer = _layers.Pop();
+        if (layer.Surface is null)
+        {
+            _canvas.Restore();
+            layer.Paint?.Dispose();
+            return;
+        }
+
+        SKCanvas parent = layer.ParentCanvas!;
+        _canvas = parent;
+
+        using (layer.Surface)
+        {
+            int width = Math.Max(1, layer.Width);
+            int height = Math.Max(1, layer.Height);
+
+            if (layer.SoftMask is SkiaImage maskImage && layer.Alpha > 0)
+            {
+                // The mask arrives as BGRA whose channels already carry the mask coverage, so reading a
+                // channel into alpha and compositing with DstIn multiplies the group's coverage away.
+                using SKPaint maskPaint = new()
+                {
+                    BlendMode = SKBlendMode.DstIn,
+                    ColorFilter = SKColorFilter.CreateColorMatrix(new float[]
+                    {
+                        0, 0, 0, 0, 0,
+                        0, 0, 0, 0, 0,
+                        0, 0, 0, 0, 0,
+                        1, 0, 0, 0, 0,
+                    }),
+                };
+
+                SKCanvas canvas = layer.Surface.Canvas;
+                canvas.Save();
+                canvas.SetMatrix(SKMatrix.Identity);
+                using SKImage mask = SKImage.FromBitmap(maskImage.Bitmap);
+                canvas.DrawImage(mask, new SKRect(0, 0, width, height), maskPaint);
+                canvas.Restore();
+            }
+
+            if (layer.Alpha > 0)
+            {
+                using SKImage group = layer.Surface.Snapshot();
+                using SKPaint composite = new()
+                {
+                    Color = new SKColor(255, 255, 255, layer.Alpha),
+                    BlendMode = MapBlendMode(layer.Mode),
+                };
+
+                parent.Save();
+                parent.SetMatrix(SKMatrix.Identity);
+                parent.DrawImage(group, new SKRect(layer.X, layer.Y, layer.X + width, layer.Y + height), composite);
+                parent.Restore();
+            }
+        }
+    }
+
+    /// <summary>
+    /// One pushed transparency group. A layer without a <see cref="Surface"/> is Skia's own
+    /// <c>SaveLayer</c>, restored by <c>Restore</c>; a masked one owns an off-surface whose pixels are
+    /// composited back by hand.
+    /// </summary>
+    private sealed class Layer(
+        SKPaint? paint,
+        SKSurface? surface,
+        SKCanvas? parentCanvas,
+        int x,
+        int y,
+        int width,
+        int height,
+        byte alpha,
+        BlendMode mode,
+        IImage? softMask)
+    {
+        public SKPaint? Paint { get; } = paint;
+        public SKSurface? Surface { get; } = surface;
+        public SKCanvas? ParentCanvas { get; } = parentCanvas;
+        public int X { get; } = x;
+        public int Y { get; } = y;
+        public int Width { get; } = width;
+        public int Height { get; } = height;
+        public byte Alpha { get; } = alpha;
+        public BlendMode Mode { get; } = mode;
+        public IImage? SoftMask { get; } = softMask;
     }
 
     public RectF ClipBounds
@@ -362,7 +457,13 @@ public sealed class SkiaGraphicsContext : IGraphicsContext
 
         if (_ownsCanvas)
         {
-            _canvas.Dispose();
+            _baseCanvas.Dispose();
+        }
+
+        while (_layers.TryPop(out Layer? layer))
+        {
+            layer?.Surface?.Dispose();
+            layer?.Paint?.Dispose();
         }
 
         _fillPaint.Dispose();
