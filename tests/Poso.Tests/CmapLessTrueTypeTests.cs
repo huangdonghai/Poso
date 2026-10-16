@@ -8,16 +8,19 @@ using Xunit;
 namespace Poso.Tests;
 
 /// <summary>
-/// CID-keyed PDF fonts are addressed purely by glyph ID, so subsetting strips their cmap. PeachDrawing.Text
-/// dereferences that missing table while building metrics and throws, which used to drop the embedded
-/// program and draw whatever sat at those glyph IDs in a system substitute font - page 11 of a CJK book
-/// came out as Greek and Coptic characters. Poso hands the back end an empty cmap instead; these cover the
-/// sfnt surgery that makes that safe (sorted directory, preserved tables, recomputed head checksum).
+/// CID-keyed PDF fonts are addressed purely by glyph ID, so subsetting strips their cmap and often leaves
+/// the name table with nothing but an empty uniqueID record. PeachDrawing.Text dereferences the missing
+/// cmap while building metrics and throws - which used to drop the embedded program and draw whatever sat
+/// at those glyph IDs in a system substitute font, so page 11 of a CJK book came out as Greek and Coptic
+/// characters - and it interns typefaces by the name strings, so an empty identity collapses every such
+/// font in a document onto the first one registered and the rest render as .notdef boxes. Poso repairs
+/// both; these cover the sfnt surgery that makes that safe (sorted directory, preserved tables, recomputed
+/// head checksum).
 /// </summary>
 public class CmapLessTrueTypeTests
 {
     [Fact]
-    public void WithEmptyCmap_InsertsCmapAndPreservesEveryTable()
+    public void RepairSubset_AddsCmapAndIdentityAndPreservesEveryTable()
     {
         (string Tag, byte[] Data)[] source = [
             ("glyf", [0x00, 0x01, 0x02, 0x03, 0x04]),
@@ -26,11 +29,14 @@ public class CmapLessTrueTypeTests
             ("OS/2", new byte[68]),
         ];
 
-        byte[]? repaired = PeachFont.WithEmptyCmap(StubSfnt(source));
+        byte[]? repaired = PeachFont.RepairSubset(StubSfnt(source), "poso-embedded-abc");
 
         Assert.NotNull(repaired);
         List<(string Tag, int Offset, int Length)> directory = ReadDirectory(repaired!);
-        Assert.Equal(["OS/2", "cmap", "glyf", "head", "maxp"], directory.Select(e => e.Tag));
+        Assert.Equal(["OS/2", "cmap", "glyf", "head", "maxp", "name", "post"], directory.Select(e => e.Tag));
+
+        (string _, int offset, int length) nameEntry = directory.First(e => e.Tag == "name");
+        Assert.Contains("poso-embedded-abc", ReadNameStrings(repaired!, nameEntry.offset, nameEntry.length));
 
         foreach ((string tag, byte[] data) in source)
         {
@@ -52,19 +58,70 @@ public class CmapLessTrueTypeTests
     }
 
     [Fact]
-    public void WithEmptyCmap_LeavesFontsThatAlreadyHaveOneAlone()
+    public void RepairSubset_LeavesCompleteFontsAlone()
     {
-        byte[] sfnt = StubSfnt([("cmap", new byte[4]), ("head", new byte[54])]);
-        Assert.Null(PeachFont.WithEmptyCmap(sfnt));
+        byte[] sfnt = StubSfnt([
+            ("cmap", new byte[4]),
+            ("head", new byte[54]),
+            ("name", StubNameTable("Real Font")),
+            ("post", new byte[32]),
+        ]);
+        Assert.Null(PeachFont.RepairSubset(sfnt, "poso-embedded-abc"));
     }
 
     [Fact]
-    public void WithEmptyCmap_LeavesNonGlyfProgramsAlone()
+    public void RepairSubset_ReplacesAnIdentityFreeNameTable()
+    {
+        // What a subsetting tool leaves behind: one record, the unique ID, empty.
+        byte[] empty = StubNameTable("");
+        byte[]? repaired = PeachFont.RepairSubset(StubSfnt([("head", new byte[54]), ("name", empty)]), "poso-embedded-xyz");
+
+        Assert.NotNull(repaired);
+        (string _, int offset, int length) entry = ReadDirectory(repaired!).First(e => e.Tag == "name");
+        Assert.Contains("poso-embedded-xyz", ReadNameStrings(repaired!, entry.offset, entry.length));
+    }
+
+    [Fact]
+    public void RepairSubset_LeavesNonGlyfProgramsAlone()
     {
         // 'OTTO' (CFF), a TrueType collection ('ttcf') and a truncated header are all not sfnt/glyf fonts.
-        Assert.Null(PeachFont.WithEmptyCmap([0x4F, 0x54, 0x54, 0x4F, 0, 0, 0, 0, 0, 0, 0, 0]));
-        Assert.Null(PeachFont.WithEmptyCmap([0x74, 0x74, 0x63, 0x66, 0, 1, 0, 0, 0, 0, 0, 0]));
-        Assert.Null(PeachFont.WithEmptyCmap([0x00, 0x01, 0x00, 0x00]));
+        Assert.Null(PeachFont.RepairSubset([0x4F, 0x54, 0x54, 0x4F, 0, 0, 0, 0, 0, 0, 0, 0], "id"));
+        Assert.Null(PeachFont.RepairSubset([0x74, 0x74, 0x63, 0x66, 0, 1, 0, 0, 0, 0, 0, 0], "id"));
+        Assert.Null(PeachFont.RepairSubset([0x00, 0x01, 0x00, 0x00], "id"));
+    }
+
+    /// <summary>Every string a name table holds, decoded as UTF-16.</summary>
+    private static string ReadNameStrings(byte[] sfnt, int tableOffset, int tableLength)
+    {
+        int count = (sfnt[tableOffset + 2] << 8) | sfnt[tableOffset + 3];
+        int strings = (sfnt[tableOffset + 4] << 8) | sfnt[tableOffset + 5];
+        var text = new StringBuilder();
+        for (int i = 0; i < count; i++)
+        {
+            int record = tableOffset + 6 + (i * 12);
+            int length = (sfnt[record + 8] << 8) | sfnt[record + 9];
+            int offset = (sfnt[record + 10] << 8) | sfnt[record + 11];
+            text.Append(Encoding.BigEndianUnicode.GetString(sfnt, tableOffset + strings + offset, length)).Append('|');
+        }
+
+        return text.ToString();
+    }
+
+    /// <summary>A one-record Windows name table (format 0) carrying the given family string.</summary>
+    private static byte[] StubNameTable(string family)
+    {
+        byte[] value = Encoding.BigEndianUnicode.GetBytes(family);
+        var name = new byte[6 + 12 + value.Length];
+        Write16(name, 2, 1);
+        Write16(name, 4, 6 + 12);
+        Write16(name, 6, 3); // platform: Windows
+        Write16(name, 8, 1); // encoding: Unicode BMP
+        Write16(name, 10, 0x409);
+        Write16(name, 12, 1); // name ID: family
+        Write16(name, 14, value.Length);
+        Write16(name, 16, 0);
+        value.CopyTo(name, 18);
+        return name;
     }
 
     /// <summary>Writes tables into a sorted, padded sfnt directory with no cmap.</summary>
