@@ -26,7 +26,35 @@ public static class PdfFixtures
         new(number, $"<< /Length {data.Length}{(extraDictionary.Length > 0 ? " " + extraDictionary : string.Empty)} >>", data);
 
     /// <summary>
-    /// A minimal CID-keyed CFF program (Top DICT has ROS, no FDArray - the reader only needs the ROS,
+    /// A 100x100 page stroking one horizontal line with an odd-length dash array. The spec says a dash
+    /// pattern comes in pairs; this one carries three entries, which a back end that asserts the pairing
+    /// (Skia) refuses with an exception that would otherwise lose the whole page.
+    /// </summary>
+    public static byte[] CreateOddDashPdf() => Build(1,
+        new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+        new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+        new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R /Resources << >> >>"),
+        Stream(4, string.Empty, Encoding.ASCII.GetBytes("0 0 0 RG 1 w [7 3 7] 0 d 10 50 m 90 50 l S")));
+
+    /// <summary>
+    /// The same document as <see cref="CreateSimplePdf"/> but with the page dictionary closed by a single
+    /// <c>&gt;</c> instead of <c>&gt;&gt;</c>. A lone <c>&gt;</c> does end a dictionary, and producers emit
+    /// it; requiring the doubled form loses the page.
+    /// </summary>
+    public static byte[] CreateLoneAngleBracketDictionaryPdf()
+    {
+        byte[] wellFormed = CreateSimplePdf();
+        string text = Encoding.ASCII.GetString(wellFormed);
+        string page = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R /Resources << >> >>";
+        if (!text.Contains(page, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("the fixture drifted");
+        }
+
+        return Encoding.ASCII.GetBytes(text.Replace(page, page[..^1], StringComparison.Ordinal));
+    }
+
+    /// <summary>A minimal CID-keyed CFF program (Top DICT has ROS, no FDArray - the reader only needs the ROS,
     /// charset and CharStrings). Its charset is deliberately NON-identity (GID 1..4 -> CID 300,100,250,7)
     /// so a test can prove the CID->GID map is read from the charset rather than assumed to be identity.
     /// Returns the raw CFF bytes plus the expected glyph count and the (CID -> GID) pairs.

@@ -137,7 +137,7 @@ internal static class PeachConversions
         pen.LineJoin = ToLineJoin(style.Join);
         pen.MiterLimit = style.MiterLimit;
 
-        if (style.DashArray is { Length: > 0 } dash)
+        if (style.IsDashed && style.DashArray is { Length: > 0 } dash)
         {
             var pattern = new double[dash.Length];
             bool usable = false;

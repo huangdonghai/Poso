@@ -194,6 +194,20 @@ public sealed class PdfParser
         return new PdfArray(items);
     }
 
+    /// <summary>
+    /// A dictionary ends at '>>', or at a lone '>' - which the lexer reports as a one-character keyword
+    /// and which producers do emit.
+    /// </summary>
+    private bool ClosesDictionary()
+    {
+        if (_lexer.PeekKind() == PdfTokenKind.DictClose)
+        {
+            return true;
+        }
+
+        return _lexer.PeekKind() == PdfTokenKind.Keyword && _lexer.Match(_lexer.PeekToken(), ">"u8);
+    }
+
     private PdfObject ParseDictionary(int depth)
     {
         var map = new Dictionary<string, PdfObject>(StringComparer.Ordinal);
@@ -205,7 +219,7 @@ public sealed class PdfParser
                 throw new PdfFormatException("Unterminated dictionary (missing '>>')");
             }
 
-            if (_lexer.PeekKind() == PdfTokenKind.DictClose)
+            if (ClosesDictionary())
             {
                 _lexer.NextToken();
                 break;
@@ -218,7 +232,7 @@ public sealed class PdfParser
             }
 
             _lexer.SkipWhiteSpace();
-            if (_lexer.PeekKind() == PdfTokenKind.DictClose)
+            if (ClosesDictionary())
             {
                 // Closing directly after a key: treat it as corruption
                 _lexer.NextToken();

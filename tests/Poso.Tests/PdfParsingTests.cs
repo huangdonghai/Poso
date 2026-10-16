@@ -6,6 +6,20 @@ namespace Poso.Tests;
 
 public class PdfParsingTests
 {
+    /// <summary>
+    /// A dictionary ends at <c>&gt;&gt;</c> or at a lone <c>&gt;</c>. Matching only the doubled form loses
+    /// the object - and the page hanging off it - on files from the PDF Association's difference corpus.
+    /// </summary>
+    [Fact]
+    public void Open_DictionaryClosedByASingleAngleBracket_ReadsThePage()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateLoneAngleBracketDictionaryPdf());
+
+        Assert.Equal(2, document.Pages.Count);
+        Assert.Equal(200f, document.Pages[0].Width);
+        Assert.Equal(100f, document.Pages[0].Height);
+    }
+
     [Fact]
     public void Open_SimplePdf_ReadsPagesBoxesAndContent()
     {

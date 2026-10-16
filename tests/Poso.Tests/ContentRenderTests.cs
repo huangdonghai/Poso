@@ -316,4 +316,38 @@ public class ContentRenderTests
 
         return count;
     }
+
+    /// <summary>
+    /// A dash array has to come in pairs. Given three entries, Skia's dash path effect throws and the
+    /// whole page is lost; the pattern is dropped and the line strokes solid instead.
+    /// </summary>
+    [Theory]
+    [MemberData("GraphicsFactories", MemberType = typeof(ShadingTests))]
+    public void OddLengthDashArray_StillStrokesTheLine(IGraphicsFactory factory)
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateOddDashPdf());
+        using IGraphicsContext context = factory.CreateContext(100, 100);
+        document.Pages[0].Render(factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+
+        // The line is antialiased across a row or two, so count the darkest band rather than one row.
+        int longest = 0;
+        for (int y = 45; y <= 55; y++)
+        {
+            int run = 0;
+            for (int x = 10; x < 91; x++)
+            {
+                if (PixelAt(pixels, image.Width, y, x).Item2 < 200)
+                {
+                    run++;
+                }
+            }
+
+            longest = Math.Max(longest, run);
+        }
+
+        Assert.True(longest >= 75, $"the dash pattern should have been dropped and the line stroked solid (longest run {longest})");
+    }
 }

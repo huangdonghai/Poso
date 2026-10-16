@@ -102,7 +102,9 @@ public sealed class PdfLexer
                     return new PdfToken(PdfTokenKind.DictClose, start, 2);
                 }
 
-                // A stray '>': treat it as a keyword and let the upper layer report the error
+                // A lone '>' does close a dictionary; ParseDictionary accepts this token as such. It is
+                // reported as a keyword only so that everywhere a dictionary is not open, the upper
+                // layer still gets to complain.
                 _pos++;
                 return new PdfToken(PdfTokenKind.Keyword, start, 1);
 
@@ -135,6 +137,15 @@ public sealed class PdfLexer
 
                 return new PdfToken(PdfTokenKind.Keyword, start, _pos - start);
         }
+    }
+
+    /// <summary>Peek at the next token without consuming the position.</summary>
+    public PdfToken PeekToken()
+    {
+        int saved = _pos;
+        PdfToken token = NextToken();
+        _pos = saved;
+        return token;
     }
 
     /// <summary>Peek at the token kind without consuming the position.</summary>

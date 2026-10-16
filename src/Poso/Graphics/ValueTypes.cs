@@ -104,7 +104,11 @@ public readonly record struct StrokeStyle
 
     public float DashPhase { get; init; }
 
-    public bool IsDashed => DashArray is { } dash && dash.Length > 0;
+    /// <summary>
+    /// A dash pattern needs pairs: an odd count is malformed, and handing it to a back end that asserts
+    /// the pairing (Skia's <c>SKPathEffect.CreateDash</c> throws) loses the whole page.
+    /// </summary>
+    public bool IsDashed => DashArray is { } dash && dash.Length > 0 && (dash.Length % 2) == 0;
 
     public static readonly StrokeStyle Default = new(1f);
 }
