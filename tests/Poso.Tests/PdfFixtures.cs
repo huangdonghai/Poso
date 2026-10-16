@@ -791,10 +791,12 @@ public static class PdfFixtures
     /// function that ends in <c>3 -1 roll</c>. The roll reorders <c>[tint 0 1]</c> into
     /// <c>[0 1 tint]</c>, so the fill must be cyan-blue (0, 0.5, 1) at tint 0.5; a reader that gives up
     /// on the operator leaves the unrolled order and paints purple (0.5, 0, 1) instead.
+    /// <paramref name="braces"/> wraps the program in <c>{ }</c>, which is how Adobe's own producers
+    /// write a type 4 stream even though the specification's examples do not.
     /// </summary>
-    public static byte[] CreateRollTintTransformPdf()
+    public static byte[] CreateRollTintTransformPdf(bool braces = false)
     {
-        byte[] program = Encoding.ASCII.GetBytes("0 1 3 -1 roll");
+        byte[] program = Encoding.ASCII.GetBytes(braces ? "{0 1 3 -1 roll}" : "0 1 3 -1 roll");
         string content = "[/Separation /Spot /DeviceRGB 9 0 R] cs 0.5 scn 0 0 200 200 re f";
         return Build(1,
             new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),

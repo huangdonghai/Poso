@@ -363,7 +363,17 @@ internal sealed class PostScriptFunction : PdfFunction
     private static List<Cell> Parse(byte[] program)
     {
         var lexer = new PdfLexer(program);
-        return ReadCells(lexer, false);
+        List<Cell> cells = ReadCells(lexer, false);
+
+        // The specification writes a type 4 stream as a bare token sequence, but Adobe's producers wrap
+        // the whole program in { }. Read at face value that is one procedure literal, and a procedure on
+        // the stack is never executed - the function would return the stack it happened to leave behind.
+        // Treat a lone top-level procedure as the program it is standing for.
+        return cells is { Count: 1 } single
+            && single[0].Kind == CellKind.Procedure
+            && single[0].Items is { } body
+            ? body
+            : cells;
     }
 
     /// <summary>Reads cells until the stream ends (top level) or a closing bracket (inside a procedure).</summary>

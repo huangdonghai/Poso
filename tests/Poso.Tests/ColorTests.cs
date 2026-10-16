@@ -17,12 +17,15 @@ public class ColorTests
     /// A PostScript tint transform that reorders the stack with <c>roll</c> must paint the rolled
     /// colour. DeviceN tint transforms are written almost entirely with roll, so an evaluator that
     /// gives up on the operator leaves the operands in the wrong slots and the fill comes out with its
-    /// channels permuted.
+    /// channels permuted. The braces spelling matters because Adobe producers wrap the whole program in
+    /// <c>{ }</c>, which makes it read as one procedure literal rather than as the program.
     /// </summary>
-    [Fact]
-    public void TintTransform_RollsTheStack()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TintTransform_RollsTheStack(bool braces)
     {
-        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateRollTintTransformPdf());
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateRollTintTransformPdf(braces));
         using IGraphicsContext context = Factory.CreateContext(200, 200);
         document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
 
