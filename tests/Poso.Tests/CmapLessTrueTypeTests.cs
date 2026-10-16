@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text;
 using Poso.PeachDrawing;
@@ -88,6 +89,121 @@ public class CmapLessTrueTypeTests
         Assert.Null(PeachFont.RepairSubset([0x4F, 0x54, 0x54, 0x4F, 0, 0, 0, 0, 0, 0, 0, 0], "id"));
         Assert.Null(PeachFont.RepairSubset([0x74, 0x74, 0x63, 0x66, 0, 1, 0, 0, 0, 0, 0, 0], "id"));
         Assert.Null(PeachFont.RepairSubset([0x00, 0x01, 0x00, 0x00], "id"));
+    }
+
+    /// <summary>
+    /// The end-to-end defect. PeachDrawing.Text dereferences the cmap and the post table while it builds a
+    /// typeface descriptor, and CID-keyed PDF subsets drop both. When either is missing and unrepaired,
+    /// <see cref="PeachFont.Create"/> silently falls back to a system face: Latin text still looks right
+    /// while CJK renders as .notdef boxes, and no unsupported feature is reported because the fallback
+    /// "succeeded". These load a real TrueType program with the tables removed and require the embedded
+    /// face - its name and its metrics - to survive.
+    /// </summary>
+    [Theory]
+    [InlineData("")]
+    [InlineData("cmap")]
+    [InlineData("post")]
+    [InlineData("cmap,post")]
+    public void PeachFont_KeepsTheEmbeddedFaceWithoutDescriptorTables(string dropped)
+    {
+        string[] drop = dropped.Length == 0 ? [] : dropped.Split(',');
+        byte[] program = File.ReadAllBytes(FontFile("liberation-sans-regular.ttf"));
+        byte[] subset = drop.Length == 0 ? program : WithoutTables(program, drop);
+        foreach (string tag in drop)
+        {
+            Assert.DoesNotContain(tag, ReadDirectory(subset).Select(e => e.Tag));
+        }
+
+        using PeachFont? font = PeachFont.Create(subset, "probe");
+        Assert.NotNull(font);
+        Assert.Equal("Liberation Sans", font!.Name);
+
+        using PeachFont reference = PeachFont.Create(program, "probe")!;
+        List<(ushort Gid, float Width)> metrics = [
+            .. Enumerable.Range(1, 99).Select(gid => ((ushort)gid, font.GetAdvanceWidth((ushort)gid)))
+        ];
+
+        Assert.Contains(metrics, m => m.Width > 0f);
+        foreach ((ushort gid, float width) in metrics)
+        {
+            Assert.Equal(reference.GetAdvanceWidth(gid), width);
+        }
+    }
+
+    /// <summary>Rebuilds an sfnt without the named tables, recomputing head.checkSumAdjustment.</summary>
+    private static byte[] WithoutTables(byte[] sfnt, params string[] drop)
+    {
+        (string Tag, int Offset, int Length)[] kept = ReadDirectory(sfnt).Where(e => !drop.Contains(e.Tag)).ToArray();
+        int count = kept.Length;
+        int dataStart = 12 + (count * 16);
+        int total = dataStart;
+        foreach ((_, int _, int length) in kept)
+        {
+            total += length + Pad(length);
+        }
+
+        var output = new byte[total];
+        Write(output, 0, 0x00010000);
+        Write16(output, 4, count);
+        int selector = 0;
+        while ((1 << (selector + 1)) <= count)
+        {
+            selector++;
+        }
+
+        Write16(output, 6, 16 << selector);
+        Write16(output, 8, selector);
+        Write16(output, 10, (count * 16) - (16 << selector));
+
+        int write = dataStart;
+        int headAt = -1;
+        for (int i = 0; i < count; i++)
+        {
+            (string tag, int offset, int length) = kept[i];
+            int directory = 12 + (i * 16);
+            Encoding.ASCII.GetBytes(tag).CopyTo(output, directory);
+            Write(output, directory + 4, CheckSum(sfnt.AsSpan(offset, length).ToArray()));
+            Write(output, directory + 8, (uint)write);
+            Write(output, directory + 12, (uint)length);
+            Array.Copy(sfnt, offset, output, write, length);
+            if (tag == "head")
+            {
+                headAt = write;
+            }
+
+            write += length + Pad(length);
+        }
+
+        if (headAt >= 0)
+        {
+            Write(output, headAt + 8, 0u);
+            Write(output, headAt + 8, 0xB105u - CheckSum(output));
+        }
+
+        return output;
+    }
+
+    private static string FontFile(string name)
+    {
+        string probe = Path.Combine(AppContext.BaseDirectory, "Samples", "Fonts", name);
+        if (File.Exists(probe))
+        {
+            return probe;
+        }
+
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null)
+        {
+            string candidate = Path.Combine(dir.FullName, "tests", "Poso.Tests", "Samples", "Fonts", name);
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+
+            dir = dir.Parent;
+        }
+
+        throw new FileNotFoundException(name);
     }
 
     /// <summary>Every string a name table holds, decoded as UTF-16.</summary>

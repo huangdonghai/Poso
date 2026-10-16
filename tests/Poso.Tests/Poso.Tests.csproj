@@ -29,6 +29,8 @@
     <Content Include="Samples\Jpx\*.jp2" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Samples\Jpeg\*.rgb" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Samples\Fonts\*.bin" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Samples\Fonts\*.ttf" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Samples\Fonts\License-*.txt" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Samples\Pdf\*.pdf" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Samples\Icc\*.icc" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Samples\Icc\*.csv" CopyToOutputDirectory="PreserveNewest" />

@@ -1,0 +1,7 @@
+liberation-sans-regular.ttf is Liberation Sans, copyright (c) 2007 Red Hat, Inc.,
+"LIBERATION is a trademark of Red Hat, Inc.", licensed under the Liberation Fonts
+license (a BSD-style licence that permits redistribution):
+https://fedoraproject.org/wiki/Licensing/LiberationFontLicense
+
+It is used only as a test asset: it is a real sfnt/glyf TrueType program, so its
+tables can be removed to reproduce the shape of a PDF CID-keyed subset.
