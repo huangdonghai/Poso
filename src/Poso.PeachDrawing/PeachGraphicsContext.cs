@@ -254,27 +254,34 @@ public sealed class PeachGraphicsContext : IGraphicsContext
             return;
         }
 
+        // Same flip as the Skia back-end: PDF maps the first sample row onto v = 1 of the image's unit
+        // square, so the image is drawn flipped within its own destination. The flip belongs to the image
+        // space rather than to the CTM, so it applies regardless of what the determinant says.
+        Blit(peachImage, destinationRect, sourceRect, alpha,
+            Matrix3x2.CreateScale(1f, -1f) *
+            Matrix3x2.CreateTranslation(0f, destinationRect.Top + destinationRect.Bottom) *
+            _ctm);
+    }
+
+    public void DrawDeviceRaster(IImage image, in RectF destinationRect, float alpha)
+    {
+        if (image is not PeachImage peachImage || destinationRect.IsEmpty)
+        {
+            return;
+        }
+
+        Blit(peachImage, destinationRect, new RectF(0f, 0f, image.Width, image.Height), alpha, _ctm);
+    }
+
+    private void Blit(PeachImage peachImage, in RectF destinationRect, in RectF sourceRect, float alpha, in Matrix3x2 transform)
+    {
         PeachCore.Image canvasImage = peachImage.AsCanvasImage();
         PeachCore.Rect dest = destinationRect.ToRect();
         PeachCore.Rect src = sourceRect.ToRect();
 
-        // Same flip compensation as the Skia back-end: Peach maps the source-rect corners onto the
-        // destination-rect corners in the destination's own frame, so when the CTM mirrors an axis
-        // (pages flip y) the canvas must be flipped back within the destination rectangle or the
-        // image lands upside down.
-        float det = _ctm.M11 * _ctm.M22 - _ctm.M12 * _ctm.M21;
-        Matrix3x2 transform = _ctm;
-        if (det < 0)
-        {
-            transform =
-                Matrix3x2.CreateScale(1f, -1f) *
-                Matrix3x2.CreateTranslation(0f, destinationRect.Top + destinationRect.Bottom) *
-                _ctm;
-        }
-
         using DrawScope scope = BeginDraw(transform);
         double opacity = Math.Clamp(alpha, 0f, 1f);
-        bool fullSource = sourceRect.Width >= image.Width - 0.5f && sourceRect.Height >= image.Height - 0.5f
+        bool fullSource = sourceRect.Width >= peachImage.Width - 0.5f && sourceRect.Height >= peachImage.Height - 0.5f
             && sourceRect.X <= 0.5f && sourceRect.Y <= 0.5f;
         if (fullSource)
         {

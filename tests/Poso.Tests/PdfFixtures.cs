@@ -477,6 +477,24 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// A 200x100 page filled by a 2x2 image whose first sample row is black and second row white, placed either
+    /// with the upright unit-square matrix or with a mirrored one. Pins which edge of the placement the first
+    /// sample row lands on.
+    /// </summary>
+    public static byte[] CreateRowOrderImagePdf(bool mirrored)
+    {
+        byte[] pixels = [0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 255, 255];
+        string content = mirrored ? "q 200 0 0 -100 0 100 cm /Im1 Do Q" : "q 200 0 0 100 0 0 cm /Im1 Do Q";
+
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /XObject << /Im1 5 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            new PdfObjectDefinition(5, $"<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length {pixels.Length} >>", pixels));
+    }
+
+    /// <summary>
     /// A 3x4 image whose Indexed colour space carries its colour table as a compressed <b>stream</b> over a
     /// DeviceCMYK base (PDF 32000-1:2008 8.7.2 permits a string or a stream, and generators use the stream
     /// form once the table is large). The three indices are white, black and red. Reading only the string

@@ -313,32 +313,41 @@ public sealed class SkiaGraphicsContext : IGraphicsContext
             return;
         }
 
-        _imagePaint.Color = new SKColor(255, 255, 255, (byte)Math.Clamp((int)MathF.Round(alpha * 255f), 0, 255));
-
+        SetImageAlpha(alpha);
         var destination = new SKRect(destinationRect.Left, destinationRect.Top, destinationRect.Right, destinationRect.Bottom);
         var source = new SKRect(sourceRect.Left, sourceRect.Top, sourceRect.Right, sourceRect.Bottom);
 
-        // Skia maps source-rect corners to destination-rect corners in the destination's own
-        // frame; when the CTM flips an axis (pages always flip y), the image would come out
-        // upside down. Compensate by flipping the canvas within the destination rectangle.
-        SKMatrix total = _canvas.TotalMatrix;
-        bool flipped = ((total.ScaleX * total.ScaleY) - (total.SkewX * total.SkewY)) < 0;
-
+        // PDF maps the first sample row onto v = 1 of the image's unit square, while Skia maps the source
+        // rect's top edge onto the destination rect's top edge, so the image is drawn flipped within its own
+        // destination. That belongs to the image space, not to the CTM: keying it to the matrix determinant
+        // cancelled the page's y flip, which landed every image upside down and mirrored placements right side up.
 #pragma warning disable CS0618 // SkiaSharp 3.119.4: the SKSamplingOptions overloads do not support source/destination rectangles, so the obsolete overload is used for now (filter quality via FilterQuality)
-        if (flipped)
-        {
-            _canvas.Save();
-            _canvas.Translate(0f, destination.Top + destination.Bottom);
-            _canvas.Scale(1f, -1f);
-            _canvas.DrawBitmap(skiaImage.Bitmap, source, destination, _imagePaint);
-            _canvas.Restore();
-        }
-        else
-        {
-            _canvas.DrawBitmap(skiaImage.Bitmap, source, destination, _imagePaint);
-        }
+        _canvas.Save();
+        _canvas.Translate(0f, destination.Top + destination.Bottom);
+        _canvas.Scale(1f, -1f);
+        _canvas.DrawBitmap(skiaImage.Bitmap, source, destination, _imagePaint);
+        _canvas.Restore();
 #pragma warning restore CS0618
     }
+
+    public void DrawDeviceRaster(IImage image, in RectF destinationRect, float alpha)
+    {
+        if (image is not SkiaImage skiaImage || destinationRect.IsEmpty)
+        {
+            return;
+        }
+
+        SetImageAlpha(alpha);
+        var destination = new SKRect(destinationRect.Left, destinationRect.Top, destinationRect.Right, destinationRect.Bottom);
+        var source = new SKRect(0f, 0f, image.Width, image.Height);
+
+#pragma warning disable CS0618 // see above: no SKSamplingOptions overload takes source and destination rectangles
+        _canvas.DrawBitmap(skiaImage.Bitmap, source, destination, _imagePaint);
+#pragma warning restore CS0618
+    }
+
+    private void SetImageAlpha(float alpha) => _imagePaint.Color =
+        new SKColor(255, 255, 255, (byte)Math.Clamp((int)MathF.Round(alpha * 255f), 0, 255));
 
     /// <summary>Takes a snapshot of the current canvas: ownership of the pixel data passes to the returned image.</summary>
     public IImage Snapshot()

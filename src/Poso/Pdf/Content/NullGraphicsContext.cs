@@ -58,6 +58,10 @@ internal sealed class NullGraphicsContext : IGraphicsContext
     {
     }
 
+    public void DrawDeviceRaster(IImage image, in RectF destinationRect, float alpha)
+    {
+    }
+
     public IImage Snapshot() => throw new InvalidOperationException("The null context cannot produce a snapshot");
 
     public void Dispose()

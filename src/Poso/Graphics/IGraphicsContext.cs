@@ -50,8 +50,18 @@ public interface IGraphicsContext : IDisposable
     /// </summary>
     void DrawGlyphs(IFont font, float fontSize, ReadOnlySpan<GlyphPosition> glyphs, PosoColor color, TextRenderMode mode, in StrokeStyle strokeStyle);
 
-    /// <summary>Draw an image (the source rectangle is in image pixel coordinates; the destination rectangle is in user space coordinates).</summary>
+    /// <summary>
+    /// Draw a PDF image. The destination rectangle is the image's unit square in user space; PDF puts the
+    /// first sample row at v = 1 of that square, so the back end flips the bitmap within the destination and
+    /// the CTM (rotation, mirroring) is left to place it.
+    /// </summary>
     void DrawImage(IImage image, in RectF destinationRect, in RectF sourceRect, float alpha);
+
+    /// <summary>
+    /// Blit a raster the back end itself produced in device space - a shading or a tiling pattern cell - so
+    /// its first row already belongs at the top of the destination. No image-space flip applies.
+    /// </summary>
+    void DrawDeviceRaster(IImage image, in RectF destinationRect, float alpha);
 
     /// <summary>
     /// Take a snapshot of the current canvas. After the call the context enters a "handed off" state:

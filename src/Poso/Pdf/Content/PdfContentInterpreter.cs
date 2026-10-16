@@ -1893,7 +1893,7 @@ public sealed class PdfContentInterpreter
         {
             _context.Save();
             _context.SetMatrix(Matrix3x2.Identity);
-            _context.DrawImage(image, clip, new RectF(0f, 0f, image.Width, image.Height), 1f);
+            _context.DrawDeviceRaster(image, clip, 1f);
             _context.Restore();
         }
         finally
@@ -1985,7 +1985,6 @@ public sealed class PdfContentInterpreter
                 return; // guard against pathological tile counts
             }
 
-            var src = new RectF(0f, 0f, tile.Width, tile.Height);
             for (int i = i0; i <= i1; i++)
             {
                 for (int j = j0; j <= j1; j++)
@@ -1998,7 +1997,7 @@ public sealed class PdfContentInterpreter
                     float ry = Math.Min(a.Y, c.Y);
                     float rw = Math.Abs(c.X - a.X);
                     float rh = Math.Abs(c.Y - a.Y);
-                    _context.DrawImage(tile, new RectF(rx, ry, rw, rh), src, 1f);
+                    _context.DrawDeviceRaster(tile, new RectF(rx, ry, rw, rh), 1f);
                 }
             }
         }

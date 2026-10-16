@@ -256,6 +256,50 @@ public class CrossBackendTests
         return ink;
     }
 
+    /// <summary>
+    /// PDF maps an image's first sample row onto v = 1 of its unit square, so an upright placement lands that
+    /// row at the top of the page and a mirrored CTM flips it to the bottom. Both back-ends used to key the
+    /// flip on the matrix determinant, which cancelled the page's own y flip and put every image upside down.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ImageFirstSampleRowFollowsThePlacement(bool mirrored)
+    {
+        byte[] data = PdfFixtures.CreateRowOrderImagePdf(mirrored);
+        foreach (IGraphicsFactory factory in new IGraphicsFactory[] { Skia, Peach })
+        {
+            byte[] px = Render(data, factory, 200, 100);
+            float top = MeanLuma(px, 15, 35);
+            float bottom = MeanLuma(px, 65, 85);
+            string tag = factory is PeachGraphicsFactory ? "peach" : "skia";
+            if (mirrored)
+            {
+                Assert.True(top > bottom + 60, $"{tag}: mirrored placement should put the black row at the bottom (top={top:F0} bottom={bottom:F0})");
+            }
+            else
+            {
+                Assert.True(top + 60 < bottom, $"{tag}: upright placement should put the black row at the top (top={top:F0} bottom={bottom:F0})");
+            }
+        }
+    }
+
+    private static float MeanLuma(byte[] pixels, int firstRow, int lastRow)
+    {
+        double sum = 0;
+        int count = 0;
+        for (int y = firstRow; y < lastRow; y++)
+        {
+            for (int x = 20; x < 180; x++)
+            {
+                int o = ((y * 200) + x) * 4;
+                sum += (pixels[o] + pixels[o + 1] + pixels[o + 2]) / 3f;
+                count++;
+            }
+        }
+        return (float)(sum / count);
+    }
+
     private static byte[] Render(byte[] data, IGraphicsFactory factory, int width, int height)
         => Render(data, factory, width, height, 0, 1f);
 
