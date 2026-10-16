@@ -79,6 +79,46 @@ public class SoftMaskTests
         Assert.Equal(0, red);
     }
 
+    /// <summary>
+    /// ExtGState <c>/SMask</c>: a form drawn while a luminosity mask is in effect must be masked by the
+    /// mask group's own rendering. The mask is black on the left and white on the right, so the red
+    /// square may only appear on the left. This never worked: /SMask is a Mask <b>dictionary</b>, and the
+    /// graphics state stored it as a stream, so the field was always null and nothing read it.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(MaskCapableFactories))]
+    public void ExtGStateLuminosityMask_KeepsOnlyTheBlackHalf(IGraphicsFactory factory)
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateSoftMaskedFormPdf());
+        using IGraphicsContext context = factory.CreateContext(200, 200);
+        document.Pages[0].Render(factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] px = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(px);
+
+        (byte B, byte G, byte R) left = Sample(px, image.Width, 100, 50);
+        (byte B, byte G, byte R) right = Sample(px, image.Width, 100, 150);
+
+        Assert.True(left.R > 150 && left.G < 90 && left.B < 90, $"masked-left should stay red (got {left})");
+        Assert.True(right.R > 200 && right.G > 200 && right.B > 200, $"white mask must erase the element (got {right})");
+    }
+
+    // PeachDrawing composites its groups on an offscreen surface it owns, so the mask can be cut in
+    // before the layer is drawn back. Skia's equivalent, SKCanvas.SaveLayer, ignores the paint's
+    // shader, so a spatial mask needs the context to own an SKSurface and swap its canvas - see the
+    // skipped case below.
+    public static IEnumerable<object[]> MaskCapableFactories()
+    {
+        yield return [Poso.PeachDrawing.PeachGraphicsFactory.Default];
+    }
+
+    [Fact(Skip = "SkiaGraphicsContext.PushLayer passes the mask as a SaveLayer paint shader, which Skia ignores; the layer needs its own SKSurface.")]
+    public void ExtGStateLuminosityMask_NotSupportedBySkia()
+    {
+        ExtGStateLuminosityMask_KeepsOnlyTheBlackHalf(SkiaGraphicsFactory.Default);
+    }
+
     private static (byte B, byte G, byte R) Sample(byte[] px, int width, int y, int x)
     {
         int offset = ((y * width) + x) * 4;

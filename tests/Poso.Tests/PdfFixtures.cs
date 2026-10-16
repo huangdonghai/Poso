@@ -787,6 +787,29 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// A 200x200 page drawing a red square while an ExtGState <c>/SMask</c> is in effect. The mask group
+    /// paints its left half black and its right half white under a luminosity mask, so the square must
+    /// appear on the left only.
+    /// </summary>
+    public static byte[] CreateSoftMaskedFormPdf()
+    {
+        byte[] square = Encoding.ASCII.GetBytes("1 0 0 rg 0 0 200 200 re f");
+        byte[] maskContent = Encoding.ASCII.GetBytes("0 g 0 0 100 200 re f 1 g 100 0 100 200 re f");
+        string content = "q /GS1 gs /Sq Do Q";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] "
+                + "/Resources << /XObject << /Sq 5 0 R >> /ExtGState << /GS1 7 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            Stream(5, "/Type /XObject /Subtype /Form /BBox [0 0 200 200] "
+                + "/Group << /Type /Group /S /Transparency /CS /DeviceRGB >>", square),
+            Stream(6, "/Type /XObject /Subtype /Form /BBox [0 0 200 200] "
+                + "/Group << /Type /Group /S /Transparency /CS /DeviceGray >>", maskContent),
+            new PdfObjectDefinition(7, "<< /Type /ExtGState /ca 1 /CA 1 /SMask << /S /Luminosity /G 6 0 R >> >>"));
+    }
+
+    /// <summary>
     /// A 200x200 page filled with a Separation colour space whose tint transform is a PostScript
     /// function that ends in <c>3 -1 roll</c>. The roll reorders <c>[tint 0 1]</c> into
     /// <c>[0 1 tint]</c>, so the fill must be cyan-blue (0, 0.5, 1) at tint 0.5; a reader that gives up

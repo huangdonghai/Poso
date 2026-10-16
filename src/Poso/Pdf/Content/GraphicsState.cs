@@ -42,8 +42,11 @@ internal sealed class GraphicsState
 
     public BlendMode BlendMode { get; set; } = BlendMode.Normal;
 
-    /// <summary>Soft-mask image (ExtGState /SMask) applied when painting; null when none.</summary>
-    public Objects.PdfStream? SoftMask { get; set; }
+    /// <summary>
+    /// The ExtGState /SMask <b>Mask dictionary</b> (its /G names the group, /S the subtype, /BC the
+    /// backdrop), or null when the element is unmasked.
+    /// </summary>
+    public Objects.PdfDictionary? SoftMask { get; set; }
 
     /// <summary>Alpha isolation (ExtGState /AIS): groups do not blend with the backdrop.</summary>
     public bool AlphaIsolate { get; set; }

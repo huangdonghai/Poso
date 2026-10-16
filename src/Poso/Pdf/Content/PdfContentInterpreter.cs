@@ -35,6 +35,9 @@ public sealed class PdfContentInterpreter
     private readonly PdfDiagnostics _diag;
     private readonly Stack<GraphicsState> _stateStack = new();
     private readonly Dictionary<int, PdfFont> _fonts = new();
+
+    // Rendered ExtGState soft masks, keyed by mask stream and size, released when the page finishes.
+    private readonly Dictionary<(PdfDictionary Mask, int Width, int Height), IImage?> _softMasks = new();
     private GraphicsState _state = new();
     private int _formDepth;
     private Matrix3x2 _pageBaseMatrix;
@@ -186,6 +189,12 @@ public sealed class PdfContentInterpreter
         finally
         {
             _context.PopLayer();
+            foreach (IImage? image in _softMasks.Values)
+            {
+                image?.Dispose();
+            }
+
+            _softMasks.Clear();
         }
     }
 
@@ -1145,8 +1154,8 @@ public sealed class PdfContentInterpreter
         _state.AlphaIsolate = extGState.GetBooleanValue("AIS") ?? _state.AlphaIsolate;
         _state.TextKnockout = extGState.GetBooleanValue("TK") ?? _state.TextKnockout;
 
-        // /SMask is an image XObject (soft mask) or /None.
-        _state.SoftMask = _document.Resolve(extGState.Get("SMask")) as PdfStream;
+        // /SMask is a Mask dictionary whose /G names the group to mask with, or the name /None.
+        _state.SoftMask = _document.Resolve(extGState.Get("SMask")) as PdfDictionary;
 
         _context.SetBlendMode(_state.BlendMode);
     }
@@ -2252,14 +2261,19 @@ public sealed class PdfContentInterpreter
             // content on an isolated off-surface that is composited back with the alpha/blend that were in
             // effect at the Do operator. The group opacity is applied once at the boundary, so element
             // alphas inside start from opaque. Back-ends without layer support treat PushLayer as a no-op.
-            bool pushedLayer = false;
-            if (IsTransparencyGroup(dictionary))
+            // An ExtGState /SMask masks the element as a whole, so it needs the same boundary: a form
+            // that is not itself a group gets a layer purely to carry the mask.
+            IImage? softMask = _state.SoftMask is { } maskStream ? SoftMaskImage(maskStream, _context.ClipBounds) : null;
+            bool pushedLayer = IsTransparencyGroup(dictionary) || softMask is not null;
+            if (pushedLayer)
             {
                 byte groupAlpha = (byte)Math.Clamp((int)MathF.Round(_state.FillAlpha * 255f), 0, 255);
-                _context.PushLayer(null, groupAlpha, _state.BlendMode, null);
-                pushedLayer = true;
+                _context.PushLayer(null, groupAlpha, _state.BlendMode, softMask);
                 _state.FillAlpha = 1f;
                 _state.StrokeAlpha = 1f;
+
+                // The mask belongs to this element, not to the content inside it.
+                _state.SoftMask = null;
             }
 
             try
@@ -2292,6 +2306,116 @@ public sealed class PdfContentInterpreter
         PdfDictionary? group = _document.Resolve(dictionary.Get("Group")) as PdfDictionary;
         return group is not null && group.GetNameValue("S") == "Transparency";
     }
+
+    /// <summary>
+    /// Renders an ExtGState <c>/SMask</c> group into the coverage image the back ends multiply an
+    /// element by: every channel carries the factor, so a grey image is enough. <c>/Luminosity</c>
+    /// inverts the mask's luminance - black keeps the element, white erases it - and <c>/Alpha</c>
+    /// takes the mask's own alpha. The group is composited over <c>/BC</c> first, because a backdrop is
+    /// part of the mask's definition rather than of its content.
+    /// </summary>
+    private IImage? SoftMaskImage(PdfDictionary mask, in RectF region)
+    {
+        if (region.IsEmpty)
+        {
+            return null;
+        }
+
+        int width = Math.Clamp((int)MathF.Ceiling(region.Width), 1, 4096);
+        int height = Math.Clamp((int)MathF.Ceiling(region.Height), 1, 4096);
+        if (_softMasks.TryGetValue((mask, width, height), out IImage? cached))
+        {
+            return cached;
+        }
+
+        IImage? built = BuildSoftMask(mask, width, height);
+        _softMasks[(mask, width, height)] = built;
+        return built;
+    }
+
+    private IImage? BuildSoftMask(PdfDictionary dict, int width, int height)
+    {
+        if (_document.Resolve(dict.Get("G")) is not PdfStream form)
+        {
+            return null;
+        }
+
+        byte[] content = form.Decode(_diag);
+
+        float bx0 = 0f, by0 = 0f, bx1 = 1f, by1 = 1f;
+        if (form.Dictionary.GetArray("BBox") is { Count: >= 4 } bbox)
+        {
+            bx0 = bbox.GetNumber(0)?.AsFloat() ?? 0f;
+            by0 = bbox.GetNumber(1)?.AsFloat() ?? 0f;
+            bx1 = bbox.GetNumber(2)?.AsFloat() ?? 0f;
+            by1 = bbox.GetNumber(3)?.AsFloat() ?? 0f;
+        }
+
+        float cellWidth = bx1 - bx0;
+        float cellHeight = by1 - by0;
+        if (cellWidth <= 0f || cellHeight <= 0f)
+        {
+            return null;
+        }
+
+        Matrix3x2 baseMatrix =
+            Matrix3x2.CreateTranslation(-bx0, -by0) *
+            Matrix3x2.CreateScale(width / cellWidth, -height / cellHeight) *
+            Matrix3x2.CreateTranslation(0f, height);
+
+        bool byAlpha = dict.GetNameValue("S") == "Alpha";
+        PdfFunction? transfer = PdfFunction.Create(_document, dict.Get("TR"));
+        PosoColor backdrop = SoftMaskBackdrop(dict.GetArray("BC"));
+
+        byte[] pixels;
+        using (IGraphicsContext surface = _factory.CreateContext(width, height))
+        {
+            surface.Clear(backdrop);
+            var nested = new PdfContentInterpreter(_document, _factory, surface, _options) { OnUnsupported = OnUnsupported };
+            nested.RenderCell(content, _document.Resolve(form.Dictionary.Get("Resources")) as PdfDictionary, baseMatrix);
+
+            using IImage rendered = surface.Snapshot();
+            int stride = rendered.BytesPerPixel;
+            pixels = new byte[rendered.Width * rendered.Height * stride];
+            rendered.CopyPixels(pixels);
+        }
+
+        for (int i = 0; i + 3 < pixels.Length; i += 4)
+        {
+            float coverage = byAlpha
+                ? pixels[i + 3] / 255f
+                : 1f - (((0.3f * pixels[i + 2]) + (0.59f * pixels[i + 1]) + (0.11f * pixels[i])) / 255f);
+
+            if (transfer is not null)
+            {
+                Span<float> input = stackalloc float[] { coverage };
+                Span<float> output = stackalloc float[1];
+                transfer.Evaluate(input, output);
+                coverage = output[0];
+            }
+
+            byte factor = (byte)Math.Clamp((int)MathF.Round(Math.Clamp(coverage, 0f, 1f) * 255f), 0, 255);
+            pixels[i] = pixels[i + 1] = pixels[i + 2] = factor;
+            pixels[i + 3] = 255;
+        }
+
+        return _factory.CreateImage(width, height, PixelFormat.Bgra8888Premul, pixels);
+    }
+
+    /// <summary>
+    /// The <c>/BC</c> backdrop of a soft-mask group. Omitting it means opaque black in the mask colour
+    /// space, which under a luminosity mask leaves the element untouched.
+    /// </summary>
+    private static PosoColor SoftMaskBackdrop(PdfArray? components) => components switch
+    {
+        { Count: >= 4 } cmyk => PosoColor.FromCmyk(
+            cmyk.GetNumber(0)?.AsFloat() ?? 0f, cmyk.GetNumber(1)?.AsFloat() ?? 0f,
+            cmyk.GetNumber(2)?.AsFloat() ?? 0f, cmyk.GetNumber(3)?.AsFloat() ?? 0f),
+        { Count: 3 } rgb => PosoColor.FromRgb(
+            rgb.GetNumber(0)?.AsFloat() ?? 0f, rgb.GetNumber(1)?.AsFloat() ?? 0f, rgb.GetNumber(2)?.AsFloat() ?? 0f),
+        { Count: >= 1 } gray => PosoColor.FromGray(gray.GetNumber(0)?.AsFloat() ?? 0f),
+        _ => PosoColor.Black,
+    };
 
     private void DrawImage(PdfStream image)
     {
