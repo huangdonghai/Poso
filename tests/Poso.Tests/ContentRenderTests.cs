@@ -144,6 +144,28 @@ public class ContentRenderTests
         Assert.True(leftSpan > rightSpan, $"'b' stem must be on the left: leftSpan={leftSpan}, rightSpan={rightSpan}");
     }
 
+    /// <summary>
+    /// A resource dictionary reached through an indirect reference must resolve like an inline one: the
+    /// page otherwise draws nothing at all and reports nothing, because the name simply never resolves.
+    /// </summary>
+    [Fact]
+    public void Render_XObjectResourcesReachedThroughIndirectReference()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateIndirectXObjectPdf());
+        using IGraphicsContext context = Factory.CreateContext(4, 4);
+        var features = new List<PdfUnsupportedFeature>();
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White), features.Add);
+
+        Assert.Empty(features);
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+        for (int i = 0; i < 16; i++)
+        {
+            (byte b, byte g, byte r, byte a) = PixelAt(pixels, image.Width, i / image.Width, i % image.Width);
+            Assert.True(r > 200 && g < 60 && b < 60, $"pixel {i} should be the image's red, got r={r} g={g} b={b}");
+        }
+    }
+
     [Fact]
     public void Render_StrokedText_KeepsThinOutlineNotBlob()
     {

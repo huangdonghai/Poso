@@ -1045,7 +1045,8 @@ public sealed class PdfContentInterpreter
         if (lexer.Match(token, "Do"u8))
         {
             PdfName? name = PopName(operands);
-            PdfDictionary? xobjects = resources?.GetDictionary("XObject");
+            // Any resource value may be written as an indirect reference, /XObject included.
+            PdfDictionary? xobjects = _document.Resolve(resources?.Get("XObject")) as PdfDictionary;
             PdfStream? xobject = _document.Resolve(xobjects?.Get(name?.Value ?? string.Empty)) as PdfStream;
 
             if (xobject is not null)
@@ -1358,7 +1359,7 @@ public sealed class PdfContentInterpreter
             return null;
         }
 
-        PdfObject? fontObject = resources.GetDictionary("Font")?.Get(fontName.Value);
+        PdfObject? fontObject = (_document.Resolve(resources.Get("Font")) as PdfDictionary)?.Get(fontName.Value);
         PdfIndirectRef? reference = fontObject as PdfIndirectRef;
         PdfDictionary? dictionary = _document.Resolve(fontObject) as PdfDictionary;
         if (dictionary is null)
@@ -1561,7 +1562,7 @@ public sealed class PdfContentInterpreter
     {
         PdfObject? resolved = space;
 
-        if (space is PdfName name && resources?.GetDictionary("ColorSpace") is { } resourceSpaces &&
+        if (space is PdfName name && _document.Resolve(resources?.Get("ColorSpace")) is PdfDictionary resourceSpaces &&
             resourceSpaces.Get(name.Value) is { } resourceSpace)
         {
             resolved = _document.Resolve(resourceSpace);
@@ -1815,7 +1816,7 @@ public sealed class PdfContentInterpreter
         PdfObject? resolved = _document.Resolve(operand);
         if (resolved is PdfName name)
         {
-            PdfObject? entry = resources?.GetDictionary("Pattern")?.Get(name.Value);
+            PdfObject? entry = (_document.Resolve(resources?.Get("Pattern")) as PdfDictionary)?.Get(name.Value);
             return _document.Resolve(entry);
         }
 

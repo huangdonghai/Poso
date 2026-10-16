@@ -810,6 +810,29 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// A 4x4pt page whose <c>/XObject</c> resource dictionary is itself an indirect reference - legal for
+    /// any PDF value, and what some generators emit. Read without resolving it, the <c>Do</c> finds no
+    /// image and the page stays blank without a single diagnostic.
+    /// </summary>
+    public static byte[] CreateIndirectXObjectPdf()
+    {
+        byte[] pixels = new byte[4 * 4 * 3];
+        for (int i = 0; i < pixels.Length; i += 3)
+        {
+            pixels[i] = 255;
+        }
+
+        string content = "q 4 0 0 4 0 0 cm /Im1 Do Q";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 4 4] /Resources << /XObject 6 0 R >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            new PdfObjectDefinition(5, $"<< /Type /XObject /Subtype /Image /Width 4 /Height 4 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length {pixels.Length} >>", pixels),
+            new PdfObjectDefinition(6, "<< /Im1 5 0 R >>"));
+    }
+
+    /// <summary>
     /// A 200x100 page drawing a 40x20 JBIG2 bilevel image (page-information + a single MMR generic
     /// region) scaled to fill the page. <paramref name="jbig2"/> is the complete JBIG2 page stream.
     /// </summary>
