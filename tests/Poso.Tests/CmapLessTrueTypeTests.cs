@@ -161,6 +161,59 @@ public class CmapLessTrueTypeTests
         Assert.True(cmapLength >= 4 + (2 * 8));
     }
 
+    /// <summary>
+    /// Only a Windows / Unicode BMP cmap record is trusted; every other shape gets the empty readable one
+    /// appended, because PeachDrawing.Text refuses to open a font without it. Measured against the back
+    /// end: a Unicode record under platform 0 throws "Font has no usable platform or encoding ID" however
+    /// it is spelled except encoding 3, and a Macintosh record onto a format 6 subtable throws too. The
+    /// corpus fonts that were lost this way were exactly the platform 0 / encoding 1 shape a macOS
+    /// subsetter writes, which the old check accepted as usable.
+    /// </summary>
+    [Theory]
+    [InlineData(0, 0)]
+    [InlineData(0, 1)]
+    [InlineData(0, 3)]
+    [InlineData(0, 4)]
+    [InlineData(1, 0)]
+    [InlineData(3, 0)]
+    public void RepairSubset_AppendsAReadableCmapRecordToAnythingElse(int platform, int encoding)
+    {
+        byte[] sfnt = StubSfnt([
+            ("cmap", StubCmapWithRecord((ushort)platform, (ushort)encoding)),
+            ("head", new byte[54]),
+            ("maxp", [0x00, 0x01, 0x00, 0x00, 0x00, 0x02]),
+            ("name", StubNameTable("Probe Family")),
+            ("OS/2", new byte[96]),
+            ("post", new byte[32]),
+        ]);
+
+        byte[]? repaired = PeachFont.RepairSubset(sfnt, "Probe Family");
+
+        Assert.NotNull(repaired);
+
+        // The original record stays and the empty Windows Unicode BMP one is appended after it.
+        (string _, int offset, int _) = ReadDirectory(repaired!).First(e => e.Tag == "cmap");
+        Assert.Equal(2, (repaired![offset + 2] << 8) | repaired[offset + 3]);
+        Assert.Equal(platform, (repaired[offset + 4] << 8) | repaired[offset + 5]);
+        Assert.Equal(3, (repaired[offset + 12] << 8) | repaired[offset + 13]);
+        Assert.Equal(1, (repaired[offset + 14] << 8) | repaired[offset + 15]);
+    }
+
+    [Fact]
+    public void RepairSubset_LeavesAFontWithAReadableCmapRecordAlone()
+    {
+        byte[] sfnt = StubSfnt([
+            ("cmap", StubCmapWithRecord(3, 1)),
+            ("head", new byte[54]),
+            ("maxp", [0x00, 0x01, 0x00, 0x00, 0x00, 0x02]),
+            ("name", StubNameTable("Probe Family")),
+            ("OS/2", new byte[96]),
+            ("post", new byte[32]),
+        ]);
+
+        Assert.Null(PeachFont.RepairSubset(sfnt, "Probe Family"));
+    }
+
     /// <summary>A cmap directory with one record for the given platform and encoding.</summary>
     private static byte[] StubCmapWithRecord(ushort platform, ushort encoding)
     {

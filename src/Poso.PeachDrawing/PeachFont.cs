@@ -162,7 +162,7 @@ public sealed class PeachFont : IFont
             switch (tag)
             {
                 case "cmap":
-                    hasUsableCmap = HasUnicodeBmpSubtable(data, offset, length);
+                    hasUsableCmap = HasUsableCmapSubtable(data, offset, length);
                     cmapOffset = offset;
                     cmapLength = length;
                     break;
@@ -373,11 +373,13 @@ public sealed class PeachFont : IFont
     }
 
     /// <summary>
-    /// Whether a cmap offers a subtable PeachDrawing will read: the Windows / Unicode-BMP (3,1) or a
-    /// Unicode (0,x) pairing. A Macintosh-only cmap (platform 1) makes it reject the whole font with
-    /// "no usable platform or encoding ID", which loses the embedded program.
+    /// True when the cmap already holds the record PeachDrawing.Text is known to read: Windows platform,
+    /// Unicode BMP encoding. Measured against the back end, a Unicode record under platform 0 is refused
+    /// ("no usable platform or encoding ID") unless its encoding is 3, and a Macintosh record onto a
+    /// format 6 subtable is refused whatever its encoding, so the record ID alone does not decide - any
+    /// cmap other than (3,1) gets the empty record <see cref="WithUnicodeBmpSubtable"/> appends.
     /// </summary>
-    private static bool HasUnicodeBmpSubtable(byte[] data, int tableOffset, int tableLength)
+    private static bool HasUsableCmapSubtable(byte[] data, int tableOffset, int tableLength)
     {
         if (tableLength < 4 || data.Length < tableOffset + tableLength)
         {
@@ -393,14 +395,8 @@ public sealed class PeachFont : IFont
         for (int i = 0; i < count; i++)
         {
             int record = tableOffset + 4 + (i * 8);
-            ushort platform = BinaryPrimitives.ReadUInt16BigEndian(data.AsSpan(record));
-            ushort encoding = BinaryPrimitives.ReadUInt16BigEndian(data.AsSpan(record + 2));
-            if (platform == 3 && encoding == 1)
-            {
-                return true;
-            }
-
-            if (platform == 0)
+            if (BinaryPrimitives.ReadUInt16BigEndian(data.AsSpan(record)) == 3
+                && BinaryPrimitives.ReadUInt16BigEndian(data.AsSpan(record + 2)) == 1)
             {
                 return true;
             }
