@@ -144,6 +144,11 @@ public abstract class PdfFont
             return null;
         }
 
+        if (CffOpenType.TryExtractCff(data, out byte[]? wrappedCff) && wrappedCff is not null)
+        {
+            data = wrappedCff;
+        }
+
         // A bare CFF (FontFile Type1, FontFile3 Type1C/CFF) is a glyph program, not a font container:
         // package it as OpenType so the back end can load it, and keep the parsed program around so
         // glyph names from the PDF encoding can be resolved to glyph IDs.

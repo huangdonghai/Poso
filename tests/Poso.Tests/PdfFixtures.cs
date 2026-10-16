@@ -256,6 +256,30 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// A 200x100 page whose symbolic /Type1 font embeds the given program as <c>FontFile3</c> with
+    /// /Subtype /Type1C - the shape a producer that converts Type 1 to CFF emits. Lets a test hand the
+    /// reader a program in exactly the container form it finds in the wild (bare CFF, or an 'OTTO'
+    /// sfnt that carries nothing but that CFF). Code 97 is the glyph named 'a'.
+    /// </summary>
+    public static byte[] CreateType1CffPdf(byte[] fontProgram, string fontName = "CffOnlyTest")
+    {
+        string font = $"<< /Type /Font /Subtype /Type1 /BaseFont /{fontName} /Flags 4 "
+            + "/FirstChar 97 /LastChar 97 /Widths [600] /FontDescriptor 6 0 R >>";
+        string descriptor = $"<< /Type /FontDescriptor /FontName /{fontName} /Flags 4 /FontBBox [0 -200 700 900] "
+            + "/Ascent 750 /Descent -250 /ItalicAngle 0 /StemV 80 /FontFile3 7 0 R /Subtype /Type1C >>";
+        string content = "BT /F1 60 Tf 30 30 Td (a) Tj ET";
+
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            new PdfObjectDefinition(5, font),
+            new PdfObjectDefinition(6, descriptor),
+            Stream(7, string.Empty, fontProgram));
+    }
+
+    /// <summary>
     /// A 200x120 page drawing two CID glyphs (codes 1 and 2 under /Identity-H) using a handcrafted
     /// <b>CID-keyed binary Type 1</b> program (Adobe TN 5014) embedded as <c>FontFile</c> behind a
     /// Type0 / CIDFontType0 descendant. Each CID glyph is a filled rectangle, so the whole Type 0 decode

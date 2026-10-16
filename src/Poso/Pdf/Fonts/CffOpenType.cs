@@ -52,6 +52,53 @@ internal static class CffOpenType
 
     private static string Tag(byte[] table) => System.Text.Encoding.ASCII.GetString(table, 0, 4);
 
+    /// <summary>
+    /// Unwraps the CFF table of an sfnt container that carries nothing a parser needs besides it. Some
+    /// generators emit a FontFile3 program as 'OTTO' with a two-entry directory (CFF and cmap) and no
+    /// head, maxp or name table, which no font back end will open; the CFF inside is a perfectly good
+    /// bare program. Returns false for a real sfnt font, which is one that has a head table.
+    /// </summary>
+    public static bool TryExtractCff(byte[] program, out byte[]? cff)
+    {
+        cff = null;
+        if (program.Length < 12 || System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(program) != 0x4F54544F)
+        {
+            return false;
+        }
+
+        int count = System.Buffers.Binary.BinaryPrimitives.ReadUInt16BigEndian(program.AsSpan(4));
+        if (program.Length < 12 + (count * 16))
+        {
+            return false;
+        }
+
+        int cffOffset = -1;
+        int cffLength = 0;
+        for (int i = 0; i < count; i++)
+        {
+            int entry = 12 + (i * 16);
+            string tag = System.Text.Encoding.ASCII.GetString(program, entry, 4);
+            if (tag == "head")
+            {
+                return false;
+            }
+
+            if (tag == "CFF ")
+            {
+                cffOffset = (int)System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(program.AsSpan(entry + 8));
+                cffLength = (int)System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(program.AsSpan(entry + 12));
+            }
+        }
+
+        if (cffOffset < 0 || cffLength <= 0 || program.Length < cffOffset + cffLength)
+        {
+            return false;
+        }
+
+        cff = program[cffOffset..(cffOffset + cffLength)];
+        return true;
+    }
+
     private static byte[] Table(string tag, byte[] body)
     {
         byte[] table = new byte[4 + body.Length];
