@@ -476,6 +476,31 @@ public static class PdfFixtures
             new PdfObjectDefinition(5, $"<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length {pixels.Length} >>", pixels));
     }
 
+    /// <summary>
+    /// A 3x4 image whose Indexed colour space carries its colour table as a compressed <b>stream</b> over a
+    /// DeviceCMYK base (PDF 32000-1:2008 8.7.2 permits a string or a stream, and generators use the stream
+    /// form once the table is large). The three indices are white, black and red. Reading only the string
+    /// form left the table empty, which painted every index - including the white background - black.
+    /// </summary>
+    public static byte[] CreateIndexedStreamPalettePdf()
+    {
+        byte[] palette = [
+            0, 0, 0, 0, // CMYK all zero: white
+            0, 0, 0, 255, // full key: black
+            0, 255, 255, 0, // magenta and yellow: red
+        ];
+        byte[] samples = [0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2];
+
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 3 4] /Resources << /XObject << /Im1 5 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes("q 3 0 0 4 0 0 cm /Im1 Do Q")),
+            new PdfObjectDefinition(5, $"<< /Type /XObject /Subtype /Image /Width 3 /Height 4 /BitsPerComponent 8 /ColorSpace 6 0 R /Filter /FlateDecode /Length {Flate(samples).Length} >>", Flate(samples)),
+            new PdfObjectDefinition(6, "[ /Indexed /DeviceCMYK 2 7 0 R ]"),
+            Stream(7, "/Filter /FlateDecode", Flate(palette)));
+    }
+
     /// <summary>A page that draws an embedded DCTDecode (JPEG) image 1:1, on a page matching its pixel size.</summary>
     public static byte[] CreateDctDecodeImagePdf(byte[] jpeg, int width, int height)
     {

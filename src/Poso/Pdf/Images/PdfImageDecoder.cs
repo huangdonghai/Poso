@@ -554,6 +554,18 @@ public static class PdfImageDecoder
         return (ToByte(r), ToByte(g), ToByte(b));
     }
 
+    /// <summary>
+    /// Reads an Indexed colour space's colour table. PDF 32000-1:2008 8.7.2 allows it as a string or as a
+    /// stream, and generators switch to the stream form once the table is large; reading only the string
+    /// left the table empty, which paints every index - including the white background - black.
+    /// </summary>
+    internal static byte[] ReadIndexedPalette(PdfObject? paletteObject) => paletteObject switch
+    {
+        PdfString text => text.Bytes,
+        PdfStream stream => stream.Decode(),
+        _ => Array.Empty<byte>(),
+    };
+
     private static (byte R, byte G, byte B) IndexedToRgb(ColorSpaceInfo space, int index)
     {
         byte[] lookup = space.Lookup;
@@ -737,11 +749,11 @@ public static class PdfImageDecoder
                         };
 
                     case "Indexed" or "I":
-                        PdfObject? baseSpace = document.Resolve(array[1]);
-                        ColorSpaceInfo? baseInfo = baseSpace is PdfName baseName ? ResolveColorSpace(document, baseName) : null;
+                        // The base space may itself be an array (an ICCBased palette is common), so it is
+                        // resolved rather than assumed to be three-component RGB.
+                        ColorSpaceInfo? baseInfo = ResolveColorSpace(document, document.Resolve(array[1]));
                         int hival = array.GetNumber(2)?.AsInt() ?? 255;
-                        PdfString? lookup = document.Resolve(array[3]) as PdfString;
-                        byte[] lookupBytes = lookup?.Bytes ?? Array.Empty<byte>();
+                        byte[] lookupBytes = ReadIndexedPalette(document.Resolve(array[3]));
                         int baseComponents = baseInfo?.Components ?? 3;
                         return new ColorSpaceInfo(ColorSpaceKind.Indexed, 1, lookupBytes, baseComponents);
 

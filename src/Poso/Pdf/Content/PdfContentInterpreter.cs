@@ -1611,7 +1611,7 @@ public sealed class PdfContentInterpreter
                         kind = ColorSpaceKind.Indexed;
                         components = 1;
                         lookupComponents = ComponentsOfName(_document.Resolve(array[1]) as PdfName);
-                        lookup = (_document.Resolve(array[3]) as PdfString)?.Bytes ?? Array.Empty<byte>();
+                        lookup = PdfImageDecoder.ReadIndexedPalette(_document.Resolve(array[3]));
                         break;
 
                     case "Separation":
