@@ -123,12 +123,25 @@ public sealed class PdfShading
         PdfArray? extend = dictionary.GetArray("Extend");
         if (extend is not null)
         {
-            shading._extend[0] = (extend.GetNumber(0)?.AsInt() ?? 0) != 0;
-            shading._extend[1] = (extend.GetNumber(1)?.AsInt() ?? 0) != 0;
+            shading._extend[0] = IsTrue(extend, 0);
+            shading._extend[1] = IsTrue(extend, 1);
         }
 
         return shading;
     }
+
+    /// <summary>
+    /// Reads one /Extend entry. The specification writes these as booleans, which is what Illustrator
+    /// emits, so a reader that only accepts numbers sees false and clips the gradient at its end circle
+    /// instead of painting the extended colour out to the edge of the clip.
+    /// </summary>
+    private static bool IsTrue(PdfArray array, int index) =>
+        index < array.Count && array[index] switch
+        {
+            PdfBoolean flag => flag.Value,
+            PdfNumber number => number.AsFloat() != 0f,
+            _ => false,
+        };
 
     /// <summary>
     /// Rasterises the shading into a BGRA image covering <paramref name="deviceBounds"/>.

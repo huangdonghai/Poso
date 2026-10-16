@@ -75,6 +75,29 @@ public class ShadingTests
         Assert.True(right.G > 150 && right.R < 80, $"tint 1 should be green (got {right})");
     }
 
+    /// <summary>
+    /// <c>/Extend [true true]</c> must paint the end colour past the end circle. The entries are PDF
+    /// booleans, so a reader that asks for a number sees false and clips the gradient: a full-page wash
+    /// then stops dead in a hard circle in the middle of the page.
+    /// </summary>
+    [Fact]
+    public void ExtendedRadialShading_PaintsPastTheEndCircle()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateExtendedRadialShadingPdf());
+        using IGraphicsContext context = Factory.CreateContext(200, 200);
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] pixels = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(pixels);
+
+        foreach ((int x, int y) in new[] { (5, 5), (195, 5), (5, 195), (195, 195) })
+        {
+            byte gray = GrayAt(pixels, image.Width, y, x);
+            Assert.True(gray < 40, $"page corner ({x},{y}) should carry the extended colour (got {gray})");
+        }
+    }
+
     private static (byte, byte, byte) At(byte[] pixels, int width, int y, int x)
     {
         int offset = ((y * width) + x) * 4;

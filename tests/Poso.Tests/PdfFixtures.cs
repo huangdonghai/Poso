@@ -807,6 +807,26 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// A 200x200 page painted with a small radial shading (end circle radius 20 at the centre) carrying
+    /// <c>/Extend [true true]</c> and a constant black function, over a white background. Everything
+    /// outside the end circle must still be black; a reader that misses the boolean Extend entries
+    /// leaves the corners white.
+    /// </summary>
+    public static byte[] CreateExtendedRadialShadingPdf()
+    {
+        string content = "q 0 0 200 200 re W n /Sh0 sh Q";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] "
+                + "/Resources << /Shading << /Sh0 6 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            new PdfObjectDefinition(6, "<< /ShadingType 3 /ColorSpace /DeviceGray /Coords [100 100 0 100 100 20] "
+                + "/Domain [0 1] /Extend [true true] /Function 7 0 R >>"),
+            new PdfObjectDefinition(7, "<< /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [0] /N 1 >>"));
+    }
+
+    /// <summary>
     /// A 200x100 page painted with the <c>sh</c> operator from a named shading whose colour space is a
     /// <b>Separation over DeviceRGB</b>: the shading function ramps one tint and only the tint transform
     /// turns it into a colour, so the page must go red (tint 0) to green (tint 1). Reading the tint as a
