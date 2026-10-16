@@ -105,7 +105,7 @@ public sealed class CffProgram : ICffMetrics
         return index < Strings.Length ? Strings[index] : null;
     }
 
-    /// <summary>Parses a name-keyed CFF; returns false for CID-keyed, encrypted or malformed programs.</summary>
+    /// <summary>Parses a name-keyed CFF; returns false for CID-keyed or malformed programs.</summary>
     public static bool TryCreate(byte[] data, out CffProgram? program)
     {
         program = null;
@@ -128,8 +128,10 @@ public sealed class CffProgram : ICffMetrics
             return false;
         }
 
-        // ROS makes the program CID-keyed and /Encrypt wraps the charstrings: neither is addressable here
-        if (dict.Contains((12 << 8) | 30) || dict.Contains(30) || dict.Contains(14))
+        // ROS makes the program CID-keyed, which this name-keyed reader cannot address. Operator 14 is
+        // XUID, the Type 1 cross-use identifier inherited by converted fonts, and says nothing about the
+        // charstrings, so it must not reject the program.
+        if (dict.Contains((12 << 8) | 30) || dict.Contains(30))
         {
             return false;
         }

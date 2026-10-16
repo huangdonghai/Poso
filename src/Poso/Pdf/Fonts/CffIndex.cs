@@ -189,7 +189,7 @@ internal sealed class CffDict
 
         if (b is >= 251 and <= 254)
         {
-            return -((b - 248) * 256) - data[i++] - 108;
+            return -((b - 251) * 256) - data[i++] - 108;
         }
 
         switch (b)

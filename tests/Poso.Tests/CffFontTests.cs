@@ -75,12 +75,38 @@ public class CffFontTests
     }
 
     [Fact]
-    public void TryCreate_RejectsCidKeyedEncryptedAndForeignData()
+    public void TryCreate_RejectsCidKeyedAndForeignData()
     {
         Assert.False(CffProgram.TryCreate(CffFixture.Build(cidKeyed: true), out _));
-        Assert.False(CffProgram.TryCreate(CffFixture.Build(encrypted: true), out _));
         Assert.False(CffProgram.TryCreate([1, 2, 3, 4, 5], out _));
         Assert.False(CffProgram.TryCreate(new byte[9000], out _));
+    }
+
+    [Fact]
+    public void TryCreate_AcceptsAFontThatCarriesAnXuid()
+    {
+        // Regression: Top DICT operator 14 was read as the CFF Encrypt marker, so every program that
+        // inherited a Type 1 XUID array was dropped and the page drew in a system face without a word.
+        // Two Fontworks calligraphic math fonts in a Chinese textbook were lost exactly this way.
+        byte[] cff = CffFixture.Build(xuid: true);
+
+        Assert.True(CffProgram.TryCreate(cff, out CffProgram? program));
+        Assert.NotNull(program);
+        Assert.Equal(3, program!.GlyphCount);
+        Assert.True(program.TryGetGlyphId("a", out ushort a));
+        Assert.Equal(2, a);
+    }
+
+    [Fact]
+    public void DictOperands_DecodeNegativeTwoByteIntegers()
+    {
+        // The FontBBox of a real subset font: 20, -121, 1289, 812. The negative operand is encoded as
+        // 251 followed by 13, which decodes as -((b - 251) * 256) - second - 108; using 248 as the base
+        // made every value in that range 768 too small.
+        byte[] dict = [0x9f, 0xfb, 0x0d, 0x1c, 0x05, 0x09, 0xf9, 0xc0, 0x05];
+
+        Assert.True(CffDict.TryParse(dict, out CffDict? parsed));
+        Assert.Equal([20f, -121f, 1289f, 812f], parsed!.GetArray(5)!);
     }
 
     [Fact]
@@ -104,7 +130,7 @@ public class CffFontTests
 /// <summary>Assembles a tiny name-keyed CFF so the reader can be tested without a real font file.</summary>
 internal static class CffFixture
 {
-    public static byte[] Build(bool withEncoding = false, bool cidKeyed = false, bool encrypted = false, string customName = "a")
+    public static byte[] Build(bool withEncoding = false, bool cidKeyed = false, bool xuid = false, string customName = "a")
     {
         // Glyph names: gid 1 is the standard string "space", gid 2 is either "a" (SID 66) or a
         // font specific string placed beyond the standard range
@@ -127,7 +153,7 @@ internal static class CffFixture
         // Offsets are absolute from the start of the program. Fixed() keeps every offset operand
         // five bytes wide, so measuring the probe dict and filling it in later cannot disagree.
         int afterHeader = 4 + nameIndex.Length;
-        byte[] probe = TopDict(withEncoding, cidKeyed, encrypted, 0, 0, 0, privateDict.Length, 0);
+        byte[] probe = TopDict(withEncoding, cidKeyed, xuid, 0, 0, 0, privateDict.Length, 0);
         int afterTopDict = afterHeader + probe.Length + 5; // Index() of a single item adds five bytes
         int afterGlobals = afterTopDict + stringIndex.Length + globalIndex.Length;
         int encodingOffset = withEncoding ? afterGlobals : 0;
@@ -135,7 +161,7 @@ internal static class CffFixture
         int charStringsOffset = charsetOffset + charset.Length;
         int privateOffset = charStringsOffset + charStrings.Length;
 
-        byte[] topDict = TopDict(withEncoding, cidKeyed, encrypted, encodingOffset, charsetOffset, charStringsOffset, privateDict.Length, privateOffset);
+        byte[] topDict = TopDict(withEncoding, cidKeyed, xuid, encodingOffset, charsetOffset, charStringsOffset, privateDict.Length, privateOffset);
         if (topDict.Length != probe.Length)
         {
             throw new InvalidOperationException("the fixture top dict changed length between passes");
@@ -153,7 +179,7 @@ internal static class CffFixture
         return data.ToArray();
     }
 
-    private static byte[] TopDict(bool withEncoding, bool cidKeyed, bool encrypted, int encodingOffset, int charsetOffset, int charStringsOffset, int privateLength, int privateOffset)
+    private static byte[] TopDict(bool withEncoding, bool cidKeyed, bool xuid, int encodingOffset, int charsetOffset, int charStringsOffset, int privateLength, int privateOffset)
     {
         var dict = new List<byte>();
         dict.AddRange(Numbers([0, 0, 500, 700]));
@@ -173,10 +199,11 @@ internal static class CffFixture
             dict.AddRange([12, 30]); // ROS
         }
 
-        if (encrypted)
+        if (xuid)
         {
-            dict.AddRange(Numbers([42]));
-            dict.Add(14); // Encrypt
+            dict.AddRange(Numbers([6]));
+            dict.AddRange([29, 0x00, 0x3f, 0x99, 0xa7]);
+            dict.Add(14); // XUID, the Type 1 cross-use identifier array
         }
 
         dict.AddRange(Fixed(charsetOffset));
