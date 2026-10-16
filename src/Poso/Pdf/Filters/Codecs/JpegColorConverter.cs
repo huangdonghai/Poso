@@ -15,10 +15,84 @@ namespace Poso.Pdf.Filters.Codecs;
 internal static class JpegColorConverter
 {
     /// <summary>
+    /// Converts a decoded JPEG of any component count into tightly packed BGRA (premultiplied, opaque).
+    /// Used when a back end cannot decode the file at all - PeachDrawing has no SOF1 extended
+    /// sequential decoder, which blanked a book cover - so the greyscale and YCbCr paths the CMYK-only
+    /// entry point never needed have to exist here.
+    /// </summary>
+    public static byte[]? ToBgra32(JpegDecoder.Result image)
+    {
+        if (image.ComponentCount == 4)
+        {
+            return ToBgra32FromCmyk(image);
+        }
+
+        int count = image.Width * image.Height;
+        if (image.Planes.Length < image.ComponentCount || image.ComponentCount is not (1 or 3))
+        {
+            return null;
+        }
+
+        var bgra = new byte[count * 4];
+        if (image.ComponentCount == 1)
+        {
+            byte[] gray = image.Planes[0];
+            for (int i = 0; i < count; i++)
+            {
+                int o = i * 4;
+                bgra[o] = bgra[o + 1] = bgra[o + 2] = gray[i];
+                bgra[o + 3] = 255;
+            }
+
+            return bgra;
+        }
+
+        byte[] first = image.Planes[0];
+        byte[] second = image.Planes[1];
+        byte[] third = image.Planes[2];
+
+        // Adobe transform 0 stores the planes as they are named; anything else (including a bare JFIF
+        // file with no Adobe marker) is YCbCr and must be expanded.
+        bool straightRgb = image.AdobeTransform == 0;
+        for (int i = 0; i < count; i++)
+        {
+            byte r;
+            byte g;
+            byte b;
+            if (straightRgb)
+            {
+                r = first[i];
+                g = second[i];
+                b = third[i];
+            }
+            else
+            {
+                // ITU-R T.871 / JFIF full-range YCbCr.
+                float y = first[i];
+                float cb = second[i] - 128f;
+                float cr = third[i] - 128f;
+                r = Clamp255(y + 1.402f * cr);
+                g = Clamp255(y - 0.344136f * cb - 0.714136f * cr);
+                b = Clamp255(y + 1.772f * cb);
+            }
+
+            int o = i * 4;
+            bgra[o] = b;
+            bgra[o + 1] = g;
+            bgra[o + 2] = r;
+            bgra[o + 3] = 255;
+        }
+
+        return bgra;
+    }
+
+    private static byte Clamp255(float value) => (byte)Math.Clamp((int)MathF.Round(value), 0, 255);
+
+    /// <summary>
     /// Converts a decoded 4-component JPEG into tightly packed BGRA (premultiplied, opaque) pixels.
     /// Returns null when the image does not have exactly four components.
     /// </summary>
-    public static byte[]? ToBgra32(JpegDecoder.Result image)
+    private static byte[]? ToBgra32FromCmyk(JpegDecoder.Result image)
     {
         byte[]? cmyk = ToCmyk(image);
         if (cmyk is null)

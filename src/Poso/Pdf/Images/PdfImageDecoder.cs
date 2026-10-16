@@ -120,6 +120,16 @@ public static class PdfImageDecoder
             IImage? raster = factory.DecodeImage(encoded);
             if (raster is null)
             {
+                // The backend has no decoder for this JPEG - PeachDrawing rejects SOF1 extended
+                // sequential outright, which blanked a whole book cover - so fall back to the managed
+                // decoder, which handles baseline and extended sequential.
+                JpegDecoder.Result? managed = JpegDecoder.Decode(encoded);
+                byte[]? managedPixels = managed is null ? null : JpegColorConverter.ToBgra32(managed);
+                if (managedPixels is not null)
+                {
+                    return factory.CreateImage(managed!.Width, managed.Height, PixelFormat.Bgra8888Premul, managedPixels);
+                }
+
                 diagnostics?.Report(
                     PdfUnsupportedKind.ImageCodec,
                     $"The backend could not decode {string.Join(",", filters)}");

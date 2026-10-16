@@ -544,7 +544,7 @@ public static class PdfFixtures
     }
 
     /// <summary>A page that draws an embedded DCTDecode (JPEG) image 1:1, on a page matching its pixel size.</summary>
-    public static byte[] CreateDctDecodeImagePdf(byte[] jpeg, int width, int height)
+    public static byte[] CreateDctDecodeImagePdf(byte[] jpeg, int width, int height, string colorSpace = "/DeviceCMYK")
     {
         string content = $"q {width} 0 0 {height} 0 0 cm /Im1 Do Q";
 
@@ -553,7 +553,7 @@ public static class PdfFixtures
             new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
             new PdfObjectDefinition(3, $"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] /Resources << /XObject << /Im1 5 0 R >> >> /Contents 4 0 R >>"),
             Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
-            new PdfObjectDefinition(5, $"<< /Type /XObject /Subtype /Image /Width {width} /Height {height} /ColorSpace /DeviceCMYK /BitsPerComponent 8 /Filter /DCTDecode /Length {jpeg.Length} >>", jpeg));
+            new PdfObjectDefinition(5, $"<< /Type /XObject /Subtype /Image /Width {width} /Height {height} /ColorSpace {colorSpace} /BitsPerComponent 8 /Filter /DCTDecode /Length {jpeg.Length} >>", jpeg));
     }
 
     /// <summary>
