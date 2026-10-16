@@ -457,9 +457,18 @@ public sealed class PdfContentInterpreter
                     // Nested objects: hand over to the full parser
                     int rewind = token.Kind == PdfTokenKind.ArrayOpen ? 1 : 2;
                     var parser = new PdfParser(content, lexer.Position - rewind);
-                    PdfObject value = parser.ParseObject();
-                    lexer.Position = parser.Position;
-                    operands.Push(value);
+                    try
+                    {
+                        operands.Push(parser.ParseObject());
+                    }
+                    catch (PdfFormatException)
+                    {
+                        // A content stream that is not really content - an undecodable filter left the
+                        // compressed bytes in place - is full of tokens no operand can be. MuPDF carries
+                        // on past them; stopping here would lose the whole page.
+                    }
+
+                    lexer.Position = Math.Max(lexer.Position, parser.Position);
                     break;
                 }
 
