@@ -2506,6 +2506,8 @@ public sealed class PdfContentInterpreter
             }
         }
 
+        ApplyInlineAbbreviations(dictionary);
+
         // Binary data runs until whitespace followed by "EI"
         int dataStart = lexer.Position;
         int dataEnd = FindInlineImageEnd(lexer.Data, dataStart);
@@ -2533,6 +2535,68 @@ public sealed class PdfContentInterpreter
 
         operands.Clear();
     }
+
+    /// <summary>
+    /// Fold an inline image's abbreviated keys into the full names every other image reader uses, and do
+    /// the same for its abbreviated filter names. 32000-2:2020 8.9.7 settles a dictionary that carries
+    /// both forms: the abbreviation wins.
+    /// </summary>
+    private static void ApplyInlineAbbreviations(Dictionary<string, PdfObject> dictionary)
+    {
+        foreach ((string abbreviated, string full) in InlineAbbreviations)
+        {
+            if (dictionary.TryGetValue(abbreviated, out PdfObject? value))
+            {
+                dictionary[full] = value;
+                dictionary.Remove(abbreviated);
+            }
+        }
+
+        switch (dictionary.GetValueOrDefault("Filter"))
+        {
+            case PdfName name:
+                dictionary["Filter"] = FilterName(name);
+                break;
+
+            case PdfArray array:
+                var expanded = new List<PdfObject>(array.Count);
+                foreach (PdfObject item in array)
+                {
+                    expanded.Add(item is PdfName itemNamed ? FilterName(itemNamed) : item);
+                }
+
+                dictionary["Filter"] = new PdfArray(expanded);
+                break;
+        }
+    }
+
+    private static PdfName FilterName(PdfName name) =>
+        InlineFilterNames.TryGetValue(name.Value, out string? full) ? new PdfName(full) : name;
+
+    private static readonly Dictionary<string, string> InlineFilterNames = new(StringComparer.Ordinal)
+    {
+        ["AHx"] = "ASCIIHexDecode",
+        ["A85"] = "ASCII85Decode",
+        ["Fl"] = "FlateDecode",
+        ["LZW"] = "LZWDecode",
+        ["DCT"] = "DCTDecode",
+        ["CCF"] = "CCITTFaxDecode",
+        ["RLE"] = "RunLengthDecode",
+    };
+
+    private static readonly (string Abbreviated, string Full)[] InlineAbbreviations =
+    [
+        ("BPC", "BitsPerComponent"),
+        ("CS", "ColorSpace"),
+        ("D", "Decode"),
+        ("DP", "DecodeParms"),
+        ("F", "Filter"),
+        ("H", "Height"),
+        ("IM", "ImageMask"),
+        ("I", "Interpolate"),
+        ("L", "Length"),
+        ("W", "Width"),
+    ];
 
     private PdfObject? ReadInlineValue(PdfLexer lexer)
     {
