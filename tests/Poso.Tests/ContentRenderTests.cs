@@ -322,7 +322,7 @@ public class ContentRenderTests
     /// whole page is lost; the pattern is dropped and the line strokes solid instead.
     /// </summary>
     [Theory]
-    [MemberData("GraphicsFactories", MemberType = typeof(ShadingTests))]
+    [MemberData(nameof(ShadingTests.GraphicsFactories), MemberType = typeof(ShadingTests))]
     public void OddLengthDashArray_StillStrokesTheLine(IGraphicsFactory factory)
     {
         using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateOddDashPdf());

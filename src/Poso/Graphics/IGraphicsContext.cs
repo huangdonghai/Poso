@@ -48,7 +48,27 @@ public interface IGraphicsContext : IDisposable
     /// applied by the caller) and y is the baseline.
     /// <paramref name="strokeStyle"/> is used only by stroke-based rendering modes (Stroke/FillStroke/*Clip).
     /// </summary>
-    void DrawGlyphs(IFont font, float fontSize, ReadOnlySpan<GlyphPosition> glyphs, PosoColor color, TextRenderMode mode, in StrokeStyle strokeStyle);
+    void DrawGlyphs(IFont font, float fontSize, ReadOnlySpan<GlyphPosition> glyphs, PosoColor fillColor, PosoColor strokeColor, TextRenderMode mode, in StrokeStyle strokeStyle);
+
+    /// <summary>
+    /// Open the clip accumulator for one text object. PDF 32000-1:2008 9.3.6 requires the glyph outlines
+    /// shown in a clipping mode to accumulate until <c>ET</c> and then be applied as one path, so two
+    /// show-text runs inside a single <c>BT</c>/<c>ET</c> widen the clip rather than narrowing it to
+    /// their overlap.
+    /// </summary>
+    void OpenTextClip()
+    {
+    }
+
+    /// <summary>Add one run's outlines, placed into user space by <paramref name="runMatrix"/>, to the accumulator.</summary>
+    void AddTextClipRun(IFont font, ReadOnlySpan<GlyphPosition> glyphs, in Matrix3x2 runMatrix)
+    {
+    }
+
+    /// <summary>Intersect the accumulated outline into the clip and close the accumulator.</summary>
+    void CloseTextClip()
+    {
+    }
 
     /// <summary>
     /// Draw a PDF image. The destination rectangle is the image's unit square in user space; PDF puts the

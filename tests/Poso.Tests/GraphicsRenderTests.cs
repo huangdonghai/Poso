@@ -40,7 +40,7 @@ public class GraphicsRenderTests
                 new GlyphPosition(h, 30, 60),
                 new GlyphPosition(i, 30 + advanceH, 60),
             };
-            context.DrawGlyphs(font, 24f, glyphs, PosoColor.Blue, TextRenderMode.Fill, StrokeStyle.Default);
+            context.DrawGlyphs(font, 24f, glyphs, PosoColor.Blue, PosoColor.Blue, TextRenderMode.Fill, StrokeStyle.Default);
         }
 
         using IImage image = context.Snapshot();

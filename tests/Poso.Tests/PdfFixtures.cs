@@ -818,15 +818,15 @@ public static class PdfFixtures
     }
 
     /// <summary>
-    /// A page that clips to a glyph outline via text rendering mode 7 (Tr 7), then fills the whole
-    /// page red. The clip must persist, so red appears only inside the 'b' outline and the far
-    /// top-right corner stays white.
+    /// A page that clips to a glyph outline via text rendering mode 4 (Tr 4, fill and clip), then
+    /// fills the whole page red. The clip must persist, so red appears only inside the 'b' outline and
+    /// the far top-right corner stays white.
     /// </summary>
     public static byte[] CreateTextClipPdf()
     {
         string widths = string.Join(" ", Enumerable.Repeat("500", 95));
         string font = $"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding /FirstChar 32 /LastChar 126 /Widths [{widths}] >>";
-        string content = "BT /F1 60 Tf 60 20 Td 7 Tr (b) Tj ET\n1 0 0 rg 0 0 200 100 re f";
+        string content = "BT /F1 60 Tf 60 20 Td 4 Tr (b) Tj ET\n1 0 0 rg 0 0 200 100 re f";
 
         return Build(1,
             new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),

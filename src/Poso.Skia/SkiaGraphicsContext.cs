@@ -20,6 +20,7 @@ public sealed class SkiaGraphicsContext : IGraphicsContext
     private readonly SKPaint _strokePaint;
     private readonly SKPaint _imagePaint;
     private readonly Stack<Layer> _layers = new();
+    private SKPath? _textClip;
     private readonly int _width;
     private readonly int _height;
     private bool _snapshotTaken;
@@ -307,7 +308,8 @@ public sealed class SkiaGraphicsContext : IGraphicsContext
         IFont font,
         float fontSize,
         ReadOnlySpan<GlyphPosition> glyphs,
-        PosoColor color,
+        PosoColor fillColor,
+        PosoColor strokeColor,
         TextRenderMode mode,
         in StrokeStyle strokeStyle)
     {
@@ -318,14 +320,15 @@ public sealed class SkiaGraphicsContext : IGraphicsContext
 
         bool fill = mode is TextRenderMode.Fill or TextRenderMode.FillStroke or TextRenderMode.FillClip or TextRenderMode.FillStrokeClip;
         bool stroke = mode is TextRenderMode.Stroke or TextRenderMode.FillStroke or TextRenderMode.StrokeClip or TextRenderMode.FillStrokeClip;
-        bool clip = mode is TextRenderMode.FillClip or TextRenderMode.StrokeClip or TextRenderMode.FillStrokeClip or TextRenderMode.Clip;
+        bool clip = mode is TextRenderMode.FillClip or TextRenderMode.StrokeClip or TextRenderMode.FillStrokeClip;
 
         if (!fill && !stroke && !clip)
         {
             return;
         }
 
-        SKColor skColor = SkiaConversions.ToSKColor(color);
+        SKColor skColor = SkiaConversions.ToSKColor(fillColor);
+        SKColor skStroke = SkiaConversions.ToSKColor(strokeColor);
 
         // Fill-only runs (including vertical writing) go through a Skia text blob so the rasterised
         // glyphs are reused from its glyph atlas instead of re-filling an outline path per glyph -
@@ -376,11 +379,6 @@ public sealed class SkiaGraphicsContext : IGraphicsContext
             positioned.AddPath(outline, glyph.X, glyph.Y);
             positioned.FillType = outline.FillType;
 
-            if (clip)
-            {
-                _canvas.ClipPath(positioned, antialias: true);
-            }
-
             if (fill)
             {
                 _fillPaint.Color = skColor;
@@ -390,10 +388,49 @@ public sealed class SkiaGraphicsContext : IGraphicsContext
             if (stroke)
             {
                 SkiaConversions.ApplyStrokeStyle(_strokePaint, strokeStyle);
-                _strokePaint.Color = skColor;
+                _strokePaint.Color = skStroke;
                 _canvas.DrawPath(positioned, _strokePaint);
             }
         }
+    }
+
+    public void OpenTextClip()
+    {
+        _textClip?.Dispose();
+        _textClip = new SKPath { FillType = SKPathFillType.Winding };
+    }
+
+    public void AddTextClipRun(IFont font, ReadOnlySpan<GlyphPosition> glyphs, in Matrix3x2 runMatrix)
+    {
+        if (_textClip is null || font is not SkiaFont skiaFont)
+        {
+            return;
+        }
+
+        SKMatrix run = SkiaConversions.ToSKMatrix(runMatrix);
+        foreach (GlyphPosition glyph in glyphs)
+        {
+            using SKPath? outline = skiaFont.GetGlyphOutlinePath(glyph.GlyphId);
+            if (outline is null || outline.IsEmpty)
+            {
+                continue;
+            }
+
+            using var placed = new SKPath { FillType = outline.FillType };
+            placed.AddPath(outline, glyph.X, glyph.Y, SKPathAddMode.Append);
+            _textClip.AddPath(placed, run, SKPathAddMode.Append);
+        }
+    }
+
+    public void CloseTextClip()
+    {
+        if (_textClip is { IsEmpty: false } path)
+        {
+            _canvas.ClipPath(path, SKClipOperation.Intersect, antialias: true);
+        }
+
+        _textClip?.Dispose();
+        _textClip = null;
     }
 
     public void DrawImage(IImage image, in RectF destinationRect, in RectF sourceRect, float alpha)

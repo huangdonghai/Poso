@@ -744,12 +744,15 @@ public sealed class PdfContentInterpreter
         {
             _textMatrix = Matrix3x2.Identity;
             _textLineMatrix = _textMatrix;
+            _context.OpenTextClip();
             operands.Clear();
             return;
         }
 
         if (lexer.Match(token, "ET"u8))
         {
+            // The glyphs a text object accumulated are one clip, applied now.
+            _context.CloseTextClip();
             operands.Clear();
             return;
         }
@@ -1320,7 +1323,12 @@ public sealed class PdfContentInterpreter
                 };
             }
 
-            _context.DrawGlyphs(graphicsFont, fontSize, glyphs.Slice(0, glyphCount), FillPaintColor(), _state.RenderMode, textStroke);
+            if (_state.RenderMode is TextRenderMode.FillClip or TextRenderMode.StrokeClip or TextRenderMode.FillStrokeClip)
+            {
+                _context.AddTextClipRun(graphicsFont, glyphs.Slice(0, glyphCount), drawMatrix);
+            }
+
+            _context.DrawGlyphs(graphicsFont, fontSize, glyphs.Slice(0, glyphCount), FillPaintColor(), StrokePaintColor(), _state.RenderMode, textStroke);
 
             // Reset the drawing CTM to the current graphics state without popping the state stack:
             // a clip set by a text rendering mode (Tr 4-7) must persist until the next Q, while the

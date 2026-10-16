@@ -115,6 +115,28 @@ public class UnsupportedAndClipTests
         return pixels;
     }
 
+    /// <summary>
+    /// Two show-text runs in one text object, both in a clipping mode, must accumulate into a single
+    /// clip applied at <c>ET</c>. Clipping each run where it is drawn instead intersects them, and the
+    /// rectangle after <c>ET</c> is painted nowhere.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(ShadingTests.GraphicsFactories), MemberType = typeof(ShadingTests))]
+    public void TextClipAccumulatesAcrossTheTextObject(IGraphicsFactory factory)
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateAccumulatedTextClipPdf());
+        using IGraphicsContext context = factory.CreateContext(200, 100);
+        document.Pages[0].Render(factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+
+        Assert.True(IsBlue(pixels, image.Width, 60, 12), "the first glyph must clip the rectangle to itself");
+        Assert.True(IsBlue(pixels, image.Width, 60, 114), "the second glyph must clip it to itself too");
+        Assert.True(!IsBlue(pixels, image.Width, 5, 65) && !IsBlue(pixels, image.Width, 5, 165),
+            "between the two glyphs the clip must be empty, not the union of their overlap");
+    }
+
     private static (byte B, byte G, byte R, byte A) PixelAt(byte[] pixels, int width, int y, int x)
     {
         int offset = ((y * width) + x) * 4;

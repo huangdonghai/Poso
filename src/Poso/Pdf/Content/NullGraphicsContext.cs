@@ -50,7 +50,19 @@ internal sealed class NullGraphicsContext : IGraphicsContext
     {
     }
 
-    public void DrawGlyphs(IFont font, float fontSize, ReadOnlySpan<GlyphPosition> glyphs, PosoColor color, TextRenderMode mode, in StrokeStyle strokeStyle)
+    public void OpenTextClip()
+    {
+    }
+
+    public void AddTextClipRun(IFont font, ReadOnlySpan<GlyphPosition> glyphs, in Matrix3x2 runMatrix)
+    {
+    }
+
+    public void CloseTextClip()
+    {
+    }
+
+    public void DrawGlyphs(IFont font, float fontSize, ReadOnlySpan<GlyphPosition> glyphs, PosoColor fillColor, PosoColor strokeColor, TextRenderMode mode, in StrokeStyle strokeStyle)
     {
     }
 

@@ -119,11 +119,13 @@ public enum TextRenderMode
     Fill = 0,
     Stroke = 1,
     FillStroke = 2,
+
+    /// <summary>Tr 3: the glyphs are neither painted nor clipped. PDF numbers this mode 3; the names
+    /// below follow the same numbering, so the clip modes are 4, 5 and 6.</summary>
     Invisible = 3,
     FillClip = 4,
     StrokeClip = 5,
     FillStrokeClip = 6,
-    Clip = 7,
 }
 
 /// <summary>

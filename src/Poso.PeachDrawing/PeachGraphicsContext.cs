@@ -80,6 +80,10 @@ public sealed class PeachGraphicsContext : IGraphicsContext
     /// <summary>How many Save calls have not yet been matched by a Restore.</summary>
     public int SaveDepth => _states.Count;
 
+    private PeachCore.GraphicsPath? _textClip;
+    private RectF _textClipBounds;
+    private bool _textClipAny;
+
     private PeachCore.Canvas Target => _layers.Count > 0 ? _layers.Peek().Canvas : _baseCanvas;
 
     // ---- state -------------------------------------------------------------------------------------------
@@ -200,7 +204,8 @@ public sealed class PeachGraphicsContext : IGraphicsContext
         IFont font,
         float fontSize,
         ReadOnlySpan<GlyphPosition> glyphs,
-        PosoColor color,
+        PosoColor fillColor,
+        PosoColor strokeColor,
         TextRenderMode mode,
         in StrokeStyle strokeStyle)
     {
@@ -211,7 +216,7 @@ public sealed class PeachGraphicsContext : IGraphicsContext
 
         bool fill = mode is TextRenderMode.Fill or TextRenderMode.FillStroke or TextRenderMode.FillClip or TextRenderMode.FillStrokeClip;
         bool stroke = mode is TextRenderMode.Stroke or TextRenderMode.FillStroke or TextRenderMode.StrokeClip or TextRenderMode.FillStrokeClip;
-        bool clip = mode is TextRenderMode.FillClip or TextRenderMode.StrokeClip or TextRenderMode.FillStrokeClip or TextRenderMode.Clip;
+        bool clip = mode is TextRenderMode.FillClip or TextRenderMode.StrokeClip or TextRenderMode.FillStrokeClip;
 
         if (!fill && !stroke && !clip)
         {
@@ -223,27 +228,78 @@ public sealed class PeachGraphicsContext : IGraphicsContext
 
         using DrawScope scope = BeginDraw();
 
-        if (clip)
-        {
-            PeachCore.GraphicsPath clipPath = BuildGlyphPath(peachFont, glyphs, scale);
-            _clipDepth++;
-            Target.PushClip(clipPath);
-            _clipBounds = _clipBounds.Intersect(GlyphRunUserBounds(peachFont, glyphs, scale).TransformAabb(_ctm));
-        }
-
         if (fill)
         {
             using PeachCore.GraphicsPath fillPath = BuildGlyphPath(peachFont, glyphs, scale);
-            Target.DrawPath(Target.GetSolidBrush(color.ToPaintColor()), fillPath);
+            Target.DrawPath(Target.GetSolidBrush(fillColor.ToPaintColor()), fillPath);
         }
 
         if (stroke)
         {
-            PeachCore.Pen pen = Target.GetPen(color.ToPaintColor());
+            PeachCore.Pen pen = Target.GetPen(strokeColor.ToPaintColor());
             pen.ApplyStrokeStyle(strokeStyle);
             using PeachCore.GraphicsPath strokePath = BuildGlyphPath(peachFont, glyphs, scale);
             Target.DrawPath(pen, strokePath);
         }
+    }
+
+    public void OpenTextClip()
+    {
+        _textClip?.Dispose();
+        _textClip = Target.GetGraphicsPath();
+        _textClip.FillMode = PeachCore.FillMode.Nonzero;
+        _textClipBounds = default;
+        _textClipAny = false;
+    }
+
+    public void AddTextClipRun(IFont font, ReadOnlySpan<GlyphPosition> glyphs, in Matrix3x2 runMatrix)
+    {
+        if (_textClip is null || font is not PeachFont peachFont)
+        {
+            return;
+        }
+
+        double scale = 1d / peachFont.UnitsPerEm;
+        foreach (GlyphPosition glyph in glyphs)
+        {
+            if (!peachFont.TryGetOutline(glyph.GlyphId, out PeachOutlines.GlyphOutline? outline) || outline is null || outline.IsEmpty)
+            {
+                continue;
+            }
+
+            AddOutline(_textClip, outline, glyph.X, glyph.Y, scale, runMatrix);
+            RectF bounds = GlyphOutlineBounds(outline, glyph.X, glyph.Y, scale).TransformAabb(runMatrix);
+            _textClipBounds = _textClipAny
+                ? RectF.FromLbrb(
+                    Math.Min(_textClipBounds.Left, bounds.Left), Math.Min(_textClipBounds.Bottom, bounds.Bottom),
+                    Math.Max(_textClipBounds.Right, bounds.Right), Math.Max(_textClipBounds.Top, bounds.Top))
+                : bounds;
+            _textClipAny = true;
+        }
+    }
+
+    public void CloseTextClip()
+    {
+        PeachCore.GraphicsPath? path = _textClip;
+        _textClip = null;
+        bool pushed = false;
+
+        if (path is not null && _textClipAny)
+        {
+            _clipDepth++;
+            Target.PushClip(path);
+            _clipBounds = _clipBounds.Intersect(_textClipBounds.TransformAabb(_ctm));
+            pushed = true;
+        }
+
+        // PushClip takes ownership: the clip lives as long as the clip level it was pushed at, so only a
+        // path that never got pushed is ours to free.
+        if (!pushed)
+        {
+            path?.Dispose();
+        }
+
+        _textClipAny = false;
     }
 
     public void DrawImage(IImage image, in RectF destinationRect, in RectF sourceRect, float alpha)
@@ -552,28 +608,79 @@ public sealed class PeachGraphicsContext : IGraphicsContext
         PeachOutlines.GlyphOutline outline,
         float originX,
         float originY,
-        double scale)
+        double scale) => AddOutline(gp, outline, originX, originY, scale, Matrix3x2.Identity);
+
+    /// <summary>Append the outline with an extra transform, so runs sharing one clip can be placed in a
+    /// common space instead of relying on the CTM at the moment each was drawn.</summary>
+    private static void AddOutline(
+        PeachCore.GraphicsPath gp,
+        PeachOutlines.GlyphOutline outline,
+        float originX,
+        float originY,
+        double scale,
+        in Matrix3x2 transform)
     {
         foreach (PeachOutlines.OutlineContour contour in outline.Contours)
         {
-            gp.AddMove(originX + contour.Start.X * scale, originY + contour.Start.Y * scale);
+            (float sx, float sy) = EmToPoint(contour.Start.X, contour.Start.Y, originX, originY, scale, transform);
+            gp.AddMove(sx, sy);
             foreach (PeachOutlines.OutlineSegment segment in contour.Segments)
             {
+                (float ex, float ey) = EmToPoint(segment.End.X, segment.End.Y, originX, originY, scale, transform);
                 if (segment.IsCubic)
                 {
-                    gp.AddBezierTo(
-                        originX + segment.Control1.X * scale, originY + segment.Control1.Y * scale,
-                        originX + segment.Control2.X * scale, originY + segment.Control2.Y * scale,
-                        originX + segment.End.X * scale, originY + segment.End.Y * scale);
+                    (float c1x, float c1y) = EmToPoint(segment.Control1.X, segment.Control1.Y, originX, originY, scale, transform);
+                    (float c2x, float c2y) = EmToPoint(segment.Control2.X, segment.Control2.Y, originX, originY, scale, transform);
+                    gp.AddBezierTo(c1x, c1y, c2x, c2y, ex, ey);
                 }
                 else
                 {
-                    gp.LineTo(originX + segment.End.X * scale, originY + segment.End.Y * scale);
+                    gp.LineTo(ex, ey);
                 }
             }
 
             gp.CloseFigure();
         }
+    }
+
+    private static (float X, float Y) EmToPoint(
+        double x, double y, float originX, float originY, double scale, in Matrix3x2 transform)
+    {
+        var em = new Vector2((float)(originX + x * scale), (float)(originY + y * scale));
+        Vector2 user = Vector2.Transform(em, transform);
+        return (user.X, user.Y);
+    }
+
+    /// <summary>Control-point bounds of one outline in em space, before any matrix.</summary>
+    private static RectF GlyphOutlineBounds(PeachOutlines.GlyphOutline outline, float originX, float originY, double scale)
+    {
+        float minX = float.MaxValue, minY = float.MaxValue, maxX = float.MinValue, maxY = float.MinValue;
+        void Consider(double px, double py)
+        {
+            float x = (float)(originX + px * scale);
+            float y = (float)(originY + py * scale);
+            minX = Math.Min(minX, x);
+            minY = Math.Min(minY, y);
+            maxX = Math.Max(maxX, x);
+            maxY = Math.Max(maxY, y);
+        }
+
+        foreach (PeachOutlines.OutlineContour contour in outline.Contours)
+        {
+            Consider(contour.Start.X, contour.Start.Y);
+            foreach (PeachOutlines.OutlineSegment segment in contour.Segments)
+            {
+                if (segment.IsCubic)
+                {
+                    Consider(segment.Control1.X, segment.Control1.Y);
+                    Consider(segment.Control2.X, segment.Control2.Y);
+                }
+
+                Consider(segment.End.X, segment.End.Y);
+            }
+        }
+
+        return RectF.FromLbrb(minX, minY, maxX, maxY);
     }
 
     /// <summary>Rough user-space AABB of a glyph run (control-point bounds; ClipBounds only).</summary>
