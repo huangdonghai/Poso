@@ -8,7 +8,7 @@ public static class PdfPageTree
     private const int MaxPages = 5_000_000;
 
     /// <summary>Inheritable page attributes defined by the PDF specification.</summary>
-    private static readonly string[] InheritableKeys = { "Resources", "MediaBox", "CropBox", "Rotate" };
+    private static readonly string[] InheritableKeys = { "Resources", "MediaBox", "CropBox", "Rotate", "UserUnit" };
 
     public static List<PdfPage> LoadPages(PdfDocument document)
     {

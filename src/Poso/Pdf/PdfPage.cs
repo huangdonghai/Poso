@@ -27,11 +27,24 @@ public sealed class PdfPage
         _mediaBox = ParseBox(inherited, "MediaBox") ?? RectF.FromLbrb(0, 0, 612, 792); // Default: Letter
         _cropBox = ParseBox(inherited, "CropBox") ?? _mediaBox;
         _rotation = NormalizeRotation(inherited.TryGetValue("Rotate", out var rotate) && rotate is PdfNumber rotateNumber ? rotateNumber.AsInt() : 0);
+        _userUnit = UserUnitOf(inherited);
     }
 
     private readonly RectF _mediaBox;
     private readonly RectF _cropBox;
     private readonly int _rotation;
+
+    /// <summary>
+    /// <c>/UserUnit</c> (PDF 32000-1:2008 7.7.2.3, ExtensionLevel 3): the number of default user space
+    /// units per point, which rescales the box coordinates into real ones. It is inheritable, and a
+    /// value outside 1..the implementation limit is treated as absent.
+    /// </summary>
+    private static float UserUnitOf(Dictionary<string, PdfObject> inherited) =>
+        inherited.TryGetValue("UserUnit", out var value) && value is PdfNumber number
+            ? Math.Clamp(number.AsFloat(), 1f, 14400f)
+            : 1f;
+
+    private readonly float _userUnit;
 
     /// <summary>Zero-based index of the page within the document.</summary>
     public int Index { get; }
@@ -50,11 +63,17 @@ public sealed class PdfPage
     /// <summary>Page rotation (normalized to 0/90/180/270).</summary>
     public int Rotation => _rotation;
 
-    /// <summary>Page width after rotation (in points).</summary>
-    public float Width => _rotation is 90 or 270 ? _cropBox.Height : _cropBox.Width;
+    /// <summary>
+    /// The ratio from the page dictionary's units to default user space units. Boxes are stored as they
+    /// are written; <see cref="Width"/> and <see cref="Height"/> report the scaled, real size.
+    /// </summary>
+    public float UserUnit => _userUnit;
 
-    /// <summary>Page height after rotation (in points).</summary>
-    public float Height => _rotation is 90 or 270 ? _cropBox.Width : _cropBox.Height;
+    /// <summary>Page width after rotation (in default user space units).</summary>
+    public float Width => (_rotation is 90 or 270 ? _cropBox.Height : _cropBox.Width) * _userUnit;
+
+    /// <summary>Page height after rotation (in default user space units).</summary>
+    public float Height => (_rotation is 90 or 270 ? _cropBox.Width : _cropBox.Height) * _userUnit;
 
     /// <summary>Page resource dictionary (XObjects, fonts, etc.).</summary>
     public PdfDictionary? Resources =>

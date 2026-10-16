@@ -54,6 +54,38 @@ public static class PdfFixtures
         return Encoding.ASCII.GetBytes(text.Replace(page, page[..^1], StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// A page that clips to the outlines of <c>Tr 5</c> text: two show-text runs inside one
+    /// <c>BT</c>/<c>ET</c> pair, stroked red, then a blue rectangle over the whole page. The two runs
+    /// accumulate into a single clip that is applied at <c>ET</c>, so the blue shows inside either
+    /// outline; clipping per run would intersect them and leave the rectangle unpainted.
+    /// </summary>
+    public static byte[] CreateAccumulatedTextClipPdf()
+    {
+        string widths = string.Join(" ", Enumerable.Repeat("20", 95));
+        string font = $"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding /FirstChar 32 /LastChar 126 /Widths [{widths}] >>";
+        string content = "15 w 1 0 0 RG BT /F1 60 Tf 5 Tr 5 20 Td (b) Tj 105 0 Td (b) Tj ET\n"
+            + "0 0 1 rg 0 0 200 100 re f";
+
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            new PdfObjectDefinition(5, font));
+    }
+
+    /// <summary>
+    /// A 20x20 page whose MediaBox is 2x2 with <c>/UserUnit 10</c>: the box says one thing, the page is
+    /// really twenty across, and content is still written in the box's coordinates.
+    /// </summary>
+    public static byte[] CreateUserUnitPdf() => Build(1,
+        new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+        new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+        new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 2 2] /UserUnit 10 "
+            + "/Contents 4 0 R /Resources << >> >>"),
+        Stream(4, string.Empty, Encoding.ASCII.GetBytes("0 0 0 rg 0 0 2 2 re f")));
+
     /// <summary>A minimal CID-keyed CFF program (Top DICT has ROS, no FDArray - the reader only needs the ROS,
     /// charset and CharStrings). Its charset is deliberately NON-identity (GID 1..4 -> CID 300,100,250,7)
     /// so a test can prove the CID->GID map is read from the charset rather than assumed to be identity.

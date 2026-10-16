@@ -127,11 +127,14 @@ public sealed class PdfContentInterpreter
         _hasCurrentPoint = false;
 
         float rotation = NormalizeRotation((int)(page.Rotation + _options.RotationDegrees));
-        float scale = _options.Scale;
         float cropX = page.CropBox.X;
         float cropY = page.CropBox.Y;
         float cropWidth = page.CropBox.Width;
         float cropHeight = page.CropBox.Height;
+
+        // /UserUnit rescales the box coordinates into default user space, so it belongs on the same
+        // leg of the transform as the render scale.
+        float unit = page.UserUnit * _options.Scale;
 
         // Translation that brings the rotated page into the positive quadrant (y-up space)
         float tx, ty;
@@ -139,14 +142,14 @@ public sealed class PdfContentInterpreter
         {
             case 90:
                 tx = 0;
-                ty = cropWidth * scale;
+                ty = cropWidth * unit;
                 break;
             case 180:
-                tx = cropWidth * scale;
-                ty = cropHeight * scale;
+                tx = cropWidth * unit;
+                ty = cropHeight * unit;
                 break;
             case 270:
-                tx = cropHeight * scale;
+                tx = cropHeight * unit;
                 ty = 0;
                 break;
             default:
@@ -155,14 +158,14 @@ public sealed class PdfContentInterpreter
                 break;
         }
 
-        float deviceHeight = rotation is 90 or 270 ? cropWidth * scale : cropHeight * scale;
+        float deviceHeight = rotation is 90 or 270 ? cropWidth * unit : cropHeight * unit;
 
         // user space (y-up) -> device pixels (y-down):
         // crop translate, scale, clockwise rotation (PDF /Rotate is clockwise on screen),
         // y-flip, then translate into the positive quadrant
         Matrix3x2 baseMatrix =
             Matrix3x2.CreateTranslation(-cropX, -cropY) *
-            Matrix3x2.CreateScale(scale, scale) *
+            Matrix3x2.CreateScale(unit, unit) *
             Matrix3x2.CreateRotation(-rotation * MathF.PI / 180f) *
             Matrix3x2.CreateTranslation(tx, ty) *
             Matrix3x2.CreateScale(1f, -1f) *

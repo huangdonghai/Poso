@@ -20,6 +20,22 @@ public class PdfParsingTests
         Assert.Equal(100f, document.Pages[0].Height);
     }
 
+    /// <summary>
+    /// <c>/UserUnit</c> rescales the box coordinates into default user space units. Ignoring it renders
+    /// the page a tenth of its size and puts every placement outside the crop.
+    /// </summary>
+    [Fact]
+    public void Open_PageWithUserUnit_ScalesTheBoxesIntoRealUnits()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateUserUnitPdf());
+        PdfPage page = document.Pages[0];
+
+        Assert.Equal(10f, page.UserUnit);
+        Assert.Equal(2f, page.MediaBox.Width);
+        Assert.Equal(20f, page.Width);
+        Assert.Equal(20f, page.Height);
+    }
+
     [Fact]
     public void Open_SimplePdf_ReadsPagesBoxesAndContent()
     {
