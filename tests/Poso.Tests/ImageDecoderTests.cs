@@ -61,6 +61,80 @@ public class ImageDecoderTests
 
     private static byte[] ExtendedSequentialJpeg() => Convert.FromBase64String(SolidRedSof1JpegBase64);
 
+    public static IEnumerable<object[]> MaskedJpegCases()
+    {
+        foreach (object[] backend in Backends())
+        {
+            yield return [backend[0], false];
+            yield return [backend[0], true];
+        }
+    }
+
+    /// <summary>
+    /// A soft mask on a JPEG has to be applied once, at the mask's own coverage, whether the mask is
+    /// plain samples or itself codec-encoded. A coverage that is squared or otherwise mis-scaled leaves
+    /// the image far too faint.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(MaskedJpegCases))]
+    public void SoftMaskedJpeg_CompositesAtTheMaskCoverage(IGraphicsFactory factory, bool maskIsJpeg)
+    {
+        byte[] jpeg = ExtendedSequentialJpeg();
+
+        // A JPEG-encoded mask carries no samples to read: its own decoded red channel is the coverage.
+        byte maskCoverage = maskIsJpeg ? (byte)220 : (byte)64;
+        using PdfDocument document = PdfDocument.FromArray(
+            PdfFixtures.CreateSoftMaskedDctImagePdf(jpeg, 64, maskCoverage, maskIsJpeg));
+        using IGraphicsContext context = factory.CreateContext(64, 64);
+        document.Pages[0].Render(factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] px = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(px);
+        int o = (((image.Height / 2) * image.Width) + (image.Width / 2)) * image.BytesPerPixel;
+        (byte B, byte G, byte R) masked = (px[o], px[o + 1], px[o + 2]);
+
+        // The image is a solid (220,40,60) patch; blend it over white at maskCoverage/255.
+        static int Expect(int channel, byte alpha) => (channel * alpha + (255 - alpha) * 255 + 127) / 255;
+        Assert.True(
+            Math.Abs(masked.R - Expect(220, maskCoverage)) <= 6
+            && Math.Abs(masked.G - Expect(40, maskCoverage)) <= 6
+            && Math.Abs(masked.B - Expect(60, maskCoverage)) <= 6,
+            $"expected ({Expect(220, maskCoverage)},{Expect(40, maskCoverage)},{Expect(60, maskCoverage)}) "
+            + $"at {maskCoverage}/255 over white (got {masked})");
+    }
+
+    /// <summary>
+    /// A stencil mask on a JPEG has to reach the pixels. The codec is handed the compressed bytes and
+    /// never sees the image dictionary, so the mask must be folded into whatever the back end returns -
+    /// otherwise a masked JPEG paints its whole rectangle. A JPX cover plate in 算法导论 did exactly
+    /// that and buried the page underneath itself (83% of the pixels off MuPDF).
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Backends))]
+    public void MaskedJpeg_CutsOutTheMaskedHalf(IGraphicsFactory factory)
+    {
+        using PdfDocument document = PdfDocument.FromArray(
+            PdfFixtures.CreateMaskedDctImagePdf(ExtendedSequentialJpeg(), 64, 64));
+        using IGraphicsContext context = factory.CreateContext(128, 64);
+        document.Pages[0].Render(factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] px = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(px);
+
+        (byte B, byte G, byte R) Sample(int x, int y)
+        {
+            int o = ((y * image.Width) + x) * image.BytesPerPixel;
+            return (px[o], px[o + 1], px[o + 2]);
+        }
+
+        // The image occupies the right half of the 128x64 page; its left half is unmasked.
+        Assert.True(Sample(16, 32).G > 150, $"left of the image must stay green (got {Sample(16, 32)})");
+        Assert.True(Sample(80, 32).R > 150, $"the unmasked half must show the JPEG (got {Sample(80, 32)})");
+        Assert.True(Sample(112, 32).G > 150, $"the masked half must show through to the green (got {Sample(112, 32)})");
+    }
+
     /// <summary>
     /// The JPEG's start-of-frame marker, found by walking the marker segments. Searching for the byte
     /// pair anywhere is not enough: the same pair occurs inside Huffman table payloads, and a naive

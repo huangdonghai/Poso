@@ -557,6 +557,69 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// A white page with a solid-colour DCTDecode image over the whole square, and an <c>/SMask</c> whose
+    /// coverage is <paramref name="coverage"/>. <paramref name="maskIsJpeg"/> picks between a plain
+    /// grayscale mask and one that is itself JPEG-encoded: a codec never returns samples, so the second
+    /// has to go back through the image pipeline before it can mask anything.
+    /// </summary>
+    public static byte[] CreateSoftMaskedDctImagePdf(byte[] jpeg, int side, byte coverage, bool maskIsJpeg = false)
+    {
+        string content = $"1 1 1 rg 0 0 {side} {side} re f q {side} 0 0 {side} 0 0 cm /Im1 Do Q";
+        byte[] mask = Flate(Enumerable.Repeat((byte)coverage, side * side).ToArray());
+        string maskDictionary = $"/Type /XObject /Subtype /Image /Width {side} /Height {side} /ColorSpace /DeviceGray "
+            + $"/BitsPerComponent 8 /Filter /FlateDecode /Length {mask.Length}";
+        if (maskIsJpeg)
+        {
+            mask = jpeg;
+            maskDictionary = $"/Type /XObject /Subtype /Image /Width {side} /Height {side} /ColorSpace /DeviceRGB "
+                + $"/BitsPerComponent 8 /Filter /DCTDecode /Length {mask.Length}";
+        }
+
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, $"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {side} {side}] "
+                + "/Resources << /XObject << /Im1 5 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            new PdfObjectDefinition(5, $"<< /Type /XObject /Subtype /Image /Width {side} /Height {side} "
+                + $"/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /SMask 6 0 R /Length {jpeg.Length} >>", jpeg),
+            Stream(6, maskDictionary, mask));
+    }
+
+    /// <summary>
+    /// A green page with a DCTDecode image over its right half and a 1-bit <c>/Mask</c> at half the
+    /// image's resolution over that. A codec never sees the image dictionary, so a back-end-decoded
+    /// raster has to have the mask folded in afterwards; without that the image paints its whole
+    /// rectangle. The mask paints its own left half and masks its right half, and the two are sampled
+    /// across to the image grid, so the test also pins the resolution mismatch down.
+    /// </summary>
+    public static byte[] CreateMaskedDctImagePdf(byte[] jpeg, int width, int height)
+    {
+        string content = $"0 1 0 rg 0 0 {width * 2} {height} re f q {width} 0 0 {height} {width} 0 cm /Im1 Do Q";
+        int maskRows = height / 2;
+        int maskRowBytes = (width / 2 + 7) / 8;
+        byte[] mask = new byte[maskRows * maskRowBytes];
+        for (int y = 0; y < maskRows; y++)
+        {
+            for (int b = 0; b < maskRowBytes / 2; b++)
+            {
+                mask[(y * maskRowBytes) + b] = 0xFF;  // the mask's left half paints
+            }
+        }
+
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, $"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width * 2} {height}] "
+                + "/Resources << /XObject << /Im1 5 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            new PdfObjectDefinition(5, $"<< /Type /XObject /Subtype /Image /Width {width} /Height {height} "
+                + $"/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Mask 6 0 R /Length {jpeg.Length} >>", jpeg),
+            Stream(6, $"/Type /XObject /Subtype /Image /ImageMask true /Width {width / 2} "
+                + $"/Height {maskRows} /BitsPerComponent 1 /Length {mask.Length}", mask));
+    }
+
+    /// <summary>
     /// A page that draws a JPEG 2000 image 1:1 on a page matching its pixel size. No /ColorSpace is
     /// written: for JPXDecode the colour space comes from the codestream itself (PDF 32000-1:2008 11.4.4),
     /// which is how the book covers that used to render blank declare their images.

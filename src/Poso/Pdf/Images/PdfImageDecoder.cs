@@ -82,13 +82,19 @@ public static class PdfImageDecoder
                 diagnostics?.Report(PdfUnsupportedKind.ImageCodec, "JPXDecode image could not be decoded");
             }
 
-            return jpx;
+            return jpx is null ? null : ApplyMasks(document, factory, dictionary, jpx, diagnostics);
+
         }
 
         if (hasDct)
         {
             // PdfStream.Decode stops at the codec header and returns the encoded JPEG bytes.
             byte[] encoded = stream.Decode(diagnostics);
+
+            // Every return below hands back pixels the codec produced without ever seeing the dictionary.
+            IImage? Masked(IImage? raster) => raster is null
+                ? null
+                : ApplyMasks(document, factory, dictionary, raster, diagnostics);
 
             // CMYK/YCCK (4-component) JPEGs are decoded here rather than delegated to the backend:
             // native codecs (Skia's SKCodec) omit the Adobe CMYK inversion and produce visibly wrong
@@ -112,14 +118,14 @@ public static class PdfImageDecoder
                     MapCmykDecode(dictionary, cmyk);
                     var cmykPixels = new byte[cmyk.Length];
                     JpegColorConverter.CmykToBgra32(cmyk, cmykPixels);
-                    return factory.CreateImage(jpeg!.Width, jpeg.Height, PixelFormat.Bgra8888Premul, cmykPixels);
+                    return Masked(factory.CreateImage(jpeg!.Width, jpeg.Height, PixelFormat.Bgra8888Premul, cmykPixels));
                 }
                 // Fall through to the backend if the self-decode could not complete.
             }
 
             if (backendCmyk is not null)
             {
-                return backendCmyk;
+                return Masked(backendCmyk);
             }
 
             IImage? raster = factory.DecodeImage(encoded);
@@ -132,7 +138,7 @@ public static class PdfImageDecoder
                 byte[]? managedPixels = managed is null ? null : JpegColorConverter.ToBgra32(managed);
                 if (managedPixels is not null)
                 {
-                    return factory.CreateImage(managed!.Width, managed.Height, PixelFormat.Bgra8888Premul, managedPixels);
+                    return Masked(factory.CreateImage(managed!.Width, managed.Height, PixelFormat.Bgra8888Premul, managedPixels));
                 }
 
                 diagnostics?.Report(
@@ -143,7 +149,7 @@ public static class PdfImageDecoder
 
             using (raster)
             {
-                return CopyBackendRaster(factory, raster);
+                return Masked(CopyBackendRaster(factory, raster));
             }
         }
 
@@ -719,6 +725,146 @@ public static class PdfImageDecoder
 
         bitOffset += bits;
         return value;
+    }
+
+    /// <summary>
+    /// Fold a soft or stencil mask into a raster the back end produced. The DCT and JPX branches hand the
+    /// codec's own pixels straight back, and a codec never looks at the image dictionary, so a masked
+    /// JPEG or JPEG 2000 painted its full rectangle: a JPX cover plate with a JBIG2 stencil over it
+    /// buried the page underneath itself.
+    /// </summary>
+    private static IImage ApplyMasks(
+        PdfDocument document,
+        IGraphicsFactory factory,
+        PdfDictionary dictionary,
+        IImage raster,
+        PdfDiagnostics? diagnostics)
+    {
+        byte[]? alpha = MaskCoverage(document, factory, dictionary.Get("SMask"), raster.Width, raster.Height, diagnostics);
+        byte[]? stencil = MaskCoverage(document, factory, dictionary.Get("Mask"), raster.Width, raster.Height, diagnostics);
+        if (alpha is null && stencil is null)
+        {
+            return raster;
+        }
+
+        var pixels = new byte[raster.Width * raster.Height * 4];
+        raster.CopyPixels(pixels);
+        for (int p = 0, i = 0; i < pixels.Length; i += 4, p++)
+        {
+            byte coverage = stencil is not null && stencil[p] == 0 ? (byte)0 : (byte)255;
+            if (alpha is not null)
+            {
+                coverage = (byte)((coverage * alpha[p] + 127) / 255);
+            }
+
+            if (coverage == 255)
+            {
+                continue;
+            }
+
+            // The raster arrives premultiplied, so every channel - alpha included - scales together.
+            pixels[i] = (byte)((pixels[i] * coverage + 127) / 255);
+            pixels[i + 1] = (byte)((pixels[i + 1] * coverage + 127) / 255);
+            pixels[i + 2] = (byte)((pixels[i + 2] * coverage + 127) / 255);
+            pixels[i + 3] = (byte)((pixels[i + 3] * coverage + 127) / 255);
+        }
+
+        return factory.CreateImage(raster.Width, raster.Height, PixelFormat.Bgra8888Premul, pixels);
+    }
+
+    /// <summary>
+    /// A mask's coverage at the image's own pixel grid, or null when the reference is not a mask stream.
+    /// A mask may be a different resolution from the image it masks (the spec maps both onto the same
+    /// unit square), so it is read at its own size and then sampled across.
+    /// </summary>
+    private static byte[]? MaskCoverage(
+        PdfDocument document,
+        IGraphicsFactory factory,
+        PdfObject? reference,
+        int width,
+        int height,
+        PdfDiagnostics? diagnostics)
+    {
+        if (document.Resolve(reference) is not PdfStream mask)
+        {
+            return null;
+        }
+
+        int maskWidth = (int)(mask.Dictionary.GetIntegerValue("Width") ?? width);
+        int maskHeight = (int)(mask.Dictionary.GetIntegerValue("Height") ?? height);
+        if (maskWidth <= 0 || maskHeight <= 0)
+        {
+            return null;
+        }
+
+        bool stencil = mask.Dictionary.GetBooleanValue("ImageMask") ?? false;
+        byte[]? coverage = CodecEncodedMask(mask)
+            ? DecodedImageCoverage(document, factory, mask, maskWidth, maskHeight)
+            : stencil
+                ? DecodeStencil(document, factory, mask, mask.Dictionary, maskWidth, maskHeight, diagnostics)
+                : DecodeAlphaChannel(document, factory, mask, mask.Dictionary, maskWidth, maskHeight, diagnostics);
+        if (coverage is null)
+        {
+            return null;
+        }
+
+        if (maskWidth == width && maskHeight == height)
+        {
+            return coverage;
+        }
+
+        var scaled = new byte[width * height];
+        for (int y = 0; y < height; y++)
+        {
+            int sourceY = (int)Math.Min((long)y * maskHeight / height, maskHeight - 1);
+            for (int x = 0; x < width; x++)
+            {
+                int sourceX = (int)Math.Min((long)x * maskWidth / width, maskWidth - 1);
+                scaled[(y * width) + x] = coverage[(sourceY * maskWidth) + sourceX];
+            }
+        }
+
+        return scaled;
+    }
+
+    /// <summary>
+    /// True when a mask carries a filter whose bytes are not plain samples: the JPEG path hands back the
+    /// codestream itself and JPX is only decoded by <see cref="Decode"/>, so reading either as grayscale
+    /// samples produces noise for the coverage.
+    /// </summary>
+    private static bool CodecEncodedMask(PdfStream mask)
+    {
+        List<string> filters = GetFilters(mask.Dictionary);
+        return filters.Exists(f => f is "DCTDecode" or "DCT" or "JPXDecode");
+    }
+
+    /// <summary>
+    /// A mask's coverage read out of an image the full pipeline decoded. Every colour space lands in the
+    /// same three channels, so the red one is the luminance whatever the mask was authored in.
+    /// </summary>
+    private static byte[]? DecodedImageCoverage(
+        PdfDocument document, IGraphicsFactory factory, PdfStream mask, int width, int height)
+    {
+        using IImage? image = Decode(document, factory, mask, mask.Dictionary, PosoColor.Black);
+        if (image is null)
+        {
+            return null;
+        }
+
+        var pixels = new byte[image.Width * image.Height * 4];
+        image.CopyPixels(pixels);
+        var coverage = new byte[width * height];
+        for (int y = 0; y < height; y++)
+        {
+            int sourceY = Math.Min((int)((long)y * image.Height / height), image.Height - 1);
+            for (int x = 0; x < width; x++)
+            {
+                int sourceX = Math.Min((int)((long)x * image.Width / width), image.Width - 1);
+                coverage[(y * width) + x] = pixels[((sourceY * image.Width) + sourceX) * 4 + 2];
+            }
+        }
+
+        return coverage;
     }
 
     private static byte[]? DecodeAlphaChannel(
