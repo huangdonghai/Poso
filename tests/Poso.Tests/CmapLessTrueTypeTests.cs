@@ -62,7 +62,8 @@ public class CmapLessTrueTypeTests
     public void RepairSubset_LeavesCompleteFontsAlone()
     {
         byte[] sfnt = StubSfnt([
-            ("cmap", new byte[4]),
+            ("OS/2", new byte[96]),
+            ("cmap", StubCmapWithWindowsRecord()),
             ("head", new byte[54]),
             ("name", StubNameTable("Real Font")),
             ("post", new byte[32]),
@@ -128,6 +129,47 @@ public class CmapLessTrueTypeTests
         {
             Assert.Equal(reference.GetAdvanceWidth(gid), width);
         }
+    }
+
+    [Fact]
+    public void RepairSubset_NormalisesAppleVersionExtendsCmapAndAddsOs2()
+    {
+        // The shape a subsetting tool on macOS leaves behind: 'true' sfnt version, a Macintosh-only cmap,
+        // a name table with no family record, and no OS/2 at all.
+        byte[] sfnt = StubSfnt([
+            ("cmap", StubCmapWithRecord(platform: 1, encoding: 0)),
+            ("head", new byte[54]),
+            ("name", StubNameTable("")),
+            ("post", new byte[32]),
+        ]);
+        Encoding.ASCII.GetBytes("true").CopyTo(sfnt, 0);
+
+        byte[]? repaired = PeachFont.RepairSubset(sfnt, "poso-embedded-mac");
+
+        Assert.NotNull(repaired);
+        Assert.Equal(0x00010000u, Read(repaired!, 0));
+        Assert.Equal(0xB105u, CheckSum(repaired!));
+
+        List<(string Tag, int Offset, int Length)> directory = ReadDirectory(repaired!);
+        Assert.Contains(("OS/2"), directory.Select(e => e.Tag));
+        (string _, int cmapOffset, int cmapLength) = directory.First(e => e.Tag == "cmap");
+
+        Assert.Equal(2, (repaired![cmapOffset + 2] << 8) | repaired[cmapOffset + 3]);
+        Assert.Equal(1, (repaired[cmapOffset + 4] << 8) | repaired[cmapOffset + 5]); // the Mac record first
+        Assert.Equal(3, (repaired[cmapOffset + 12] << 8) | repaired[cmapOffset + 13]);
+        Assert.Equal(1, (repaired[cmapOffset + 14] << 8) | repaired[cmapOffset + 15]);
+        Assert.True(cmapLength >= 4 + (2 * 8));
+    }
+
+    /// <summary>A cmap directory with one record for the given platform and encoding.</summary>
+    private static byte[] StubCmapWithRecord(ushort platform, ushort encoding)
+    {
+        var cmap = new byte[12];
+        Write16(cmap, 2, 1);
+        Write16(cmap, 4, platform);
+        Write16(cmap, 6, encoding);
+        Write(cmap, 8, 20);
+        return cmap;
     }
 
     /// <summary>Rebuilds an sfnt without the named tables, recomputing head.checkSumAdjustment.</summary>
@@ -221,6 +263,17 @@ public class CmapLessTrueTypeTests
         }
 
         return text.ToString();
+    }
+
+    /// <summary>A cmap directory with a single Windows / Unicode BMP (3,1) record.</summary>
+    private static byte[] StubCmapWithWindowsRecord()
+    {
+        var cmap = new byte[12];
+        Write16(cmap, 2, 1);
+        Write16(cmap, 4, 3);
+        Write16(cmap, 6, 1);
+        Write(cmap, 8, 20);
+        return cmap;
     }
 
     /// <summary>A one-record Windows name table (format 0) carrying the given family string.</summary>

@@ -112,21 +112,32 @@ public sealed class PeachFont : IFont
     /// that shape - every CID-keyed PDF font with an Identity CIDToGIDMap, which is how CJK body text
     /// arrives - so give those an empty cmap: nothing becomes reachable by character that was not
     /// already, and the renderer only ever asks for glyph IDs.</item>
-    /// <item>It interns typefaces by the identity strings in the name table. Subsetting tools often leave
-    /// that table with a single empty uniqueID record, so every such font in a document collapses onto the
-    /// first one registered and the rest of the text renders as .notdef boxes. Give those an identity
-    /// derived from the unique family name the caller generated.</item>
+    /// <item>It resolves a face by the family record of the name table and throws when that record is
+    /// missing - subsetting tools routinely leave only the PostScript name, or a single empty record -
+    /// which loses the font the same way. Give those a name table built from the unique family name the
+    /// caller generated.</item>
     /// </list>
     ///
     /// Returns null when the program needs neither repair.
     /// </summary>
     internal static byte[]? RepairSubset(byte[] data, string identity)
     {
-        // 0x00010000 is the TrueType (glyf) sfnt version; 'OTTO' CFF and collection headers are left alone.
-        if (data.Length < 12 || BinaryPrimitives.ReadUInt32BigEndian(data) != 0x00010000)
+        // 0x00010000 is the TrueType (glyf) sfnt version and 'true' (0x74727565) is Apple's spelling of the
+        // same layout; 'OTTO' CFF and collection headers are left alone. The back end reads only the first,
+        // so a 'true' program is normalised to it (the sfnt header is covered by head.checkSumAdjustment,
+        // which this method recomputes whenever it rewrites the file).
+        if (data.Length < 12)
         {
             return null;
         }
+
+        uint version = BinaryPrimitives.ReadUInt32BigEndian(data);
+        if (version is not (0x00010000 or 0x74727565))
+        {
+            return null;
+        }
+
+        bool normaliseVersion = version != 0x00010000;
 
         int tableCount = BinaryPrimitives.ReadUInt16BigEndian(data.AsSpan(4));
         if (data.Length < 12 + (tableCount * 16))
@@ -134,9 +145,13 @@ public sealed class PeachFont : IFont
             return null;
         }
 
-        bool hasCmap = false;
+        bool hasUsableCmap = false;
         bool hasIdentity = false;
         bool hasPost = false;
+        bool hasOs2 = false;
+        int hheaOffset = -1;
+        int cmapOffset = -1;
+        int cmapLength = 0;
         var tables = new List<(string Tag, int Offset, int Length)>(tableCount + 1);
         for (int i = 0; i < tableCount; i++)
         {
@@ -147,7 +162,9 @@ public sealed class PeachFont : IFont
             switch (tag)
             {
                 case "cmap":
-                    hasCmap = true;
+                    hasUsableCmap = HasUnicodeBmpSubtable(data, offset, length);
+                    cmapOffset = offset;
+                    cmapLength = length;
                     break;
                 case "name":
                     hasIdentity = HasIdentity(data, offset, length);
@@ -155,20 +172,29 @@ public sealed class PeachFont : IFont
                 case "post":
                     hasPost = true;
                     break;
+                case "OS/2":
+                    hasOs2 = true;
+                    break;
+                case "hhea":
+                    hheaOffset = offset;
+                    break;
             }
 
             tables.Add((tag, offset, length));
         }
 
-        if (hasCmap && hasIdentity && hasPost)
+        if (hasUsableCmap && hasIdentity && hasPost && hasOs2 && !normaliseVersion)
         {
             return null;
         }
 
         var synthetic = new Dictionary<string, byte[]>(StringComparer.Ordinal);
-        if (!hasCmap)
+        if (!hasUsableCmap)
         {
-            synthetic["cmap"] = BuildEmptyCmap();
+            synthetic["cmap"] = cmapOffset < 0
+                ? BuildEmptyCmap()
+                : WithUnicodeBmpSubtable(data, cmapOffset, cmapLength);
+            tables.RemoveAll(t => t.Tag == "cmap");
             tables.Add(("cmap", 0, synthetic["cmap"].Length));
         }
 
@@ -176,6 +202,12 @@ public sealed class PeachFont : IFont
         {
             synthetic["post"] = BuildEmptyPost();
             tables.Add(("post", 0, synthetic["post"].Length));
+        }
+
+        if (!hasOs2)
+        {
+            synthetic["OS/2"] = BuildOs2(data, hheaOffset);
+            tables.Add(("OS/2", 0, synthetic["OS/2"].Length));
         }
 
         if (!hasIdentity)
@@ -255,8 +287,9 @@ public sealed class PeachFont : IFont
     }
 
     /// <summary>
-    /// Whether a name table carries a non-empty family (ID 1) or unique ID (ID 3) record - the strings
-    /// PeachDrawing internates typefaces by.
+    /// Whether a name table carries a non-empty family record (ID 1). PeachDrawing resolves a face by that
+    /// name and throws ArgumentNullException on it when it is missing; subsets that keep only the PostScript
+    /// name (ID 6) are common enough.
     /// </summary>
     private static bool HasIdentity(byte[] data, int tableOffset, int tableLength)
     {
@@ -278,7 +311,7 @@ public sealed class PeachFont : IFont
             int nameId = BinaryPrimitives.ReadUInt16BigEndian(data.AsSpan(record + 6));
             int length = BinaryPrimitives.ReadUInt16BigEndian(data.AsSpan(record + 8));
             int offset = BinaryPrimitives.ReadUInt16BigEndian(data.AsSpan(record + 10));
-            if (nameId is not (1 or 3) || length == 0 || tableOffset + strings + offset + length > data.Length)
+            if (nameId != 1 || length == 0 || tableOffset + strings + offset + length > data.Length)
             {
                 continue;
             }
@@ -340,24 +373,107 @@ public sealed class PeachFont : IFont
     }
 
     /// <summary>
+    /// Whether a cmap offers a subtable PeachDrawing will read: the Windows / Unicode-BMP (3,1) or a
+    /// Unicode (0,x) pairing. A Macintosh-only cmap (platform 1) makes it reject the whole font with
+    /// "no usable platform or encoding ID", which loses the embedded program.
+    /// </summary>
+    private static bool HasUnicodeBmpSubtable(byte[] data, int tableOffset, int tableLength)
+    {
+        if (tableLength < 4 || data.Length < tableOffset + tableLength)
+        {
+            return false;
+        }
+
+        int count = BinaryPrimitives.ReadUInt16BigEndian(data.AsSpan(tableOffset + 2));
+        if (tableLength < 4 + (count * 8))
+        {
+            return false;
+        }
+
+        for (int i = 0; i < count; i++)
+        {
+            int record = tableOffset + 4 + (i * 8);
+            ushort platform = BinaryPrimitives.ReadUInt16BigEndian(data.AsSpan(record));
+            ushort encoding = BinaryPrimitives.ReadUInt16BigEndian(data.AsSpan(record + 2));
+            if (platform == 3 && encoding == 1)
+            {
+                return true;
+            }
+
+            if (platform == 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Appends an empty platform 3 / encoding 1 subtable to an existing cmap, keeping the records it
+    /// already had: the font may map characters through them, and the renderer only asks for glyph IDs.
+    /// </summary>
+    private static byte[] WithUnicodeBmpSubtable(byte[] data, int tableOffset, int tableLength)
+    {
+        int count = BinaryPrimitives.ReadUInt16BigEndian(data.AsSpan(tableOffset + 2));
+        int oldHeader = 4 + (count * 8);
+        if (tableLength < oldHeader)
+        {
+            return BuildEmptyCmap();
+        }
+
+        int oldSubtables = tableLength - oldHeader;
+        int newHeader = 4 + ((count + 1) * 8);
+        int appended = newHeader + oldSubtables + Pad(oldSubtables);
+        byte[] subtable = BuildEmptyCmapSubtable();
+        var cmap = new byte[appended + subtable.Length];
+
+        BinaryPrimitives.WriteUInt16BigEndian(cmap.AsSpan(2), (ushort)(count + 1));
+        for (int i = 0; i < count; i++)
+        {
+            int source = tableOffset + 4 + (i * 8);
+            int target = 4 + (i * 8);
+            BinaryPrimitives.WriteUInt16BigEndian(cmap.AsSpan(target), BinaryPrimitives.ReadUInt16BigEndian(data.AsSpan(source)));
+            BinaryPrimitives.WriteUInt16BigEndian(cmap.AsSpan(target + 2), BinaryPrimitives.ReadUInt16BigEndian(data.AsSpan(source + 2)));
+            BinaryPrimitives.WriteUInt32BigEndian(cmap.AsSpan(target + 4),
+                BinaryPrimitives.ReadUInt32BigEndian(data.AsSpan(source + 4)) + (uint)(newHeader - oldHeader));
+        }
+
+        BinaryPrimitives.WriteUInt16BigEndian(cmap.AsSpan(4 + (count * 8)), 3);
+        BinaryPrimitives.WriteUInt16BigEndian(cmap.AsSpan(4 + (count * 8) + 2), 1);
+        BinaryPrimitives.WriteUInt32BigEndian(cmap.AsSpan(4 + (count * 8) + 4), (uint)appended);
+
+        Array.Copy(data, tableOffset + oldHeader, cmap, newHeader, oldSubtables);
+        subtable.CopyTo(cmap, appended);
+        return cmap;
+    }
+
+    /// <summary>
     /// An empty format 4 cmap for platform 3 / encoding 1. Its only segment is the required terminator
     /// (0xFFFF..0xFFFF, idDelta 1, idRangeOffset 0), so it maps nothing; the arrays follow the header
     /// back to back at subtable offsets 14, 16, 18 and 20, and the reserved pad ends the table at 24.
     /// </summary>
     private static byte[] BuildEmptyCmap()
     {
-        var cmap = new byte[36];
+        var cmap = new byte[12 + BuildEmptyCmapSubtable().Length];
         BinaryPrimitives.WriteUInt16BigEndian(cmap.AsSpan(2), 1); // one subtable
         BinaryPrimitives.WriteUInt16BigEndian(cmap.AsSpan(4), 3); // platform: Windows
         BinaryPrimitives.WriteUInt16BigEndian(cmap.AsSpan(6), 1); // encoding: Unicode BMP
         BinaryPrimitives.WriteUInt32BigEndian(cmap.AsSpan(8), 12); // subtable offset
-        BinaryPrimitives.WriteUInt16BigEndian(cmap.AsSpan(12), 4); // format
-        BinaryPrimitives.WriteUInt16BigEndian(cmap.AsSpan(14), 24); // length
-        BinaryPrimitives.WriteUInt16BigEndian(cmap.AsSpan(18), 2); // segCountX2
-        BinaryPrimitives.WriteUInt16BigEndian(cmap.AsSpan(20), 2); // searchRange
-        BinaryPrimitives.WriteUInt16BigEndian(cmap.AsSpan(26), 0xFFFF); // endCode[0]
-        BinaryPrimitives.WriteUInt16BigEndian(cmap.AsSpan(28), 0xFFFF); // startCode[0]
-        BinaryPrimitives.WriteUInt16BigEndian(cmap.AsSpan(30), 1); // idDelta[0]
+        BuildEmptyCmapSubtable().CopyTo(cmap, 12);
+        return cmap;
+    }
+
+    private static byte[] BuildEmptyCmapSubtable()
+    {
+        var cmap = new byte[24];
+        BinaryPrimitives.WriteUInt16BigEndian(cmap.AsSpan(0), 4); // format
+        BinaryPrimitives.WriteUInt16BigEndian(cmap.AsSpan(2), 24); // length
+        BinaryPrimitives.WriteUInt16BigEndian(cmap.AsSpan(6), 2); // segCountX2
+        BinaryPrimitives.WriteUInt16BigEndian(cmap.AsSpan(8), 2); // searchRange
+        BinaryPrimitives.WriteUInt16BigEndian(cmap.AsSpan(14), 0xFFFF); // endCode[0]
+        BinaryPrimitives.WriteUInt16BigEndian(cmap.AsSpan(16), 0xFFFF); // startCode[0]
+        BinaryPrimitives.WriteUInt16BigEndian(cmap.AsSpan(18), 1); // idDelta[0]
         return cmap;
     }
 
@@ -372,6 +488,33 @@ public sealed class PeachFont : IFont
         BinaryPrimitives.WriteInt16BigEndian(post.AsSpan(8), -100); // underlinePosition
         BinaryPrimitives.WriteInt16BigEndian(post.AsSpan(10), 50); // underlineThickness
         return post;
+    }
+
+    /// <summary>
+    /// A version 4 OS/2 table for a program that has none. The descriptor reads it for the weight, the
+    /// selection flags and the vertical metrics, and a missing one aborts the parse; the vertical metrics
+    /// are copied from hhea so the line metrics stay consistent with what the PDF already declares.
+    /// </summary>
+    private static byte[] BuildOs2(byte[] data, int hheaOffset)
+    {
+        var os2 = new byte[96];
+        short ascender = 800;
+        short descender = -200;
+        short lineGap = 0;
+        if (hheaOffset >= 0 && data.Length >= hheaOffset + 10)
+        {
+            ascender = BinaryPrimitives.ReadInt16BigEndian(data.AsSpan(hheaOffset + 4));
+            descender = BinaryPrimitives.ReadInt16BigEndian(data.AsSpan(hheaOffset + 6));
+            lineGap = BinaryPrimitives.ReadInt16BigEndian(data.AsSpan(hheaOffset + 8));
+        }
+
+        BinaryPrimitives.WriteUInt16BigEndian(os2.AsSpan(0), 4); // version
+        BinaryPrimitives.WriteUInt16BigEndian(os2.AsSpan(4), 400); // usWeightClass: normal
+        BinaryPrimitives.WriteUInt16BigEndian(os2.AsSpan(62), 0x40); // fsSelection: regular
+        BinaryPrimitives.WriteInt16BigEndian(os2.AsSpan(68), ascender); // sTypoAscender
+        BinaryPrimitives.WriteInt16BigEndian(os2.AsSpan(70), descender); // sTypoDescender
+        BinaryPrimitives.WriteInt16BigEndian(os2.AsSpan(72), lineGap); // sTypoLineGap
+        return os2;
     }
 
     private static int Pad(int length) => (4 - (length % 4)) % 4;
