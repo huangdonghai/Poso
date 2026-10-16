@@ -58,7 +58,7 @@ public static class PdfImageDecoder
                 return null;
             }
 
-            return CreateBilevelImage(factory, page.Value);
+            return CreateBilevelImage(factory, page.Value, dictionary, stencilColor);
         }
 
         if (hasCcitt)
@@ -318,18 +318,31 @@ public static class PdfImageDecoder
         return Decode(document, factory, stream, dictionary, stencilColor, diagnostics);
     }
 
-    /// <summary>Decodes a CCITT (Group 3/4) bilevel image XObject into a BGRA image.</summary>
-    private static IImage CreateBilevelImage(IGraphicsFactory factory, Jbig2Page page)
+    /// <summary>Decodes a JBIG2 bilevel image XObject into a BGRA image.</summary>
+    private static IImage CreateBilevelImage(IGraphicsFactory factory, Jbig2Page page, PdfDictionary dictionary, PosoColor stencilColor)
     {
         int w = page.Width;
         int h = page.Height;
         var pixels = new byte[w * h * 4];
+        bool mask = dictionary.GetBooleanValue("ImageMask") ?? false;
+        bool paintWhenSet = MaskPaintsSetBit(dictionary);
+
         for (int y = 0; y < h; y++)
         {
             for (int x = 0; x < w; x++)
             {
-                byte value = page.IsBlack(x, y) ? (byte)0 : (byte)255;
                 int offset = ((y * w) + x) * 4;
+                if (mask)
+                {
+                    byte ink = page.IsBlack(x, y) == paintWhenSet ? stencilColor.A : (byte)0;
+                    pixels[offset] = Premultiply(stencilColor.B, ink);
+                    pixels[offset + 1] = Premultiply(stencilColor.G, ink);
+                    pixels[offset + 2] = Premultiply(stencilColor.R, ink);
+                    pixels[offset + 3] = ink;
+                    continue;
+                }
+
+                byte value = page.IsBlack(x, y) ? (byte)0 : (byte)255;
                 pixels[offset] = value;
                 pixels[offset + 1] = value;
                 pixels[offset + 2] = value;
@@ -339,6 +352,15 @@ public static class PdfImageDecoder
 
         return factory.CreateImage(w, h, PixelFormat.Bgra8888Premul, pixels);
     }
+
+    /// <summary>
+    /// Whether a 1-bit stencil mask paints where the filter's decoded bit is set. The reference renderer
+    /// paints the set bit whichever way a filter's own black/white flag reads (the flag's inversion and the
+    /// mask sample inversion cancel out - checked with controlled Group 4 codestreams both ways), and
+    /// /Decode [1 0] swaps the two values again.
+    /// </summary>
+    private static bool MaskPaintsSetBit(PdfDictionary dictionary) =>
+        (dictionary.GetArray("Decode")?.GetNumber(0)?.AsFloat() ?? 0f) != 1f;
 
     private static IImage? DecodeCcittImage(IGraphicsFactory factory, PdfStream stream, PdfDictionary dictionary, int width, int height, PosoColor stencilColor, PdfDiagnostics? diagnostics)
     {
@@ -360,10 +382,8 @@ public static class PdfImageDecoder
         int bytesPerRow = (columns + 7) / 8;
         var pixels = new byte[columns * rows * 4];
         bool mask = dictionary.GetBooleanValue("ImageMask") ?? false;
-        // For a stencil mask the ink is the 1 bit whichever way /BlackIs1 reads: the flag's own inversion
-        // and the mask sample inversion cancel out. MuPDF renders fax masks that way (checked with
-        // controlled codestreams at BlackIs1 true and false); /Decode [1 0] swaps the two values again.
-        bool paintWhenOne = !mask || (dictionary.GetArray("Decode")?.GetNumber(0)?.AsFloat() ?? 0f) != 1f;
+        // For a stencil mask the ink is the filter's set bit; see MaskPaintsSetBit for how that is decided.
+        bool paintWhenSet = !mask || MaskPaintsSetBit(dictionary);
         byte maskR = stencilColor.R, maskG = stencilColor.G, maskB = stencilColor.B, maskA = stencilColor.A;
 
         for (int y = 0; y < rows; y++)
@@ -374,11 +394,11 @@ public static class PdfImageDecoder
                 int offset = ((y * columns) + x) * 4;
                 if (mask)
                 {
-                    bool paint = (bit == 1) == paintWhenOne;
-                    pixels[offset] = maskB;
-                    pixels[offset + 1] = maskG;
-                    pixels[offset + 2] = maskR;
-                    pixels[offset + 3] = paint ? maskA : (byte)0;
+                    byte ink = (bit == 1) == paintWhenSet ? maskA : (byte)0;
+                    pixels[offset] = Premultiply(maskB, ink);
+                    pixels[offset + 1] = Premultiply(maskG, ink);
+                    pixels[offset + 2] = Premultiply(maskR, ink);
+                    pixels[offset + 3] = ink;
                     continue;
                 }
 

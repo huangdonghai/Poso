@@ -94,6 +94,39 @@ public class Jbig2Tests
         }
     }
 
+    /// <summary>
+    /// A JBIG2 image declared as a 1-bit /ImageMask must paint the current fill colour as a stencil. The
+    /// decode path used to return before /ImageMask was read, laying down an opaque black-and-white plate
+    /// that covered whatever the page had drawn underneath.
+    /// </summary>
+    [Fact]
+    public void Jbig2MmrRegion_PaintsItsInkAsAStencil()
+    {
+        byte[] jbig2 = Convert.FromBase64String(Jbig2Base64);
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateJbig2MaskPdf(jbig2));
+        using IGraphicsContext context = SkiaGraphicsFactory.Default.CreateContext(200, 100);
+        var features = new List<PdfUnsupportedFeature>();
+        document.Pages[0].Render(SkiaGraphicsFactory.Default, context, new PdfRenderOptions(1f, 0f, PosoColor.Blue), features.Add);
+
+        Assert.DoesNotContain(features, f => f.Kind == PdfUnsupportedKind.ImageCodec);
+
+        using IImage image = context.Snapshot();
+        byte[] px = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(px);
+        for (int gy = 0; gy < 20; gy++)
+        {
+            for (int gx = 0; gx < 40; gx++)
+            {
+                int offset = ((((gy * 5) + 2) * image.Width) + (gx * 5) + 2) * 4;
+                int blue = px[offset], green = px[offset + 1], red = px[offset + 2];
+                bool painted = red > 200 && green < 60 && blue < 60;
+                bool backdrop = blue > 200 && red < 60 && green < 60;
+                Assert.True(painted || backdrop, $"pixel ({gx},{gy}) is neither the fill colour nor the page: {red},{green},{blue}");
+                Assert.Equal(Expected[gy][gx] == '1', painted);
+            }
+        }
+    }
+
     [Fact]
     public void Jbig2Globals_SplitSegments_MatchesMuPdfReference()
     {

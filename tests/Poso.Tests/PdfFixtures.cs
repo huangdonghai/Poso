@@ -825,6 +825,21 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// Like <see cref="CreateJbig2ImagePdf"/> but as a 1-bit /ImageMask stencil painted with the current fill
+    /// colour (red here), so the test can tell the mask's ink from its transparent background.
+    /// </summary>
+    public static byte[] CreateJbig2MaskPdf(byte[] jbig2)
+    {
+        string content = "q 1 0 0 rg 200 0 0 100 0 0 cm /Im1 Do Q";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /XObject << /Im1 5 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            new PdfObjectDefinition(5, $"<< /Type /XObject /Subtype /Image /Width 40 /Height 20 /BitsPerComponent 1 /ImageMask true /Filter /JBIG2Decode /Length {jbig2.Length} >>", jbig2));
+    }
+
+    /// <summary>
     /// Like <see cref="CreateJbig2ImagePdf"/> but with the JBIG2 page-information segment moved into a
     /// separate shared-data stream referenced through /DecodeParms &lt;&lt; /JBIG2Globals N 0 R &gt;&gt;, exercising
     /// the globals concatenation in the image decode path.
