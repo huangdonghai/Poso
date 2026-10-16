@@ -148,8 +148,10 @@ internal static class JpegColorConverter
 
         var cmyk = new byte[count * 4];
 
-        // YCCK (Adobe transform == 2): the first three planes are Y, Cb, Cr and must be turned into
-        // CMY (this also applies the inversion). transform 0 / absent: the planes are already CMYK.
+        // YCCK (Adobe transform == 2): the first three planes are Y, Cb, Cr and must be turned into CMY.
+        // Otherwise the planes are CMYK as stored. Adobe writes those planes as the complements of the
+        // colourants and producers pair that with a PDF /Decode of [1 0 ...], so the caller's Decode map
+        // is what restores them - inverting here too would cancel it out and leave the colours wrong.
         if (image.AdobeTransform == 2)
         {
             for (int i = 0; i < count; i++)
@@ -160,6 +162,7 @@ internal static class JpegColorConverter
                 cmyk[i * 4 + 2] = Clamp(YcckY(Y, Cb));
                 cmyk[i * 4 + 3] = k[i];
             }
+
             return cmyk;
         }
 
@@ -170,6 +173,7 @@ internal static class JpegColorConverter
             cmyk[i * 4 + 2] = y[i];
             cmyk[i * 4 + 3] = k[i];
         }
+
         return cmyk;
     }
 

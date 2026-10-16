@@ -96,6 +96,45 @@ public class ImageDecoderTests
         throw new InvalidOperationException("the fixture JPEG has no start-of-frame marker");
     }
 
+    /// <summary>
+    /// A DCTDecode image must honour its /Decode array. Adobe CMYK JPEGs store the complements of the
+    /// colourants and producers write <c>/Decode [1 0 1 0 1 0 1 0]</c> to turn them back; the JPEG branch
+    /// of the image decoder returned before the array was ever read, so a book cover came out sepia
+    /// where every viewer shows blue-grey - 86% of its pixels wrong against MuPDF.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Backends))]
+    public void CmykJpegWithInvertingDecode_AppliesTheDecodeArray(IGraphicsFactory factory)
+    {
+        byte[] jpeg = Convert.FromBase64String(AdobeCmykJpegBase64);
+
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateDctDecodeImagePdf(
+            jpeg, 16, 16, "/DeviceCMYK", "[1 0 1 0 1 0 1 0]"));
+        using IGraphicsContext context = factory.CreateContext(16, 16);
+        document.Pages[0].Render(factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        // The file stores the complements of ink (230, 50, 25, 0), so the decoded image must show that.
+        PosoColor expected = PosoColor.FromCmyk(230 / 255f, 50 / 255f, 25 / 255f, 0f);
+
+        using IImage image = context.Snapshot();
+        byte[] pixels = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(pixels);
+        int offset = ((8 * image.Width) + 8) * image.BytesPerPixel;
+        (int B, int G, int R) actual = (pixels[offset], pixels[offset + 1], pixels[offset + 2]);
+
+        Assert.True(Math.Abs(actual.R - expected.R) < 12 && Math.Abs(actual.G - expected.G) < 12 && Math.Abs(actual.B - expected.B) < 12,
+            $"expected the decoded cyan (got {actual}, want {expected})");
+    }
+
+    /// <summary>A 16x16 solid CMYK (230,50,25,0) JPEG carrying an Adobe APP14 marker with transform 0.</summary>
+    private const string AdobeCmykJpegBase64 =
+        "/9j/7gAOQWRvYmUAZAAAAAAA/9sAQwACAQEBAQECAQEBAgICAgIEAwICAgIFBAQDBAYFBgYGBQYGBgcJCAYHCQcGBggLCAkK"
+        + "CgoKCgYICwwLCgwJCgoK/8AAFAgAEAAQBEMRAE0RAFkRAEsRAP/EAB8AAAEFAQEBAQEBAAAAAAAAAAABAgMEBQYHCAkKC//E"
+        + "ALUQAAIBAwMCBAMFBQQEAAABfQECAwAEEQUSITFBBhNRYQcicRQygZGhCCNCscEVUtHwJDNicoIJChYXGBkaJSYnKCkqNDU2"
+        + "Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6g4SFhoeIiYqSk5SVlpeYmZqio6Slpqeoqaqys7S1tre4ubrC"
+        + "w8TFxsfIycrS09TV1tfY2drh4uPk5ebn6Onq8fLz9PX29/j5+v/aAA4EQwBNAFkASwAAPwD8Y6/TSv2Yr9/KKKKKKKKKKKKK"
+        + "/9k=";
+
     public static IEnumerable<object[]> Backends()
     {
         yield return [SkiaGraphicsFactory.Default];

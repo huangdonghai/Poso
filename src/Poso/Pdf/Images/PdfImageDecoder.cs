@@ -97,16 +97,21 @@ public static class PdfImageDecoder
             // with the managed decoder kept as the fallback when the backend cannot produce pixels.
             // 1/3-component JPEGs are unaffected and stay on the backend path.
             bool cmykJpeg = JpegDecoder.PeekComponentCount(encoded) == 4;
-            IImage? backendCmyk = cmykJpeg && factory.HandlesAdobeCmykJpeg
+            // A backend that decodes CMYK JPEGs itself never sees the PDF /Decode array, so it can only
+            // be used when that array is the identity.
+            IImage? backendCmyk = cmykJpeg && factory.HandlesAdobeCmykJpeg && IsIdentityDecode(dictionary)
                 ? DecodeViaBackend(factory, encoded)
                 : null;
 
             if (cmykJpeg && backendCmyk is null)
             {
                 JpegDecoder.Result? jpeg = JpegDecoder.Decode(encoded);
-                byte[]? cmykPixels = jpeg is null ? null : JpegColorConverter.ToBgra32(jpeg);
-                if (cmykPixels is not null)
+                byte[]? cmyk = jpeg is null ? null : JpegColorConverter.ToCmyk(jpeg);
+                if (cmyk is not null)
                 {
+                    MapCmykDecode(dictionary, cmyk);
+                    var cmykPixels = new byte[cmyk.Length];
+                    JpegColorConverter.CmykToBgra32(cmyk, cmykPixels);
                     return factory.CreateImage(jpeg!.Width, jpeg.Height, PixelFormat.Bgra8888Premul, cmykPixels);
                 }
                 // Fall through to the backend if the self-decode could not complete.
@@ -549,6 +554,71 @@ public static class PdfImageDecoder
         // Scale the whole range up, so 1-bit becomes 0 or 255 and 4-bit becomes 0..255 in steps of 17.
         int max = (1 << bitDepth) - 1;
         return (byte)(((sample * 255) + (max / 2)) / max);
+    }
+
+    /// <summary>True when the image has no /Decode, or one that maps every component onto itself.</summary>
+    private static bool IsIdentityDecode(PdfDictionary dictionary)
+    {
+        PdfArray? decode = dictionary.GetArray("Decode");
+        if (decode is null || decode.Count == 0)
+        {
+            return true;
+        }
+
+        for (int i = 0; i + 1 < decode.Count; i += 2)
+        {
+            if (decode.GetNumber(i)?.AsFloat() != 0f || decode.GetNumber(i + 1)?.AsFloat() != 1f)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Maps interleaved 8-bit CMYK samples through the image's /Decode array, in place. Producers of
+    /// Adobe CMYK JPEGs write [1 0 1 0 1 0 1 0] because the file stores the complements of the
+    /// colourants; without this the cover of a book came out sepia where every viewer shows blue-grey.
+    /// </summary>
+    private static void MapCmykDecode(PdfDictionary dictionary, byte[] cmyk)
+    {
+        PdfArray? decode = dictionary.GetArray("Decode");
+        if (decode is null || decode.Count < 8)
+        {
+            return;
+        }
+
+        bool identity = true;
+        for (int c = 0; c < 4; c++)
+        {
+            if (decode.GetNumber(c * 2)?.AsFloat() != 0f || decode.GetNumber((c * 2) + 1)?.AsFloat() != 1f)
+            {
+                identity = false;
+            }
+        }
+
+        if (identity)
+        {
+            return;
+        }
+
+        Span<float> min = stackalloc float[4];
+        Span<float> max = stackalloc float[4];
+        for (int c = 0; c < 4; c++)
+        {
+            min[c] = decode.GetNumber(c * 2)?.AsFloat() ?? 0f;
+            max[c] = decode.GetNumber((c * 2) + 1)?.AsFloat() ?? 1f;
+        }
+
+        for (int i = 0; i + 3 < cmyk.Length; i += 4)
+        {
+            for (int c = 0; c < 4; c++)
+            {
+                float mapped = min[c] + (cmyk[i + c] / 255f * (max[c] - min[c]));
+                cmyk[i + c] = (byte)Math.Clamp((int)MathF.Round(Math.Clamp(mapped, 0f, 1f) * 255f), 0, 255);
+            }
+        }
     }
 
     private static IImage? DecodeViaBackend(IGraphicsFactory factory, byte[] encoded)
