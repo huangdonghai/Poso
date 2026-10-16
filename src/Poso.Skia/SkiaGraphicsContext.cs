@@ -291,15 +291,7 @@ public sealed class SkiaGraphicsContext : IGraphicsContext
 
             if (stroke)
             {
-                // Stroke text width: the graphics state line width, with a floor of 2% of the font size
-                var textStroke = new StrokeStyle(
-                    Math.Max(strokeStyle.Width, fontSize * 0.02f),
-                    strokeStyle.Cap,
-                    strokeStyle.Join,
-                    strokeStyle.MiterLimit,
-                    strokeStyle.DashArray,
-                    strokeStyle.DashPhase);
-                SkiaConversions.ApplyStrokeStyle(_strokePaint, textStroke);
+                SkiaConversions.ApplyStrokeStyle(_strokePaint, strokeStyle);
                 _strokePaint.Color = skColor;
                 _canvas.DrawPath(positioned, _strokePaint);
             }

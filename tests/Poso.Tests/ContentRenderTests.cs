@@ -176,6 +176,20 @@ public class ContentRenderTests
 
         Assert.True(maxX > minX && maxY > minY, "stroked 'O' produced no ink");
 
+        // The stroke must not enlarge the glyph's own box: a back end that clamps the line width to a
+        // fraction of the font size re-scales it by the text matrix again and inflates this 'O' from
+        // 28x30 to 59x61.
+        Assert.True(maxX - minX <= 34 && maxY - minY <= 36,
+            $"stroked 'O' must stay inside its glyph box, got {maxX - minX}x{maxY - minY}");
+        int ink = 0;
+        for (int i = 0; i < image.Width * image.Height; i++)
+        {
+            int o = i * 4;
+            if (pixels[o] < 200 || pixels[o + 1] < 200 || pixels[o + 2] < 200) { ink++; }
+        }
+
+        Assert.True(ink is > 0 and < 600, $"a 0.5pt stroke at 40pt should ink a few hundred pixels, got {ink}");
+
         // A correct thin stroke leaves the counter (letter center) white; the blob bug fills it.
         int cx = (minX + maxX) / 2;
         int cy = (minY + maxY) / 2;

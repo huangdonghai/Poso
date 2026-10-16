@@ -236,12 +236,8 @@ public sealed class PeachGraphicsContext : IGraphicsContext
 
         if (stroke)
         {
-            // Match the Skia back-end's stroke-text floor: 2% of the font size.
             PeachCore.Pen pen = Target.GetPen(color.ToPaintColor());
-            pen.ApplyStrokeStyle(strokeStyle with
-            {
-                Width = MathF.Max(strokeStyle.Width, fontSize * 0.02f),
-            });
+            pen.ApplyStrokeStyle(strokeStyle);
             using PeachCore.GraphicsPath strokePath = BuildGlyphPath(peachFont, glyphs, scale);
             Target.DrawPath(pen, strokePath);
         }
