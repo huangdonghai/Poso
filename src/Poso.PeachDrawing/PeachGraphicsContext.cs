@@ -282,19 +282,18 @@ public sealed class PeachGraphicsContext : IGraphicsContext
     {
         PeachCore.GraphicsPath? path = _textClip;
         _textClip = null;
-        bool pushed = false;
 
         if (path is not null && _textClipAny)
         {
+            // The canvas owns the path from here: it lives and dies with the clip level it was pushed at.
+            // BeginDraw puts the canvas in the current CTM, which is what makes the path's user-space
+            // coordinates mean what they say - PushClip outside the scope would use a stale transform.
+            using DrawScope scope = BeginDraw();
             _clipDepth++;
             Target.PushClip(path);
             _clipBounds = _clipBounds.Intersect(_textClipBounds.TransformAabb(_ctm));
-            pushed = true;
         }
-
-        // PushClip takes ownership: the clip lives as long as the clip level it was pushed at, so only a
-        // path that never got pushed is ours to free.
-        if (!pushed)
+        else
         {
             path?.Dispose();
         }
