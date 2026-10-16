@@ -225,6 +225,9 @@ public sealed class SkiaGraphicsContext : IGraphicsContext
         public IImage? SoftMask { get; } = softMask;
     }
 
+    /// <summary>Skia's own save count, less the base level it always starts with.</summary>
+    public int SaveDepth => _canvas.SaveCount - 1;
+
     public RectF ClipBounds
     {
         get

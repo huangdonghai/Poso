@@ -188,6 +188,9 @@ public sealed class PdfContentInterpreter
         }
         finally
         {
+            // The group sits one level below anything the page's content leaked; without that the
+            // pending Restore pops the leak instead of the group and the page never composites out.
+            BalanceCanvasSaves(1);
             _context.PopLayer();
             foreach (IImage? image in _softMasks.Values)
             {
@@ -2211,6 +2214,21 @@ public sealed class PdfContentInterpreter
 
     // ---- XObjects and images ----
 
+    /// <summary>
+    /// Hand the back end back with exactly <paramref name="saveDepth"/> pending saves. An unbalanced
+    /// <c>q</c> is illegal but common in the wild - a producer that writes <c>1 0 0 1 0 0 cm q </c> as a
+    /// form's whole content - and because the interpreter pops its own state stack rather than the back
+    /// end's save stack, one stray level shifts every later <c>Restore</c>. Under a page-level
+    /// transparency group that means the group is never composited and the page comes out blank.
+    /// </summary>
+    private void BalanceCanvasSaves(int saveDepth)
+    {
+        for (int leaked = _context.SaveDepth - saveDepth; leaked > 0; leaked--)
+        {
+            _context.Restore();
+        }
+    }
+
     private void ExecuteForm(PdfStream form)
     {
         if (_suppressContent)
@@ -2224,6 +2242,7 @@ public sealed class PdfContentInterpreter
         }
 
         _formDepth++;
+        int outerSaves = _context.SaveDepth;
         try
         {
             // A form XObject behaves as if its content were wrapped in q/Q
@@ -2282,6 +2301,10 @@ public sealed class PdfContentInterpreter
             }
             finally
             {
+                // A form may legally be left with q still open; the group has to be popped before that
+                // stray save level, otherwise the layer never composites back.
+                BalanceCanvasSaves(outerSaves + 1 + (pushedLayer ? 1 : 0));
+
                 if (pushedLayer)
                 {
                     _context.PopLayer();

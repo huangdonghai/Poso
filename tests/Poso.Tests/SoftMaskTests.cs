@@ -112,6 +112,30 @@ public class SoftMaskTests
         yield return [SkiaGraphicsFactory.Default];
     }
 
+    /// <summary>
+    /// A form whose content leaves a <c>q</c> open must not cost the page its transparency group. The
+    /// group's <c>Restore</c> pops whatever level is on top, so one stray save turns the whole page
+    /// white; the interpreter has to hand the back end back the save depth it was given.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(MaskCapableFactories))]
+    public void LeakedSaveInAForm_StillCompositesThePage(IGraphicsFactory factory)
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateLeakedSaveFormPdf());
+        using IGraphicsContext context = factory.CreateContext(200, 200);
+        document.Pages[0].Render(factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] px = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(px);
+
+        (byte B, byte G, byte R) red = Sample(px, image.Width, 100, 50);
+        (byte B, byte G, byte R) green = Sample(px, image.Width, 100, 150);
+
+        Assert.True(red.R > 170 && red.G < 90 && red.B < 90, $"left half should be red (got {red})");
+        Assert.True(green.G > 170 && green.R < 90 && green.B < 90, $"right half should stay green (got {green})");
+    }
+
     private static (byte B, byte G, byte R) Sample(byte[] px, int width, int y, int x)
     {
         int offset = ((y * width) + x) * 4;

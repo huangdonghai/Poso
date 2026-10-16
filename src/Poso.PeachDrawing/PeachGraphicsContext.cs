@@ -77,6 +77,9 @@ public sealed class PeachGraphicsContext : IGraphicsContext
 
     public RectF ClipBounds => _clipBounds;
 
+    /// <summary>How many Save calls have not yet been matched by a Restore.</summary>
+    public int SaveDepth => _states.Count;
+
     private PeachCore.Canvas Target => _layers.Count > 0 ? _layers.Peek().Canvas : _baseCanvas;
 
     // ---- state -------------------------------------------------------------------------------------------

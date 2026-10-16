@@ -810,6 +810,26 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// A page that paints green, draws a form whose entire content is <c>1 0 0 1 0 0 cm q </c> - an
+    /// unbalanced save, which real producers do emit - and then paints red over the left half. Both
+    /// colours have to survive: the interpreter's own q/Q pairing sits under the page's transparency
+    /// group, so a leaked save level makes the group's Restore pop the leak instead of the group and
+    /// the whole page comes out blank.
+    /// </summary>
+    public static byte[] CreateLeakedSaveFormPdf()
+    {
+        byte[] leak = Encoding.ASCII.GetBytes("1 0 0 1 0 0 cm q ");
+        string content = "0 1 0 rg 0 0 200 200 re f /Leak Do 1 0 0 rg 0 0 100 200 re f";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] "
+                + "/Resources << /XObject << /Leak 5 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            Stream(5, "/Type /XObject /Subtype /Form /BBox [0 0 200 200]", leak));
+    }
+
+    /// <summary>
     /// A 200x200 page filled with a Separation colour space whose tint transform is a PostScript
     /// function that ends in <c>3 -1 roll</c>. The roll reorders <c>[tint 0 1]</c> into
     /// <c>[0 1 tint]</c>, so the fill must be cyan-blue (0, 0.5, 1) at tint 0.5; a reader that gives up

@@ -96,4 +96,12 @@ public interface IGraphicsContext : IDisposable
     /// fill. Back-ends without precise clip reporting return the whole canvas.
     /// </summary>
     RectF ClipBounds => new RectF(0f, 0f, Width, Height);
+
+    /// <summary>
+    /// How many <see cref="Save"/> calls have not been matched by a <see cref="Restore"/>. A content
+    /// stream is allowed to leak one, and the interpreter has to un-leak it before popping a
+    /// transparency group. Back-ends that do not track it report zero, which makes the balancing a
+    /// no-op there.
+    /// </summary>
+    int SaveDepth => 0;
 }
