@@ -324,13 +324,14 @@ public sealed class PdfShading
                 r = g = b = ToByte(v[0]);
                 break;
             case ShadingColorSpace.Cmyk:
-            {
-                float k = v[3];
-                r = ToByte(1f - Math.Min(1f, v[0] + k));
-                g = ToByte(1f - Math.Min(1f, v[1] + k));
-                b = ToByte(1f - Math.Min(1f, v[2] + k));
+                // The same conversion the element colours use: the textbook 1-(c+k) formula leaves the
+                // green channel at full strength for a cyan/yellow DeviceN wash, which is nowhere near
+                // any viewer's SWOP-based default conversion.
+                PosoColor converted = PosoColor.FromCmyk(v[0], v[1], v[2], v[3]);
+                r = converted.R;
+                g = converted.G;
+                b = converted.B;
                 break;
-            }
             default: // RGB
                 r = ToByte(v[0]);
                 g = ToByte(v[1]);

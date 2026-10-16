@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Poso.Graphics;
 using Poso.Pdf;
 using Poso.Skia;
@@ -76,6 +77,33 @@ public class ShadingTests
     }
 
     /// <summary>
+    /// A CMYK shading must reach the same RGB as the same CMYK painted as a plain fill. The shading
+    /// rasteriser had its own textbook <c>1 - (c + k)</c> conversion, which sends a cyan-and-yellow wash
+    /// to full green - a cover went from matching MuPDF to differing on 55% of its pixels over nothing
+    /// but that formula.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(GraphicsFactories))]
+    public void CmykShading_MatchesTheSharedCmykConversion(IGraphicsFactory factory)
+    {
+        PosoColor expected = PosoColor.FromCmyk(0.46f, 0f, 0.4775f, 0f);
+        Assert.True(expected.G < 240, $"the reference conversion itself should not pin green at full (got {expected.G})");
+
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateCmykShadingPdf());
+        using IGraphicsContext context = factory.CreateContext(200, 200);
+        document.Pages[0].Render(factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] pixels = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(pixels);
+        (byte B, byte G, byte R) painted = At(pixels, image.Width, 100, 100);
+
+        Assert.Equal(expected.R, painted.R);
+        Assert.Equal(expected.G, painted.G);
+        Assert.Equal(expected.B, painted.B);
+    }
+
+    /// <summary>
     /// <c>/Extend [true true]</c> must paint the end colour past the end circle. The entries are PDF
     /// booleans, so a reader that asks for a number sees false and clips the gradient: a full-page wash
     /// then stops dead in a hard circle in the middle of the page.
@@ -98,8 +126,13 @@ public class ShadingTests
         }
     }
 
-    private static (byte, byte, byte) At(byte[] pixels, int width, int y, int x)
+    public static IEnumerable<object[]> GraphicsFactories()
     {
+        yield return [SkiaGraphicsFactory.Default];
+        yield return [Poso.PeachDrawing.PeachGraphicsFactory.Default];
+    }
+
+    private static (byte, byte, byte) At(byte[] pixels, int width, int y, int x)    {
         int offset = ((y * width) + x) * 4;
         return (pixels[offset], pixels[offset + 1], pixels[offset + 2]);
     }
