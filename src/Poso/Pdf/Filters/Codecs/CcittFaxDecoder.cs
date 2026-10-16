@@ -23,7 +23,8 @@ public static class CcittFaxDecoder
     private const int VertR3 = 7;
     private const int VertL3 = 8;
 
-    // Decoded output bit convention before /BlackIs1: 1 = white, 0 = black.
+    // Decoded output bit convention before /BlackIs1: 1 = black, 0 = white (the T.4/T.6 coding order:
+    // a row's runs alternate from a white reference, so an even coding-line index ends a black run).
     // Returns packed rows (ceil(columns/8) bytes each), rows*ceil(columns/8) total. Bits beyond
     // the last column in a row are zero.
     public static byte[] Decode(byte[] data, int columns, int rows, int k, bool encodedByteAlign, bool blackIs1, bool endOfBlock, bool endOfLine)

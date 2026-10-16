@@ -63,7 +63,7 @@ public static class PdfImageDecoder
 
         if (hasCcitt)
         {
-            IImage? ccitt = DecodeCcittImage(factory, stream, dictionary, width, height, diagnostics);
+            IImage? ccitt = DecodeCcittImage(factory, stream, dictionary, width, height, stencilColor, diagnostics);
             if (ccitt is null)
             {
                 diagnostics?.Report(PdfUnsupportedKind.ImageCodec, "CCITTFaxDecode could not be decoded");
@@ -340,7 +340,7 @@ public static class PdfImageDecoder
         return factory.CreateImage(w, h, PixelFormat.Bgra8888Premul, pixels);
     }
 
-    private static IImage? DecodeCcittImage(IGraphicsFactory factory, PdfStream stream, PdfDictionary dictionary, int width, int height, PdfDiagnostics? diagnostics)
+    private static IImage? DecodeCcittImage(IGraphicsFactory factory, PdfStream stream, PdfDictionary dictionary, int width, int height, PosoColor stencilColor, PdfDiagnostics? diagnostics)
     {
         PdfDictionary? parms = GetCcittParms(dictionary);
         int columns = (int)(parms?.GetIntegerValue("Columns") ?? width);
@@ -359,15 +359,31 @@ public static class PdfImageDecoder
         byte[] bits = CcittFaxDecoder.Decode(codestream, columns, rows, k, byteAlign, blackIs1, endOfBlock, endOfLine);
         int bytesPerRow = (columns + 7) / 8;
         var pixels = new byte[columns * rows * 4];
+        bool mask = dictionary.GetBooleanValue("ImageMask") ?? false;
+        // For a stencil mask the ink is the 1 bit whichever way /BlackIs1 reads: the flag's own inversion
+        // and the mask sample inversion cancel out. MuPDF renders fax masks that way (checked with
+        // controlled codestreams at BlackIs1 true and false); /Decode [1 0] swaps the two values again.
+        bool paintWhenOne = !mask || (dictionary.GetArray("Decode")?.GetNumber(0)?.AsFloat() ?? 0f) != 1f;
+        byte maskR = stencilColor.R, maskG = stencilColor.G, maskB = stencilColor.B, maskA = stencilColor.A;
 
         for (int y = 0; y < rows; y++)
         {
             for (int x = 0; x < columns; x++)
             {
                 int bit = (bits[(y * bytesPerRow) + (x / 8)] >> (7 - (x % 8))) & 1;
+                int offset = ((y * columns) + x) * 4;
+                if (mask)
+                {
+                    bool paint = (bit == 1) == paintWhenOne;
+                    pixels[offset] = maskB;
+                    pixels[offset + 1] = maskG;
+                    pixels[offset + 2] = maskR;
+                    pixels[offset + 3] = paint ? maskA : (byte)0;
+                    continue;
+                }
+
                 bool isBlack = blackIs1 ? bit == 1 : bit == 0;
                 byte value = isBlack ? (byte)0 : (byte)255;
-                int offset = ((y * columns) + x) * 4;
                 pixels[offset] = value;
                 pixels[offset + 1] = value;
                 pixels[offset + 2] = value;

@@ -45,6 +45,40 @@ public class CcittTests
     }
 
     [Fact]
+    public void Group4_ImageMask_PaintsTheDecodedSetBits()
+    {
+        byte[] raw = Convert.FromHexString(SmallRawHex);
+        byte[] decoded = CcittFaxDecoder.Decode(raw, 24, 12, k: -1, encodedByteAlign: false, blackIs1: false, endOfBlock: true, endOfLine: false);
+        int setBits = 0;
+        for (int y = 0; y < 12; y++)
+        {
+            for (int x = 0; x < 24; x++)
+            {
+                setBits += (decoded[(y * 3) + (x / 8)] >> (7 - (x % 8))) & 1;
+            }
+        }
+
+        Assert.InRange(setBits, 1, 287);
+
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateCcittMaskPdf(raw));
+        using IGraphicsContext context = SkiaGraphicsFactory.Default.CreateContext(24, 12);
+        document.Pages[0].Render(SkiaGraphicsFactory.Default, context, new PdfRenderOptions(1f, 0f, PosoColor.White), _ => { });
+
+        using IImage image = context.Snapshot();
+        byte[] px = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(px);
+        int painted = 0;
+        for (int i = 0; i < image.Width * image.Height; i++)
+        {
+            if (px[i * 4] < 128) { painted++; }
+        }
+
+        // MuPDF paints the set bits of a fax stencil mask whichever way /BlackIs1 reads; the unset
+        // bits leave the backdrop through. The old path ignored /ImageMask and painted the complement.
+        Assert.Equal(setBits, painted);
+    }
+
+    [Fact]
     public void CcittImage_RendersNonBlank()
     {
         byte[] pdf = PdfFixtures.CreateCcittImagePdf(Convert.FromHexString(SmallRawHex));

@@ -777,6 +777,21 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// A 24x12pt page holding the codestream as a 1-bit /ImageMask XObject filling the page, decoded with
+    /// the default /BlackIs1 (false). Used to pin the stencil polarity of fax data.
+    /// </summary>
+    public static byte[] CreateCcittMaskPdf(byte[] codestream)
+    {
+        string content = "q 0 0 0 rg 24 0 0 12 0 0 cm /Im1 Do Q";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 24 12] /Resources << /XObject << /Im1 5 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            new PdfObjectDefinition(5, $"<< /Type /XObject /Subtype /Image /Width 24 /Height 12 /BitsPerComponent 1 /ImageMask true /Filter /CCITTFaxDecode /DecodeParms <</K -1 /Columns 24 /Rows 12>> /Length {codestream.Length} >>", codestream));
+    }
+
+    /// <summary>
     /// A 200x100 page drawing a 40x20 JBIG2 bilevel image (page-information + a single MMR generic
     /// region) scaled to fill the page. <paramref name="jbig2"/> is the complete JBIG2 page stream.
     /// </summary>
