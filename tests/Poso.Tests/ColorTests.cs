@@ -13,6 +13,31 @@ public class ColorTests
     private static readonly IGraphicsFactory Factory = SkiaGraphicsFactory.Default;
     private static readonly float[] D65 = { 0.9505f, 1f, 1.089f };
 
+    /// <summary>
+    /// A PostScript tint transform that reorders the stack with <c>roll</c> must paint the rolled
+    /// colour. DeviceN tint transforms are written almost entirely with roll, so an evaluator that
+    /// gives up on the operator leaves the operands in the wrong slots and the fill comes out with its
+    /// channels permuted.
+    /// </summary>
+    [Fact]
+    public void TintTransform_RollsTheStack()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateRollTintTransformPdf());
+        using IGraphicsContext context = Factory.CreateContext(200, 200);
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] pixels = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(pixels);
+        int offset = (100 * image.Width + 100) * image.BytesPerPixel;
+        byte b = pixels[offset], g = pixels[offset + 1], r = pixels[offset + 2];
+
+        // The program leaves [0, 1, tint] on the stack: red 0, green 1, blue 0.5.
+        Assert.True(r < 40, $"red should be the rolled 0 (got {r})");
+        Assert.True(g > 215, $"green should be the rolled 1 (got {g})");
+        Assert.InRange(b, 100, 160);
+    }
+
     [Fact]
     public void LabEndpointsAndNeutralAreGray()
     {

@@ -787,6 +787,24 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// A 200x200 page filled with a Separation colour space whose tint transform is a PostScript
+    /// function that ends in <c>3 -1 roll</c>. The roll reorders <c>[tint 0 1]</c> into
+    /// <c>[0 1 tint]</c>, so the fill must be cyan-blue (0, 0.5, 1) at tint 0.5; a reader that gives up
+    /// on the operator leaves the unrolled order and paints purple (0.5, 0, 1) instead.
+    /// </summary>
+    public static byte[] CreateRollTintTransformPdf()
+    {
+        byte[] program = Encoding.ASCII.GetBytes("0 1 3 -1 roll");
+        string content = "[/Separation /Spot /DeviceRGB 9 0 R] cs 0.5 scn 0 0 200 200 re f";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            Stream(9, "/Type /Function /FunctionType 4 /Domain [0 1] /Range [0 1 0 1 0 1]", program));
+    }
+
+    /// <summary>
     /// A 200x100 page painted with the <c>sh</c> operator from a named shading whose colour space is a
     /// <b>Separation over DeviceRGB</b>: the shading function ramps one tint and only the tint transform
     /// turns it into a colour, so the page must go red (tint 0) to green (tint 1). Reading the tint as a

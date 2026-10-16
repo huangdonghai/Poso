@@ -214,6 +214,39 @@ internal sealed class PostScriptFunction : PdfFunction
                 stack.Add(stack.Count);
                 return true;
 
+            case "roll":
+            {
+                if (stack.Count < 2)
+                {
+                    return true;
+                }
+
+                int times = (int)AsNumber(Pop(stack));
+                int count = (int)AsNumber(Pop(stack));
+                if (count <= 0 || count > stack.Count)
+                {
+                    return true;
+                }
+
+                // A positive roll slides the segment toward the bottom, so its deepest item comes up:
+                // 1 2 3 with "3 1 roll" leaves 3 1 2, and "n -1 roll" is the usual way to lift the nth
+                // item to the top. DeviceN tint transforms are written entirely in terms of this.
+                int shift = ((times % count) + count) % count;
+                if (shift == 0)
+                {
+                    return true;
+                }
+
+                int start = stack.Count - count;
+                object[] segment = [.. stack.GetRange(start, count)];
+                for (int i = 0; i < count; i++)
+                {
+                    stack[start + i] = segment[(i + (count - shift)) % count];
+                }
+
+                return true;
+            }
+
             case "clear":
                 stack.Clear();
                 return true;

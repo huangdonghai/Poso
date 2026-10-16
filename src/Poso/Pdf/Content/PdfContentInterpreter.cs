@@ -174,8 +174,19 @@ public sealed class PdfContentInterpreter
             _context.Clear(background);
         }
 
-        PdfDictionary? resources = page.Resources;
-        ExecuteContent(page.GetContent(_diag), resources);
+        // The page's content is one transparency group, and a group starts from an empty backdrop: the
+        // background only appears *underneath* the finished group. Clearing to the background instead
+        // gives every non-normal blend mode a white backdrop to blend against, and max(white, source)
+        // is white - which erases the wash of a cover that paints it with /BM /Lighten.
+        _context.PushLayer(null, 255, BlendMode.Normal, null);
+        try
+        {
+            ExecuteContent(page.GetContent(_diag), page.Resources);
+        }
+        finally
+        {
+            _context.PopLayer();
+        }
     }
 
     /// <summary>
