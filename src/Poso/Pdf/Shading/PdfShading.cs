@@ -18,6 +18,14 @@ internal enum ShadingColorSpace
 }
 
 /// <summary>
+/// A shading colour space as the rasteriser needs it: the base the pixels are built from, plus the
+/// Separation/DeviceN tint transform that maps the function's components onto it. A shading may well be
+/// defined in a two-component DeviceN space - Cyan and Yellow, say - whose output only becomes a colour
+/// after that transform; reading the tints as base components instead turns a green wash near black.
+/// </summary>
+internal readonly record struct ShadingSpace(ShadingColorSpace Base, PdfFunction? Tint, int TintComponents);
+
+/// <summary>
 /// PDF shading dictionary (ISO 32000-1 12.5). <see cref="Type2"/> axial and <see cref="Type3"/>
 /// radial gradients are rasterised in the core (device space) and blitted as an image, so the
 /// back-end does not need native gradient support. Other shading types are recognised but not yet
@@ -27,7 +35,7 @@ public sealed class PdfShading
 {
     private readonly PdfFunction? _function;
     private readonly float[] _domain;
-    private readonly ShadingColorSpace _colorSpace;
+    private readonly ShadingSpace _colorSpace;
 
     // Type 2 (axial): two endpoints in shading space.
     private readonly float[] _coords;
@@ -39,7 +47,13 @@ public sealed class PdfShading
 
     private List<MeshTriangle>? _meshTriangles;
 
-    private PdfShading(int type, PdfFunction? function, float[] domain, ShadingColorSpace colorSpace, float[] coords, bool radial)
+    private PdfShading(
+        int type,
+        PdfFunction? function,
+        float[] domain,
+        ShadingSpace colorSpace,
+        float[] coords,
+        bool radial)
     {
         Type = type;
         _function = function;
@@ -64,7 +78,7 @@ public sealed class PdfShading
 
         int type = (int)(dictionary.GetIntegerValue("ShadingType") ?? 0);
 
-        ShadingColorSpace colorSpace = ResolveColorSpace(document, dictionary.Get("ColorSpace"));
+        ShadingSpace colorSpace = ResolveColorSpace(document, dictionary.Get("ColorSpace"));
         PdfFunction? function = PdfFunction.Create(document, dictionary.Get("Function"));
         if (function is null)
         {
@@ -274,35 +288,68 @@ public sealed class PdfShading
         pixels[offset + 3] = 255;
     }
 
-    private static void ColorToRgb(ReadOnlySpan<float> color, ShadingColorSpace colorSpace, out byte r, out byte g, out byte b)
+    private static void ColorToRgb(ReadOnlySpan<float> color, ShadingSpace colorSpace, out byte r, out byte g, out byte b)
     {
-        switch (colorSpace)
+        // Four slots either way: a CMYK base needs all of them, and a tint transform's output is the
+        // only thing that can be shorter.
+        Span<float> v = stackalloc float[4];
+        if (colorSpace.Tint is { } tint)
+        {
+            tint.Evaluate(color[..Math.Min(colorSpace.TintComponents, color.Length)], v);
+        }
+        else
+        {
+            for (int i = 0; i < v.Length && i < color.Length; i++)
+            {
+                v[i] = color[i];
+            }
+        }
+
+        switch (colorSpace.Base)
         {
             case ShadingColorSpace.Gray:
-                r = g = b = ToByte(color.Length > 0 ? color[0] : 0f);
+                r = g = b = ToByte(v[0]);
                 break;
             case ShadingColorSpace.Cmyk:
             {
-                float k = color.Length > 3 ? color[3] : 0f;
-                r = ToByte(1f - Math.Min(1f, (color.Length > 0 ? color[0] : 0f) + k));
-                g = ToByte(1f - Math.Min(1f, (color.Length > 1 ? color[1] : 0f) + k));
-                b = ToByte(1f - Math.Min(1f, (color.Length > 2 ? color[2] : 0f) + k));
+                float k = v[3];
+                r = ToByte(1f - Math.Min(1f, v[0] + k));
+                g = ToByte(1f - Math.Min(1f, v[1] + k));
+                b = ToByte(1f - Math.Min(1f, v[2] + k));
                 break;
             }
             default: // RGB
-                r = ToByte(color.Length > 0 ? color[0] : 0f);
-                g = ToByte(color.Length > 1 ? color[1] : 0f);
-                b = ToByte(color.Length > 2 ? color[2] : 0f);
+                r = ToByte(v[0]);
+                g = ToByte(v[1]);
+                b = ToByte(v[2]);
                 break;
         }
     }
 
     private static byte ToByte(float value) => (byte)Math.Clamp((int)MathF.Round(Math.Clamp(value, 0f, 1f) * 255f), 0, 255);
 
-    private static ShadingColorSpace ResolveColorSpace(PdfDocument document, PdfObject? colorSpaceObject)
+    private static ShadingSpace ResolveColorSpace(PdfDocument document, PdfObject? colorSpaceObject)
     {
         PdfObject? resolved = document.Resolve(colorSpaceObject);
-        string? name = resolved switch
+        if (resolved is PdfArray { Count: >= 4 } array
+            && array[0] is PdfName family
+            && family.Value is "Separation" or "DeviceN")
+        {
+            // [space, tint transform]: the function emits one component per separation name and only the
+            // transform maps them onto the base space, which is itself a name or an ICCBased array.
+            ShadingColorSpace baseSpace = BaseSpaceOf(document.Resolve(array[2]));
+            int tints = family.Value == "Separation"
+                ? 1
+                : Math.Max(1, (document.Resolve(array[1]) as PdfArray)?.Count ?? 1);
+            return new ShadingSpace(baseSpace, PdfFunction.Create(document, array[3]), tints);
+        }
+
+        return new ShadingSpace(BaseSpaceOf(resolved), null, 0);
+    }
+
+    private static ShadingColorSpace BaseSpaceOf(PdfObject? colorSpaceObject)
+    {
+        string? name = colorSpaceObject switch
         {
             PdfName n => n.Value,
             PdfArray a when a.Count >= 1 && a[0] is PdfName family => family.Value,
@@ -393,7 +440,7 @@ public sealed class PdfShading
         }
     }
 
-    private static List<MeshTriangle>? ParseMesh(PdfStream stream, PdfDictionary dictionary, ShadingColorSpace colorSpace, PdfFunction function)
+    private static List<MeshTriangle>? ParseMesh(PdfStream stream, PdfDictionary dictionary, ShadingSpace colorSpace, PdfFunction function)
     {
         byte[] data = stream.Decode(null);
         if (data.Length == 0)

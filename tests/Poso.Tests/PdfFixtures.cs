@@ -787,6 +787,27 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// A 200x100 page painted with the <c>sh</c> operator from a named shading whose colour space is a
+    /// <b>Separation over DeviceRGB</b>: the shading function ramps one tint and only the tint transform
+    /// turns it into a colour, so the page must go red (tint 0) to green (tint 1). Reading the tint as a
+    /// base component instead gives black to red.
+    /// </summary>
+    public static byte[] CreateSeparationShadingPdf()
+    {
+        string content = "q 0 0 200 100 re W n /Sh0 sh Q";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] "
+                + "/Resources << /Shading << /Sh0 6 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            new PdfObjectDefinition(6, "<< /ShadingType 2 /ColorSpace [/Separation /All /DeviceRGB 8 0 R] "
+                + "/Coords [0 0 200 0] /Domain [0 1] /Function 7 0 R >>"),
+            new PdfObjectDefinition(7, "<< /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >>"),
+            new PdfObjectDefinition(8, "<< /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [0 1 0] /N 1 >>"));
+    }
+
+    /// <summary>
     /// A page filled with a radial (Type 3) shading pattern: a concentric DeviceGray gradient from
     /// black at the centre (user 100,50) fading outward (radius 200).
     /// </summary>

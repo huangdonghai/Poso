@@ -51,6 +51,36 @@ public class ShadingTests
         Assert.True(corner > centre, $"Radial corner should be lighter than centre (centre={centre} corner={corner})");
     }
 
+    /// <summary>
+    /// A shading defined in a Separation space paints the tint transform's colour, not the raw tint.
+    /// Regression: the shading reader only understood device spaces, so a Separation or DeviceN array
+    /// fell through to its base and the single tint was painted as if it were a grey/red component -
+    /// which turned a full-page green wash on an Illustrator cover near black.
+    /// </summary>
+    [Fact]
+    public void SeparationShading_PaintsTheTransformedTint()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateSeparationShadingPdf());
+        using IGraphicsContext context = Factory.CreateContext(200, 100);
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] pixels = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(pixels);
+
+        (byte B, byte G, byte R) left = At(pixels, image.Width, 50, 10);
+        (byte B, byte G, byte R) right = At(pixels, image.Width, 50, 190);
+
+        Assert.True(left.R > 150 && left.G < 80, $"tint 0 should be red (got {left})");
+        Assert.True(right.G > 150 && right.R < 80, $"tint 1 should be green (got {right})");
+    }
+
+    private static (byte, byte, byte) At(byte[] pixels, int width, int y, int x)
+    {
+        int offset = ((y * width) + x) * 4;
+        return (pixels[offset], pixels[offset + 1], pixels[offset + 2]);
+    }
+
     private static byte GrayAt(byte[] pixels, int width, int y, int x)
     {
         int offset = ((y * width) + x) * 4;
