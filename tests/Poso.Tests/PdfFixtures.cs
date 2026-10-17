@@ -1038,6 +1038,50 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// A page whose <c>/MediaBox</c> is an indirect reference. The inheritable-attribute map holds the
+    /// reference unresolved, so reading the box as a type test misses it and the page comes out at the
+    /// default letter size.
+    /// </summary>
+    public static byte[] CreateIndirectPageBoxPdf() => Build(1,
+        new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+        new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+        new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox 4 0 R >>"),
+        new PdfObjectDefinition(4, "[0 0 300 200]"));
+
+    /// <summary>
+    /// Four pages that exercise the page boxes: one whose <c>/MediaBox</c> is empty, one whose
+    /// <c>/CropBox</c> is, one whose <c>/CropBox</c> lies wholly outside its <c>/MediaBox</c>, and one
+    /// with an ordinary crop inside the media box. MuPDF renders the first three at its default
+    /// 612x792 and the last at the crop; a renderer that trusts the declared boxes gets three
+    /// zero-sized pages, which no back end can even allocate.
+    /// </summary>
+    public static byte[] CreatePageBoxVariantsPdf() => Build(1,
+        new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+        new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R 6 0 R] /Count 4 >>"),
+        new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 0 0] >>"),
+        new PdfObjectDefinition(4, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 800 600] /CropBox [0 0 0 0] >>"),
+        new PdfObjectDefinition(5, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /CropBox [600 -200 1000 0] >>"),
+        new PdfObjectDefinition(6, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /CropBox [36 36 576 756] >>"));
+
+    /// <summary>
+    /// A 100x100 page painted with a shading pattern through a colour space written as <c>[/Pattern]</c>
+    /// with no base space - legal, and meaning the base is whatever is current. Requiring a second array
+    /// entry left such a space unrecognised, so the pattern was never selected and a corpus page painted a
+    /// solid colour where MuPDF paints a blue-to-green ramp.
+    /// </summary>
+    public static byte[] CreateBarePatternSpaceShadingPdf()
+    {
+        string content = "[/Pattern] cs /ShP scn 0 0 100 100 re f";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Pattern << /ShP 6 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            new PdfObjectDefinition(6, "<< /PatternType 2 /Shading << /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 100 0] /Domain [0 1] /Extend [true true] /Function 7 0 R >> >>"),
+            new PdfObjectDefinition(7, "<< /FunctionType 2 /Domain [0 1] /C0 [0 0 1] /C1 [0 1 0] /E 1 >>"));
+    }
+
+    /// <summary>
     /// A 100x100 page painted with a <c>ShadingType 1</c> (function-based) shading whose function returns
     /// the shading-space x as red and nothing else, placed by <c>/Matrix [100 0 0 100 0 0]</c>. The ramp
     /// proves both the matrix mapping and the two-input function call; the corpus file that uses nine of

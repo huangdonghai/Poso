@@ -53,6 +53,37 @@ public class ShadingTests
     }
 
     /// <summary>
+    /// A colour space written as <c>[/Pattern]</c> with no base space still selects a pattern, so the
+    /// shading pattern painted through it must show. Reading the array as malformed instead leaves the
+    /// fill at whatever solid colour the graphics state happened to hold.
+    /// </summary>
+    [Fact]
+    public void BarePatternSpace_SelectsTheShadingPattern()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateBarePatternSpaceShadingPdf());
+        using IGraphicsContext context = Factory.CreateContext(100, 100);
+        var features = new List<PdfUnsupportedFeature>();
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White), features.Add);
+
+        Assert.DoesNotContain(features, f => f.Kind == PdfUnsupportedKind.PatternColorSpace);
+
+        using IImage image = context.Snapshot();
+        byte[] pixels = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(pixels);
+
+        (byte R, byte G, byte B) At(int x, int y)
+        {
+            int offset = ((y * image.Width) + x) * image.BytesPerPixel;
+            return (pixels[offset + 2], pixels[offset + 1], pixels[offset]);
+        }
+
+        (byte R, byte G, byte B) left = At(20, 50);
+        (byte R, byte G, byte B) right = At(80, 50);
+        Assert.True(left.B > 170 && left.G < 90, $"the blue end should show at x=20 (got {left})");
+        Assert.True(right.G > 170 && right.B < 90, $"the green end should show at x=80 (got {right})");
+    }
+
+    /// <summary>
     /// A function-based (Type 1) shading must paint: its function takes the shading-space point itself,
     /// and <c>/Matrix</c> is what places that space. Nine of these sit on one page of the pdf.js suite and
     /// all of them came out as the background.

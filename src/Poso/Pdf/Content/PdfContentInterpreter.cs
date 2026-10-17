@@ -1692,6 +1692,15 @@ public sealed class PdfContentInterpreter
                 };
                 break;
 
+            // A pattern space may be written with no base space at all - [/Pattern] - which means the
+            // base is whatever the current space is (PDF 32000-1:2008 8.7.3.1). Requiring a second entry
+            // left such a space unrecognised, so scn fell through to a solid colour and a shading
+            // pattern painted nothing.
+            case PdfArray { Count: 1 } patternOnly when patternOnly[0] is PdfName { Value: "Pattern" }:
+                kind = ColorSpaceKind.Pattern;
+                components = 1;
+                break;
+
             case PdfArray array when array.Count >= 2 && array[0] is PdfName family:
                 switch (family.Value)
                 {
