@@ -128,7 +128,10 @@ public sealed class Type1Program : IType1Program
                     ReadArray(s, fontBBox);
                     break;
                 case "Encoding":
-                    builtIn = ReadEncoding(s);
+                    // The header mentions /Encoding twice: once to build the array and once to store it
+                    // ("dup /FontName get exch /Encoding exch def"), which is not a table to read. Keep
+                    // the first real one rather than letting the second overwrite it with nothing.
+                    builtIn ??= ReadEncoding(s);
                     break;
             }
         }
@@ -152,7 +155,15 @@ public sealed class Type1Program : IType1Program
         int size = int.Parse(arg);
         var table = new string?[256];
         s.GetToken(); // "array"
-        while (s.GetToken() == "dup")
+
+        // Most programs fill the array with .notdef before naming anything - "0 1 255 {1 index exch
+        // /.notdef put} for" - so walk past that preamble to the first "dup" rather than stopping at it.
+        string? token;
+        while ((token = s.GetToken()) is not null && token != "dup")
+        {
+        }
+
+        while (token == "dup")
         {
             int index = s.ReadInt();
             s.GetToken(); // "/"
@@ -162,6 +173,8 @@ public sealed class Type1Program : IType1Program
             {
                 table[index] = glyph;
             }
+
+            token = s.GetToken();
         }
 
         _ = size;
@@ -858,6 +871,6 @@ public sealed class Type1Program : IType1Program
             c is 0x00 or 0x09 or 0x0a or 0x0c or 0x0d or 0x20;
 
         private static bool IsSpecial(int c) =>
-            c is 0x2f /*/*/ or 0x5b /*[*/ or 0x5d /*]*/ or 0x7b /*{*/ or 0x7b /*}*/ or 0x28 /*(*/ or 0x29 /*)*/;
+            c is 0x2f /*/*/ or 0x5b /*[*/ or 0x5d /*]*/ or 0x7b /*{*/ or 0x7d /*}*/ or 0x28 /*(*/ or 0x29 /*)*/;
     }
 }

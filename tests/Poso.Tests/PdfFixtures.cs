@@ -664,6 +664,31 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// A 200x100 page that shows one word in a native Type 1 program whose font dict carries no
+    /// /Encoding - so the codes fall back to StandardEncoding - and whose /Widths start at
+    /// <c>/FirstChar 11</c>, the way an AMS Computer Modern subset arrives from Ghostscript.
+    /// </summary>
+    public static byte[] CreateType1WordPdf(byte[] fontProgram, string word)
+    {
+        string widths = string.Join(" ", Enumerable.Repeat(500, 122 - 11 + 1));
+        string font = "<< /Type /Font /Subtype /Type1 /BaseFont /TestCmbx12 "
+            + "/FirstChar 11 /LastChar 122 /Widths [" + widths + "] /FontDescriptor 6 0 R >>";
+        string descriptor = "<< /Type /FontDescriptor /FontName /TestCmbx12 /Flags 4 "
+            + "/FontBBox [-53 -251 1139 750] /Ascent 694 /Descent -194 /ItalicAngle 0 /CapHeight 686 "
+            + "/StemV 884 /FontFile 7 0 R >>";
+        string content = $"BT /F1 20 Tf 10 20 Td ({word}) Tj ET";
+
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            new PdfObjectDefinition(5, font),
+            new PdfObjectDefinition(6, descriptor),
+            Stream(7, string.Empty, fontProgram));
+    }
+
+    /// <summary>
     /// A 200x100 page filled by a 2x2 image whose first sample row is black and second row white, placed either
     /// with the upright unit-square matrix or with a mirrored one. Pins which edge of the placement the first
     /// sample row lands on.

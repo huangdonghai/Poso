@@ -194,6 +194,58 @@ public class NativeType1Tests
     }
 
 
+    /// <summary>
+    /// An American Mathematical Society Type 1 face with an ASCII cleartext header and a raw eexec body -
+    /// the shape Ghostscript writes into a PDF. Its charstrings do convert and its names do resolve, which
+    /// is what makes the corpus page that draws none of this text worth pinning: the failure that hides
+    /// behind a working conversion is elsewhere, and a page whose only text is invisible looks identical
+    /// whether the outlines, the encoding or the drawing call is at fault.
+    /// </summary>
+    [Fact]
+    public void AsciiHeaderType1_ConvertsAndResolvesItsNames()
+    {
+        byte[] program = File.ReadAllBytes(FontsFile("cmbx12-waves.bin"));
+        Assert.True(Poso.Pdf.Fonts.Type1Program.TryCreate(program, out Poso.Pdf.Fonts.Type1Program? t1) && t1 is not null);
+        Assert.Contains(t1!.Glyphs, g => g.Name == "w" && g.Charstring.Length > 2 && g.Width > 0);
+        Assert.Equal("w", t1.BuiltInEncoding?[119]);
+
+        byte[] cff = Poso.Pdf.Fonts.Type1ToCff.Build(t1, "TestCmbx12");
+        Assert.True(Poso.Pdf.Fonts.CffProgram.TryCreate(cff, out Poso.Pdf.Fonts.CffProgram? cffProg) && cffProg is not null);
+        foreach (string name in new[] { "w", "a", "v", "e", "s" })
+        {
+            Assert.True(cffProg!.TryGetGlyphId(name, out ushort _), $"the rebuilt CFF charset has no {name}");
+        }
+    }
+
+    /// <summary>
+    /// The same face drawn end to end: a corpus page whose only text is "waves" in this font came out
+    /// with no ink at all, even though the program converts and its names resolve.
+    /// </summary>
+    [Fact]
+    public void AsciiHeaderType1_DrawsInk()
+    {
+        byte[] program = File.ReadAllBytes(FontsFile("cmbx12-waves.bin"));
+        byte[] pdf = PdfFixtures.CreateType1WordPdf(program, "waves");
+        using PdfDocument document = PdfDocument.FromArray(pdf);
+        using IGraphicsContext context = Factory.CreateContext(200, 100);
+        var features = new System.Collections.Generic.List<PdfUnsupportedFeature>();
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White), features.Add);
+
+        using IImage image = context.Snapshot();
+        byte[] px = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(px);
+        int ink = 0;
+        for (int i = 0; i + 3 < px.Length; i += 4)
+        {
+            if (px[i] < 200 || px[i + 1] < 200 || px[i + 2] < 200)
+            {
+                ink++;
+            }
+        }
+
+        Assert.True(ink > 200, $"the word should have drawn ink, got {ink} dark pixels; features {string.Join(",", features.ConvertAll(f => f.Kind.ToString()))}");
+    }
+
     private static string FontsFile(string name)
     {
         string probe = IOPath.Combine(AppContext.BaseDirectory, "Samples", "Fonts", name);

@@ -121,6 +121,13 @@ public abstract class PdfFont
     /// </summary>
     protected Dictionary<int, ushort>? EmbeddedCidToGid { get; private set; }
 
+    /// <summary>
+    /// The code-to-name table a native Type 1 program carries in its own header. A symbolic font with no
+    /// PDF /Encoding has no other source for it - the codes of such a face mean what the program says they
+    /// mean - so this is what resolves them.
+    /// </summary>
+    protected string?[]? ProgramEncoding { get; private set; }
+
     /// <summary>The embedded font program prepared for a graphics backend (cached); null when the PDF embeds none.</summary>
     protected byte[]? EmbeddedFontData => _embeddedFontData ??= LoadEmbeddedFontData();
 
@@ -180,6 +187,7 @@ public abstract class PdfFont
             string fontName = string.IsNullOrEmpty(BaseFontName) ? "PosoType1" : BaseFontName;
             if (Type1Program.TryCreate(data, out Type1Program? type1) && type1 is not null)
             {
+                ProgramEncoding = type1.BuiltInEncoding;
                 byte[] cff = Type1ToCff.Build(type1, fontName);
                 if (CffProgram.TryCreate(cff, out CffProgram? program) && program is not null)
                 {

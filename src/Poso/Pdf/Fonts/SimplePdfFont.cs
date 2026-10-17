@@ -153,7 +153,16 @@ public sealed class SimplePdfFont : PdfFont
         PdfDictionary? descriptor = Document.Resolve(Dictionary.Get("FontDescriptor")) as PdfDictionary;
         long flags = descriptor?.GetIntegerValue("Flags") ?? 0;
         bool symbolic = (flags & 4) != 0; // Flags bit 3 (value 4): symbolic
-        return symbolic ? null : PdfEncodings.Standard;
+        if (!symbolic)
+        {
+            return PdfEncodings.Standard;
+        }
+
+        // A symbolic font's codes mean what its program says they mean, so read the encoding out of the
+        // program itself. Treating the code as a Unicode point instead - which is what falling through
+        // does - finds no glyph in a name-keyed program, and the text draws nothing at all.
+        _ = EmbeddedFontData;
+        return ProgramEncoding;
     }
 
     private static string?[]? SelectEncodingTable(string name) => name switch
