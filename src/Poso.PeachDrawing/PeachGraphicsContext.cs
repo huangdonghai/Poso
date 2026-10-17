@@ -426,11 +426,13 @@ public sealed class PeachGraphicsContext : IGraphicsContext
         };
         _layers.Push(layer);
 
-        // Clip bookkeeping restarts on the layer's canvas. The group's own /BBox clip and any
-        // ancestor clip were (and will be) re-established as ordinary clips inside the surrounding
-        // q/Q by the interpreter, on whichever canvas is current then.
+        // Clip bookkeeping restarts on the layer's canvas - but the canvas keeps the parent's device
+        // matrix, because the surface carries its own origin, so the box it restarts with is the layer's
+        // rectangle *in device coordinates*. Starting it at (0,0) instead makes every later clip intersect
+        // a device-space bound with a surface-space one, which shrinks the reported clip bounds by the
+        // layer's offset - and anything sized from them (a soft mask, a shading fill) lands misaligned.
         _clipDepth = 0;
-        _clipBounds = new RectF(0f, 0f, w, h);
+        _clipBounds = new RectF(x, y, w, h);
     }
 
     public void PopLayer()
