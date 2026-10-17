@@ -337,8 +337,9 @@ public sealed class PdfEncryption
         }
         catch (CryptographicException)
         {
-            // Some writers omit the PKCS#7 padding block; return the raw CBC output.
-            return aes.DecryptCbc(payload, iv, PaddingMode.None);
+            // Some writers omit the PKCS#7 padding block; return the raw CBC output. This helper also
+            // carries a trailing partial block through, which is what a damaged /Length leaves behind.
+            return AesCbcNoPaddingDecrypt(key, iv, payload);
         }
     }
 
@@ -455,14 +456,28 @@ public sealed class PdfEncryption
         }
         catch (CryptographicException)
         {
-            return aes.DecryptCbc(payload, iv, PaddingMode.None);
+            return AesCbcNoPaddingDecrypt(key, iv, payload);
         }
     }
 
     private static byte[] AesCbcNoPaddingDecrypt(byte[] key, byte[] iv, byte[] data)
     {
+        // A stream whose declared length is not a whole number of AES blocks is common among damaged
+        // files, and CBC cannot decrypt a partial block at all. Carrying the tail through unchanged is
+        // what the other readers do; throwing here loses the page, and the exception is not even
+        // catchable at the level where a lenient renderer could still show something.
+        int whole = data.Length - (data.Length % 16);
         using var aes = NewAes(key, CipherMode.CBC);
-        return aes.DecryptCbc(data, iv, PaddingMode.None);
+        if (whole == data.Length)
+        {
+            return aes.DecryptCbc(data, iv, PaddingMode.None);
+        }
+
+        byte[] decrypted = aes.DecryptCbc(data[..whole], iv, PaddingMode.None);
+        byte[] withTail = new byte[data.Length];
+        Buffer.BlockCopy(decrypted, 0, withTail, 0, whole);
+        Buffer.BlockCopy(data, whole, withTail, whole, data.Length - whole);
+        return withTail;
     }
 
     private static byte[] AesCbcNoPaddingEncrypt(byte[] key, byte[] iv, byte[] data)
