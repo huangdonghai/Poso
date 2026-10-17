@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Poso.Graphics;
 using Poso.Pdf;
 using Poso.Skia;
@@ -41,6 +42,43 @@ public class ImageDecoderTests
 
         Assert.True(centre.R > 150 && centre.G < 110 && centre.B < 140,
             $"the red patch should decode on every backend (got {centre})");
+    }
+
+    /// <summary>
+    /// An image in a Separation/DeviceN space carries one sample per colorant, and the space's tint
+    /// transform says what colour those make. Reading the samples as base components instead walks the
+    /// raster at the wrong stride, so the plate is scrambled as well as grey.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Backends))]
+    public void DeviceNImage_RunsItsTintTransformPerPixel(IGraphicsFactory factory)
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateDeviceNImagePdf());
+        using IGraphicsContext context = factory.CreateContext(100, 100);
+        var features = new List<PdfUnsupportedFeature>();
+        document.Pages[0].Render(factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White), features.Add);
+
+        Assert.DoesNotContain(features, f => f.Kind == PdfUnsupportedKind.ImageCodec);
+
+        using IImage image = context.Snapshot();
+        byte[] pixels = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(pixels);
+
+        (int R, int G, int B) At(int x, int y)
+        {
+            int offset = ((y * image.Width) + x) * image.BytesPerPixel;
+            return (pixels[offset + 2], pixels[offset + 1], pixels[offset]);
+        }
+
+        (int R, int G, int B)[] quadrants = [At(25, 25), At(75, 25), At(25, 75), At(75, 75)];
+        string all = string.Join(" ", quadrants.Select(q => $"({q.R},{q.G},{q.B})"));
+
+        // The transform maps the two colorants onto red and green, so the four pixels are the four
+        // combinations of them - and no grey approximation of a single component can produce them.
+        Assert.True(quadrants.Any(q => q.R > 200 && q.G < 40 && q.B < 40), $"no red-dominant pixel in {all}");
+        Assert.True(quadrants.Any(q => q.G > 200 && q.R < 40 && q.B < 40), $"no green-dominant pixel in {all}");
+        Assert.True(quadrants.Any(q => q.R is > 100 and < 160 && q.G is > 100 and < 160 && q.B < 40), $"no mixed pixel in {all}");
+        Assert.True(quadrants.Any(q => q.R < 40 && q.G < 40 && q.B < 40), $"no empty pixel in {all}");
     }
 
     /// <summary>

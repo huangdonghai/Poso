@@ -2,6 +2,7 @@ using System.Linq;
 using Poso.Graphics;
 using Poso.Pdf.Colors;
 using Poso.Pdf.Filters.Codecs;
+using Poso.Pdf.Functions;
 using Poso.Pdf.Objects;
 
 namespace Poso.Pdf.Images;
@@ -261,7 +262,11 @@ public static class PdfImageDecoder
                     }
 
                     ColorSpaceInfo space = colorSpace!;
-                    if (space.Icc is { } icc)
+                    if (space.Kind is ColorSpaceKind.Separation or ColorSpaceKind.DeviceN)
+                    {
+                        (r, g, b) = TintedToRgb(space, sampleValues);
+                    }
+                    else if (space.Icc is { } icc)
                     {
                         icc.ToRgb(sampleValues, out r, out g, out b);
                     }
@@ -669,7 +674,35 @@ public static class PdfImageDecoder
     }
 
     /// <summary>
-    /// Runs raw CMYK samples through the shared DeviceCMYK conversion. The one-minus-black shortcut is
+    /// Runs a Separation/DeviceN image's colorant samples through the space's tint transform and converts
+    /// the base space that comes out. A space with no tint transform falls back to the first tint as a
+    /// grey density, which is what the separation of a single black plate means anyway.
+    /// </summary>
+    private static (byte R, byte G, byte B) TintedToRgb(ColorSpaceInfo space, ReadOnlySpan<float> tints)
+    {
+        Span<float> baseValues = stackalloc float[Math.Clamp(Math.Max(space.BaseComponents, space.Tint?.OutputCount ?? 0), 1, 4)];
+        if (space.Tint is { } tint)
+        {
+            tint.Evaluate(tints, baseValues);
+        }
+        else
+        {
+            for (int i = 0; i < baseValues.Length && i < tints.Length; i++)
+            {
+                baseValues[i] = tints[i];
+            }
+        }
+
+        return space.BaseKind switch
+        {
+            ColorSpaceKind.DeviceCmyk => CmykToRgb(baseValues[0], baseValues[1], baseValues[2], baseValues[3]),
+            ColorSpaceKind.DeviceGray => GrayToRgb(baseValues[0]),
+            _ => (ToByte(baseValues[0]), ToByte(baseValues[1]), ToByte(baseValues[2])),
+        };
+    }
+
+    /// <summary>
+    /// Runs a raw CMYK sample through the shared DeviceCMYK conversion. The one-minus-black shortcut is
     /// not that: MuPDF converts through a coated-paper profile, which is several times brighter in the
     /// dark tones a photograph is mostly made of, so the shortcut left every CMYK photo underexposed.
     /// </summary>
@@ -704,6 +737,19 @@ public static class PdfImageDecoder
         int maxIndex = (lookup.Length / baseComponents) - 1;
         int clamped = Math.Clamp(index, 0, Math.Max(maxIndex, 0));
         int offset = clamped * baseComponents;
+
+        // A palette over a Separation or DeviceN holds one tint per colorant, and the entry is only a
+        // colour once the space's tint transform has run over it.
+        if (space.Base is { Kind: ColorSpaceKind.Separation or ColorSpaceKind.DeviceN } tinted)
+        {
+            Span<float> tints = stackalloc float[Math.Clamp(baseComponents, 1, 8)];
+            for (int i = 0; i < tints.Length; i++)
+            {
+                tints[i] = lookup[offset + i] / 255f;
+            }
+
+            return TintedToRgb(tinted, tints);
+        }
 
         return baseComponents switch
         {
@@ -956,17 +1002,30 @@ public static class PdfImageDecoder
         DeviceRgb,
         DeviceCmyk,
         Indexed,
+        Separation,
+        DeviceN,
     }
 
     private sealed class ColorSpaceInfo
     {
-        public ColorSpaceInfo(ColorSpaceKind kind, int components, byte[] lookup, int baseComponents, IccProfile? icc = null)
+        public ColorSpaceInfo(
+            ColorSpaceKind kind,
+            int components,
+            byte[] lookup,
+            int baseComponents,
+            IccProfile? icc = null,
+            PdfFunction? tint = null,
+            ColorSpaceKind baseKind = ColorSpaceKind.DeviceGray,
+            ColorSpaceInfo? baseSpace = null)
         {
             Kind = kind;
             Components = components;
             Lookup = lookup;
             BaseComponents = baseComponents;
             Icc = icc;
+            Tint = tint;
+            BaseKind = baseKind;
+            Base = baseSpace;
         }
 
         public ColorSpaceKind Kind { get; }
@@ -979,6 +1038,16 @@ public static class PdfImageDecoder
 
         /// <summary>Embedded ICC profile to apply, when the space is ICCBased and the profile is a supported matrix/TRC type; null otherwise.</summary>
         public IccProfile? Icc { get; }
+
+        /// <summary>Separation/DeviceN tint transform: maps the colorant samples onto the base space.</summary>
+        public PdfFunction? Tint { get; }
+
+        /// <summary>What a Separation/DeviceN's base space resolves to, once the tint transform ran.</summary>
+        public ColorSpaceKind BaseKind { get; }
+
+        /// <summary>An Indexed space's base space, kept when it needs more than a component count to read -
+        /// a DeviceN palette stores one tint per colorant and only becomes a colour through its transform.</summary>
+        public ColorSpaceInfo? Base { get; }
     }
 
     private static ColorSpaceInfo? ResolveColorSpace(PdfDocument document, PdfObject? colorSpaceObject)
@@ -1020,11 +1089,26 @@ public static class PdfImageDecoder
                         int hival = array.GetNumber(2)?.AsInt() ?? 255;
                         byte[] lookupBytes = ReadIndexedPalette(document.Resolve(array[3]));
                         int baseComponents = baseInfo?.Components ?? 3;
-                        return new ColorSpaceInfo(ColorSpaceKind.Indexed, 1, lookupBytes, baseComponents);
+                        return new ColorSpaceInfo(ColorSpaceKind.Indexed, 1, lookupBytes, baseComponents, baseSpace: baseInfo);
 
-                    case "Separation" or "DeviceN":
-                        // Approximate the first component as gray
-                        return new ColorSpaceInfo(ColorSpaceKind.DeviceGray, 1, Array.Empty<byte>(), 0);
+                    case "Separation":
+                    {
+                        // One colorant sample per pixel; the tint transform says what colour it makes.
+                        (ColorSpaceKind baseKind, int baseWidth) = DescribeBaseSpace(document, array.Count >= 3 ? array[2] : null);
+                        PdfFunction? tint = array.Count >= 4 ? PdfFunction.Create(document, array[3]) : null;
+                        return new ColorSpaceInfo(ColorSpaceKind.Separation, 1, Array.Empty<byte>(), baseWidth, null, tint, baseKind);
+                    }
+
+                    case "DeviceN":
+                    {
+                        // One sample per colorant, then the tint transform onto the base space. Reading
+                        // these as base components instead steps through the raster one third of a pixel
+                        // at a time, which scrambles the image as well as colouring it wrong.
+                        int colorants = Math.Clamp((document.Resolve(array[1]) as PdfArray)?.Count ?? 1, 1, 8);
+                        (ColorSpaceKind baseKind, int baseWidth) = DescribeBaseSpace(document, array.Count >= 3 ? array[2] : null);
+                        PdfFunction? tint = array.Count >= 4 ? PdfFunction.Create(document, array[3]) : null;
+                        return new ColorSpaceInfo(ColorSpaceKind.DeviceN, colorants, Array.Empty<byte>(), baseWidth, null, tint, baseKind);
+                    }
 
                     default:
                         return null;
@@ -1034,5 +1118,33 @@ public static class PdfImageDecoder
                 // Missing color space: per the spec this means DeviceGray for non-RGB images
                 return new ColorSpaceInfo(ColorSpaceKind.DeviceGray, 1, Array.Empty<byte>(), 0);
         }
+    }
+
+    /// <summary>The kind and width of the base space a Separation or DeviceN array declares.</summary>
+    private static (ColorSpaceKind Kind, int Components) DescribeBaseSpace(PdfDocument document, PdfObject? baseSpaceObject)
+    {
+        PdfObject? resolved = document.Resolve(baseSpaceObject);
+        if (resolved is PdfName name)
+        {
+            return name.Value switch
+            {
+                "DeviceGray" or "G" or "CalGray" => (ColorSpaceKind.DeviceGray, 1),
+                "DeviceCMYK" or "CMYK" => (ColorSpaceKind.DeviceCmyk, 4),
+                _ => (ColorSpaceKind.DeviceRgb, 3),
+            };
+        }
+
+        if (resolved is PdfArray { Count: >= 2 } array && array[0] is PdfName family && family.Value == "ICCBased")
+        {
+            int n = Math.Clamp((int)((document.Resolve(array[1]) as PdfStream)?.Dictionary.GetIntegerValue("N") ?? 3), 1, 4);
+            return n switch
+            {
+                1 => (ColorSpaceKind.DeviceGray, 1),
+                4 => (ColorSpaceKind.DeviceCmyk, 4),
+                _ => (ColorSpaceKind.DeviceRgb, 3),
+            };
+        }
+
+        return (ColorSpaceKind.DeviceRgb, 3);
     }
 }
