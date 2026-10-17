@@ -159,14 +159,17 @@ public static class PdfFixtures
     }
 
     /// <summary>
-    /// A page tree whose only intermediate node lists itself in its own <c>/Kids</c>. Walking that
-    /// recursively without a path guard runs until the stack overflows and the process dies, so the
-    /// whole render run goes with it rather than this one document.
+    /// A page tree with one real page and one intermediate node that lists itself in its own
+    /// <c>/Kids</c>, the shape <c>Pages-tree-refs.pdf</c> in the pdf.js suite has. Walking that cycle
+    /// without a path guard runs until the stack overflows and the process dies, so the whole render run
+    /// goes with it rather than the one branch that closes the loop.
     /// </summary>
     public static byte[] CreateCyclicPageTreePdf() => Build(1,
         new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
-        new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
-        new PdfObjectDefinition(3, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"));
+        new PdfObjectDefinition(2, "<< /Type /Pages /Kids [4 0 R 3 0 R] /Count 2 >>"),
+        new PdfObjectDefinition(3, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+        new PdfObjectDefinition(4, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 5 0 R /Resources << >> >>"),
+        Stream(5, string.Empty, Encoding.ASCII.GetBytes("1 0 0 RG 1 w 10 50 m 190 50 l S")));
 
     /// <summary>
     /// A 100x100 page that fills through an ICCBased space whose stream declares <c>/N 1000000</c>.

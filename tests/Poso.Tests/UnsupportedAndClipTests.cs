@@ -67,6 +67,24 @@ public class UnsupportedAndClipTests
         Assert.True(IsBlue(ReadPixels(image), image.Width, 80, 20), "Rectangle after the unusable colour should still render");
     }
 
+    /// <summary>
+    /// Two forms that each paint the other must be drawn down to the level where the loop closes, and the
+    /// page must survive: MuPDF's reader drops only the re-entry, so refusing the whole page for the
+    /// cycle - or not bounding it at all and overflowing the stack - both lose pages the reader shows.
+    /// </summary>
+    [Fact]
+    public void MutualFormCycle_RendersEveryLevelBeforeTheCycle()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateMutualFormCyclePdf());
+        using IGraphicsContext context = Factory.CreateContext(100, 100);
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+        Assert.True(IsBlue(pixels, image.Width, 80, 20), "the first form's rectangle should render");
+        Assert.True(IsRed(pixels, image.Width, 40, 60), "the form it paints at half scale should render");
+    }
+
     [Fact]
     public void JpxImage_Lenient_SkipsImageButStillRenders()
     {

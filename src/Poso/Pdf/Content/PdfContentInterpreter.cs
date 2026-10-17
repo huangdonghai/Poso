@@ -47,11 +47,12 @@ public sealed class PdfContentInterpreter
     private readonly Dictionary<(PdfDictionary Mask, int Width, int Height), IImage?> _softMasks = new();
     private GraphicsState _state = new();
     /// <summary>
-    /// How deeply forms nest, shared by every interpreter this render spawns: a form that paints a
-    /// tiling pattern whose cell re-enters the same form runs through a fresh interpreter each time,
-    /// and a per-instance counter restarts there and recurses until the stack gives out.
+    /// Which forms one render has open right now, shared by every interpreter it spawns: a tiling cell or
+    /// a soft mask runs through a fresh interpreter, so state kept per instance restarts there and a form
+    /// that paints itself - directly, or through a partner that paints it back - recurses until the stack
+    /// gives out.
     /// </summary>
-    private readonly FormDepth _sharedFormDepth;
+    private readonly FormChain _sharedForms;
     private Matrix3x2 _pageBaseMatrix;
     private readonly Stack<bool> _marks = new();
     private bool _suppressContent;
@@ -122,7 +123,7 @@ public sealed class PdfContentInterpreter
         IGraphicsFactory factory,
         IGraphicsContext context,
         PdfRenderOptions options)
-        : this(document, factory, context, options, new FormDepth())
+        : this(document, factory, context, options, new FormChain())
     {
     }
 
@@ -131,20 +132,41 @@ public sealed class PdfContentInterpreter
         IGraphicsFactory factory,
         IGraphicsContext context,
         PdfRenderOptions options,
-        FormDepth formDepth)
+        FormChain sharedForms)
     {
         _document = document;
         _factory = factory;
         _context = context;
         _options = options;
-        _sharedFormDepth = formDepth;
+        _sharedForms = sharedForms;
         _diag = new PdfDiagnostics(options.Strict, feature => OnUnsupported?.Invoke(feature));
     }
 
-    /// <summary>A box so a render's nested interpreters share one form-depth counter.</summary>
-    internal sealed class FormDepth
+    /// <summary>
+    /// The forms a render has open, and how deep that chain is. Shared so that a form reached again
+    /// through a tiling cell or a soft mask is still recognised as already being drawn.
+    /// </summary>
+    internal sealed class FormChain
     {
-        public int Value { get; set; }
+        private readonly HashSet<PdfStream> _open = new(ReferenceEqualityComparer.Instance);
+
+        /// <summary>
+        /// Opens a form, or says no when it is already being drawn further up the chain. MuPDF draws
+        /// nothing for such a form and lets the rest of the page stand, which is what the answer is for:
+        /// a file whose XObjects refer back to each other is painted to the last level that means
+        /// something rather than throwing the page away - or, with no bound at all, overflowing the stack.
+        /// </summary>
+        internal bool Enter(PdfStream form)
+        {
+            if (_open.Count >= MaxFormDepth || !_open.Add(form))
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        internal void Leave(PdfStream form) => _open.Remove(form);
     }
 
     /// <summary>Renders a whole page: sets up the base transform and executes its content streams.</summary>
@@ -2030,7 +2052,7 @@ public sealed class PdfContentInterpreter
         IImage tile;
         using (IGraphicsContext cell = _factory.CreateContext(tw, th))
         {
-            var nested = new PdfContentInterpreter(_document, _factory, cell, _options, _sharedFormDepth) { OnUnsupported = OnUnsupported };
+            var nested = new PdfContentInterpreter(_document, _factory, cell, _options, _sharedForms) { OnUnsupported = OnUnsupported };
             nested.RenderCell(stream.Decode(_diag), _document.Resolve(dict.Get("Resources")) as PdfDictionary, tileMatrix);
             tile = cell.Snapshot();
         }
@@ -2286,12 +2308,11 @@ public sealed class PdfContentInterpreter
             return;
         }
 
-        if (_sharedFormDepth.Value >= MaxFormDepth)
+        if (!_sharedForms.Enter(form))
         {
-            throw new PdfFormatException("Form XObject nesting is too deep (possible cycle)");
+            return;
         }
 
-        _sharedFormDepth.Value++;
         int outerSaves = _context.SaveDepth;
         try
         {
@@ -2366,7 +2387,7 @@ public sealed class PdfContentInterpreter
         }
         finally
         {
-            _sharedFormDepth.Value--;
+            _sharedForms.Leave(form);
         }
     }
 
@@ -2444,7 +2465,7 @@ public sealed class PdfContentInterpreter
         using (IGraphicsContext surface = _factory.CreateContext(width, height))
         {
             surface.Clear(backdrop);
-            var nested = new PdfContentInterpreter(_document, _factory, surface, _options, _sharedFormDepth) { OnUnsupported = OnUnsupported };
+            var nested = new PdfContentInterpreter(_document, _factory, surface, _options, _sharedForms) { OnUnsupported = OnUnsupported };
             nested.RenderCell(content, _document.Resolve(form.Dictionary.Get("Resources")) as PdfDictionary, baseMatrix);
 
             using IImage rendered = surface.Snapshot();

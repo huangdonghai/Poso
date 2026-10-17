@@ -10,7 +10,7 @@ public static class PdfPageTree
     /// <summary>
     /// A page tree is walked recursively, so an unbounded descent - a /Kids chain that refers back to
     /// itself, or simply thousands of intermediate nodes - overflows the stack and takes the process
-    /// down with it, which is far worse than refusing one document.
+    /// down with it, which is far worse than losing one branch of one document.
     /// </summary>
     private const int MaxTreeDepth = 512;
 
@@ -52,7 +52,10 @@ public static class PdfPageTree
 
         if (depth >= MaxTreeDepth || !onPath.Add(node))
         {
-            throw new PdfFormatException("The page tree is nested too deeply or refers back to itself");
+            // A node that is already on the path from the root closes a cycle, and MuPDF's reader drops
+            // that branch while keeping every page it reached before it. Losing the document instead
+            // would punish the good pages for one bad link.
+            return;
         }
 
         try

@@ -37,15 +37,17 @@ public class PdfParsingTests
     }
 
     /// <summary>
-    /// A page tree node that lists itself among its own /Kids must be reported as a bad document, not
-    /// walked until the stack gives out - a StackOverflowException cannot be caught, so it kills every
-    /// other document in the process too.
+    /// A /Kids chain that closes on itself costs the branch that closes it and nothing else: MuPDF's
+    /// reader shows every page it reached before the cycle, and walking the cycle regardless cannot even
+    /// be reported - a stack overflow ends the process.
     /// </summary>
     [Fact]
-    public void Open_CyclicPageTree_ReportsACorruptDocument()
+    public void Open_CyclicPageTree_KeepsThePagesBeforeTheCycle()
     {
-        Assert.Throws<PdfFormatException>(
-            () => PdfDocument.FromArray(PdfFixtures.CreateCyclicPageTreePdf()).Pages.Count);
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateCyclicPageTreePdf());
+
+        Assert.Single(document.Pages);
+        Assert.Equal(200f, document.Pages[0].Width);
     }
 
     [Fact]
