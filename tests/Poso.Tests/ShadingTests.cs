@@ -53,6 +53,39 @@ public class ShadingTests
     }
 
     /// <summary>
+    /// A function-based (Type 1) shading must paint: its function takes the shading-space point itself,
+    /// and <c>/Matrix</c> is what places that space. Nine of these sit on one page of the pdf.js suite and
+    /// all of them came out as the background.
+    /// </summary>
+    [Fact]
+    public void FunctionShading_MapsItsMatrixAndEvaluatesTwoInputs()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateFunctionShadingPdf());
+        using IGraphicsContext context = Factory.CreateContext(100, 100);
+        var features = new List<PdfUnsupportedFeature>();
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White), features.Add);
+
+        Assert.DoesNotContain(features, f => f.Kind == PdfUnsupportedKind.Shading);
+
+        using IImage image = context.Snapshot();
+        byte[] pixels = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(pixels);
+
+        (byte R, byte G, byte B) At(int x, int y)
+        {
+            int offset = ((y * image.Width) + x) * image.BytesPerPixel;
+            return (pixels[offset + 2], pixels[offset + 1], pixels[offset]);
+        }
+
+        (byte R, byte G, byte B) left = At(10, 50);
+        (byte R, byte G, byte B) right = At(90, 50);
+        Assert.True(left.R > 10 && left.R < 50, $"x=10 of a 0..1 ramp should be a low red (got {left})");
+        Assert.True(right.R > 200, $"x=90 of a 0..1 ramp should be a strong red (got {right})");
+        Assert.Equal(0, left.G);
+        Assert.Equal(0, left.B);
+    }
+
+    /// <summary>
     /// A shading defined in a Separation space paints the tint transform's colour, not the raw tint.
     /// Regression: the shading reader only understood device spaces, so a Separation or DeviceN array
     /// fell through to its base and the single tint was painted as if it were a grey/red component -

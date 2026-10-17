@@ -978,6 +978,25 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// A 100x100 page painted with a <c>ShadingType 1</c> (function-based) shading whose function returns
+    /// the shading-space x as red and nothing else, placed by <c>/Matrix [100 0 0 100 0 0]</c>. The ramp
+    /// proves both the matrix mapping and the two-input function call; the corpus file that uses nine of
+    /// these paints every one of them white.
+    /// </summary>
+    public static byte[] CreateFunctionShadingPdf()
+    {
+        string content = "q 0 0 100 100 re W n /SH1 sh Q";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Shading << /SH1 6 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            new PdfObjectDefinition(6, "<< /ShadingType 1 /ColorSpace /DeviceRGB /Domain [0 1 0 1] /Matrix [100 0 0 100 0 0] /Function 7 0 R >>"),
+            Stream(7, "/FunctionType 4 /Domain [0 1 0 1] /Range [0 1 0 1 0 1]",
+                Encoding.ASCII.GetBytes("{ pop dup 0 0 }")));
+    }
+
+    /// <summary>
     /// A 200x200 page drawing a red square while an ExtGState <c>/SMask</c> is in effect. The mask group
     /// paints its left half black and its right half white under a luminosity mask, so the square must
     /// appear on the left only.

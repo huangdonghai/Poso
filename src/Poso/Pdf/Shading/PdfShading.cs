@@ -43,6 +43,16 @@ public sealed class PdfShading
     // Type 3 (radial): centre0 x,y,r, centre1 x,y,r.
     private readonly bool _radial;
 
+    // Type 1 (function): maps the function's two inputs into the space the CTM applies to.
+    private Matrix3x2 _matrix = Matrix3x2.Identity;
+
+    // Type 1's optional clipping rectangle, in the same space as its domain.
+    private bool _hasBounds;
+    private float _boundLeft;
+    private float _boundBottom;
+    private float _boundRight;
+    private float _boundTop;
+
     private readonly bool[] _extend = new bool[2];
 
     private List<MeshTriangle>? _meshTriangles;
@@ -65,7 +75,8 @@ public sealed class PdfShading
 
     public int Type { get; }
 
-    public bool IsSupported => (_function is not null && (Type == 2 || Type == 3)) || _meshTriangles is { Count: > 0 };
+    public bool IsSupported =>
+        (_function is not null && (Type == 1 || Type == 2 || Type == 3)) || _meshTriangles is { Count: > 0 };
 
     public static PdfShading? Create(PdfDocument document, PdfObject? shadingObject)
     {
@@ -98,9 +109,49 @@ public sealed class PdfShading
                 : null;
         }
 
+        if (type == 1)
+        {
+            // Function-based: the function takes the shading-space point itself, so it needs two inputs,
+            // and /Matrix is what places that space relative to the CTM.
+            if (function.InputCount != 2)
+            {
+                return null;
+            }
+
+            var functionShading = new PdfShading(
+                1,
+                function,
+                ReadFloats(dictionary.GetArray("Domain"), new float[] { 0f, 1f, 0f, 1f }),
+                colorSpace,
+                Array.Empty<float>(),
+                false);
+
+            if (dictionary.GetArray("Matrix") is { Count: >= 6 } matrixArray)
+            {
+                functionShading._matrix = new Matrix3x2(
+                    matrixArray.GetNumber(0)?.AsFloat() ?? 1f,
+                    matrixArray.GetNumber(1)?.AsFloat() ?? 0f,
+                    matrixArray.GetNumber(2)?.AsFloat() ?? 0f,
+                    matrixArray.GetNumber(3)?.AsFloat() ?? 1f,
+                    matrixArray.GetNumber(4)?.AsFloat() ?? 0f,
+                    matrixArray.GetNumber(5)?.AsFloat() ?? 0f);
+            }
+
+            if (dictionary.GetArray("BBox") is { Count: >= 4 } boundsArray)
+            {
+                functionShading._hasBounds = true;
+                functionShading._boundLeft = MathF.Min(boundsArray.GetNumber(0)?.AsFloat() ?? 0f, boundsArray.GetNumber(2)?.AsFloat() ?? 0f);
+                functionShading._boundBottom = MathF.Min(boundsArray.GetNumber(1)?.AsFloat() ?? 0f, boundsArray.GetNumber(3)?.AsFloat() ?? 0f);
+                functionShading._boundRight = MathF.Max(boundsArray.GetNumber(0)?.AsFloat() ?? 0f, boundsArray.GetNumber(2)?.AsFloat() ?? 0f);
+                functionShading._boundTop = MathF.Max(boundsArray.GetNumber(1)?.AsFloat() ?? 0f, boundsArray.GetNumber(3)?.AsFloat() ?? 0f);
+            }
+
+            return functionShading;
+        }
+
         if (type != 2 && type != 3)
         {
-            return null; // function / other shadings are not yet rasterised
+            return null; // other shading types are not yet rasterised
         }
 
         if (function.InputCount != 1)
@@ -161,14 +212,61 @@ public sealed class PdfShading
             return null; // sanity limit for malformed clip regions
         }
 
-        if (!Matrix3x2.Invert(shadingToDevice, out Matrix3x2 deviceToShading))
+        // A function-based shading's own /Matrix places its input space, and it applies before the
+        // pattern matrix and CTM that the caller has already composed.
+        if (!Matrix3x2.Invert(Type == 1 ? _matrix * shadingToDevice : shadingToDevice, out Matrix3x2 deviceToShading))
         {
             return null;
         }
 
         var pixels = new byte[width * height * 4];
         Span<float> tValues = stackalloc float[] { 0f };
-        Span<float> color = stackalloc float[4];
+
+        // Wide enough for what the function emits and for what the colour path reads out of it: a
+        // stitching function that omits /Range reports one output while its sub-functions emit four, and
+        // taking that report at face value truncates a CMYK wash to its first component. Evaluating into
+        // a span wider than the function's outputs makes the evaluator read the leftovers still on its
+        // stack as extra components instead.
+        Span<float> color = stackalloc float[Math.Clamp(ColorSlotCount(), 1, 4)];
+
+        if (Type == 1)
+        {
+            // /Domain bounds the function's inputs, which live before /Matrix; /BBox bounds the region
+            // that gets painted, which lives after it. Comparing the same point against both is what
+            // makes a shading that declares a /BBox come out empty.
+            Matrix3x2.Invert(shadingToDevice, out Matrix3x2 deviceToPlaced);
+            Span<float> position = stackalloc float[2];
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    var device = new Vector2(deviceBounds.X + x + 0.5f, deviceBounds.Y + y + 0.5f);
+                    Vector2 s = Vector2.Transform(device, deviceToShading);
+                    if (!AcceptsDomain(s))
+                    {
+                        continue;
+                    }
+
+                    if (_hasBounds)
+                    {
+                        Vector2 placed = Vector2.Transform(device, deviceToPlaced);
+                        if (placed.X < _boundLeft || placed.X > _boundRight ||
+                            placed.Y < _boundBottom || placed.Y > _boundTop)
+                        {
+                            continue;
+                        }
+                    }
+
+                    position[0] = s.X;
+                    position[1] = s.Y;
+                    color.Clear();
+                    _function!.Evaluate(position, color);
+                    WritePixel(pixels, (y * width) + x, color);
+                }
+            }
+
+            return factory.CreateImage(width, height, PixelFormat.Bgra8888Premul, pixels);
+        }
 
         for (int y = 0; y < height; y++)
         {
@@ -191,6 +289,34 @@ public sealed class PdfShading
 
         return factory.CreateImage(width, height, PixelFormat.Bgra8888Premul, pixels);
     }
+
+    /// <summary>
+    /// How many components the shading's colour path works with: the tint transform's input count when
+    /// there is one, otherwise the base space's width - and never fewer than the function claims to
+    /// return.
+    /// </summary>
+    private int ColorSlotCount()
+    {
+        int needed = _colorSpace.Tint is not null ?
+            _colorSpace.TintComponents :
+            _colorSpace.Base switch
+            {
+                ShadingColorSpace.Gray => 1,
+                ShadingColorSpace.Rgb => 3,
+                _ => 4,
+            };
+
+        return Math.Max(needed, _function?.OutputCount ?? 0);
+    }
+
+    /// <summary>
+    /// Whether a shading-space point is inside the function's /Domain. Outside it nothing is drawn: a
+    /// function-based shading has no /Extend, and the axial and radial paths stop at their endpoints
+    /// unless the flag says otherwise.
+    /// </summary>
+    private bool AcceptsDomain(Vector2 s) =>
+        _domain.Length < 4 ||
+        (s.X >= _domain[0] && s.X <= _domain[1] && s.Y >= _domain[2] && s.Y <= _domain[3]);
 
     private bool TryParameter(Vector2 s, out float t)
     {
