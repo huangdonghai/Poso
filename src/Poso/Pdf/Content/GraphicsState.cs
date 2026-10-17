@@ -48,6 +48,13 @@ internal sealed class GraphicsState
     /// </summary>
     public Objects.PdfDictionary? SoftMask { get; set; }
 
+    /// <summary>
+    /// The CTM that was current when the soft mask was set. The mask group is a piece of page geometry
+    /// - it is placed by that transform, not by whatever the element being masked has since stacked on
+    /// top of it - so the two only coincide for content that never calls <c>cm</c>.
+    /// </summary>
+    public Matrix3x2 SoftMaskCtm = Matrix3x2.Identity;
+
     /// <summary>Alpha isolation (ExtGState /AIS): groups do not blend with the backdrop.</summary>
     public bool AlphaIsolate { get; set; }
 
@@ -72,6 +79,7 @@ internal sealed class GraphicsState
         StrokeAlpha = StrokeAlpha,
         BlendMode = BlendMode,
         SoftMask = SoftMask,
+        SoftMaskCtm = SoftMaskCtm,
         AlphaIsolate = AlphaIsolate,
         TextKnockout = TextKnockout,
     };

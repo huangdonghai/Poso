@@ -80,14 +80,15 @@ public class SoftMaskTests
     }
 
     /// <summary>
-    /// ExtGState <c>/SMask</c>: a form drawn while a luminosity mask is in effect must be masked by the
-    /// mask group's own rendering. The mask is black on the left and white on the right, so the red
-    /// square may only appear on the left. This never worked: /SMask is a Mask <b>dictionary</b>, and the
-    /// graphics state stored it as a stream, so the field was always null and nothing read it.
+    /// ExtGState <c>/SMask</c>: an element drawn while a luminosity mask is in effect is masked by the mask
+    /// group's own rendering. The mask is black on the left and white on the right, so the red square may
+    /// only appear on the right: MuPDF reads a luminosity mask's coverage as the group's luminance, which
+    /// is what the rendered reference shows. /SMask is also a Mask <b>dictionary</b>, not a stream - the
+    /// field used to be always null, so nothing read it at all.
     /// </summary>
     [Theory]
     [MemberData(nameof(MaskCapableFactories))]
-    public void ExtGStateLuminosityMask_KeepsOnlyTheBlackHalf(IGraphicsFactory factory)
+    public void ExtGStateLuminosityMask_KeepsOnlyTheWhiteHalf(IGraphicsFactory factory)
     {
         using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateSoftMaskedFormPdf());
         using IGraphicsContext context = factory.CreateContext(200, 200);
@@ -100,8 +101,55 @@ public class SoftMaskTests
         (byte B, byte G, byte R) left = Sample(px, image.Width, 100, 50);
         (byte B, byte G, byte R) right = Sample(px, image.Width, 100, 150);
 
-        Assert.True(left.R > 150 && left.G < 90 && left.B < 90, $"masked-left should stay red (got {left})");
-        Assert.True(right.R > 200 && right.G > 200 && right.B > 200, $"white mask must erase the element (got {right})");
+        Assert.True(right.R > 150 && right.G < 90 && right.B < 90, $"white-masked half should stay red (got {right})");
+        Assert.True(left.R > 200 && left.G > 200 && left.B > 200, $"black mask must erase the element (got {left})");
+    }
+
+    /// <summary>
+    /// ExtGState <c>/SMask</c> on a plain path fill: the mask group covers only the page's left half, so
+    /// the blue rectangle may only appear there, and the <c>/TR</c> that maps 0 to 0.5 must not lift the
+    /// uncovered half to half strength. MuPDF erases it (verified on this fixture: (0,0,255) at x=50,
+    /// (255,255,255) at x=150).
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(MaskCapableFactories))]
+    public void ExtGStateAlphaMaskOnAPath_ClipsToTheGroupBox(IGraphicsFactory factory)
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateSoftMaskedRectPdf());
+        using IGraphicsContext context = factory.CreateContext(200, 200);
+        document.Pages[0].Render(factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] px = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(px);
+
+        (byte B, byte G, byte R) inside = Sample(px, image.Width, 100, 50);
+        (byte B, byte G, byte R) outside = Sample(px, image.Width, 100, 150);
+
+        Assert.True(inside.B > 150 && inside.R < 90 && inside.G < 90, $"inside the mask box should stay blue (got {inside})");
+        Assert.True(outside.B > 200 && outside.R > 200 && outside.G > 200, $"outside the mask box must be erased (got {outside})");
+    }
+
+    /// <summary>
+    /// An image that carries its own <c>/SMask</c> is not also masked by the ExtGState group mask, which is
+    /// what MuPDF does with it (measured on this fixture: (255,0,0) inside the square, (255,255,255)
+    /// outside). Multiplying both instead erases the image, because the group here paints nothing and its
+    /// all-black backdrop is zero coverage.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(MaskCapableFactories))]
+    public void ImageWithItsOwnSoftMask_KeepsTheExtGStateMaskAtBay(IGraphicsFactory factory)
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateSoftMaskedImagePdf());
+        using IGraphicsContext context = factory.CreateContext(200, 200);
+        document.Pages[0].Render(factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] px = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(px);
+
+        (byte B, byte G, byte R) inside = Sample(px, image.Width, 100, 100);
+        Assert.True(inside.R > 200 && inside.G < 60 && inside.B < 60, $"the image's own mask stands in for the group's (got {inside})");
     }
 
     // Both back ends composite their groups on an off-surface they own, so the mask can be cut in

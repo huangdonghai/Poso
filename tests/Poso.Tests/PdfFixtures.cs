@@ -1102,8 +1102,8 @@ public static class PdfFixtures
 
     /// <summary>
     /// A 200x200 page drawing a red square while an ExtGState <c>/SMask</c> is in effect. The mask group
-    /// paints its left half black and its right half white under a luminosity mask, so the square must
-    /// appear on the left only.
+    /// paints its left half black and its right half white under a luminosity mask, so the square appears
+    /// on the right only - a luminosity mask's coverage is the luminance it reads.
     /// </summary>
     public static byte[] CreateSoftMaskedFormPdf()
     {
@@ -1121,6 +1121,65 @@ public static class PdfFixtures
             Stream(6, "/Type /XObject /Subtype /Form /BBox [0 0 200 200] "
                 + "/Group << /Type /Group /S /Transparency /CS /DeviceGray >>", maskContent),
             new PdfObjectDefinition(7, "<< /Type /ExtGState /ca 1 /CA 1 /SMask << /S /Luminosity /G 6 0 R >> >>"));
+    }
+
+    /// <summary>
+    /// A 200x200 page that draws an image which carries its own <c>/SMask</c> while an ExtGState soft mask
+    /// that paints nothing - so whose luminosity coverage is its all-black backdrop, zero - is in effect.
+    /// MuPDF lets the image's own mask stand in for the group mask instead of multiplying both, so the red
+    /// square stays visible; reading the two as stacked erases it.
+    /// </summary>
+    public static byte[] CreateSoftMaskedImagePdf()
+    {
+        byte[] red = new byte[4 * 4 * 3];
+        for (int i = 0; i < red.Length; i += 3)
+        {
+            red[i] = 255;
+        }
+
+        byte[] opaque = new byte[4 * 4];
+        for (int i = 0; i < opaque.Length; i++)
+        {
+            opaque[i] = 255;
+        }
+
+        string content = "q /GS1 gs 100 0 0 100 50 50 cm /Im0 Do Q";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] "
+                + "/Resources << /XObject << /Im0 5 0 R >> /ExtGState << /GS1 7 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            Stream(5, "/Type /XObject /Subtype /Image /Width 4 /Height 4 /ColorSpace /DeviceRGB "
+                + "/BitsPerComponent 8 /SMask 8 0 R", red),
+            Stream(6, "/Type /XObject /Subtype /Form /FormType 1 /BBox [0 0 200 200] "
+                + "/Group << /Type /Group /S /Transparency /CS /DeviceGray >>",
+                Encoding.ASCII.GetBytes("q Q")),
+            new PdfObjectDefinition(7, "<< /Type /ExtGState /SMask << /Type /Mask /S /Luminosity /G 6 0 R >> >>"),
+            Stream(8, "/Type /XObject /Subtype /Image /Width 4 /Height 4 /ColorSpace /DeviceGray "
+                + "/BitsPerComponent 8", opaque));
+    }
+
+    /// <summary>
+    /// A 200x200 page that fills the whole box with blue while an <c>/Alpha</c> soft mask whose group only
+    /// covers the left half is in effect, and whose <c>/TR</c> maps 0 to 0.5. The mask has to reach a plain
+    /// path - no form XObject is involved - and the area it does not cover has to stay erased rather than
+    /// take the transfer function's value for empty coverage.
+    /// </summary>
+    public static byte[] CreateSoftMaskedRectPdf()
+    {
+        byte[] maskContent = Encoding.ASCII.GetBytes("1 g 0 0 100 200 re f");
+        string content = "q /GS1 gs 0 0 1 rg 0 0 200 200 re f Q";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] "
+                + "/Resources << /ExtGState << /GS1 6 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            Stream(5, "/Type /XObject /Subtype /Form /FormType 1 /BBox [0 0 100 200] "
+                + "/Group << /Type /Group /S /Transparency /CS /DeviceGray >>", maskContent),
+            new PdfObjectDefinition(6, "<< /Type /ExtGState /SMask << /Type /Mask /S /Alpha /G 5 0 R "
+                + "/TR << /FunctionType 2 /Domain [0 1] /C0 [0.5] /C1 [1] /Range [0 1] >> >> >>"));
     }
 
     /// <summary>
