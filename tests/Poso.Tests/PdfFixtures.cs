@@ -584,6 +584,48 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// Two form XObjects that each paint the other at half scale, which is the shape of
+    /// <c>issue19800.pdf</c> in the pdf.js suite. Every level paints a rectangle before re-entering, so a
+    /// renderer that answers the cycle by refusing the page throws away the rectangles that were already
+    /// drawn - and a file like this one is drawn by producers that lost track of their XObjects.
+    /// </summary>
+    public static byte[] CreateMutualFormCyclePdf()
+    {
+        string resources = "/Resources << /XObject << /X1 6 0 R /X0 7 0 R >> >>";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, $"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] {resources} /Contents 4 0 R >>"),
+            Stream(4, string.Empty, "/X1 Do"u8.ToArray()),
+            Stream(6, $"/Type /XObject /Subtype /Form /BBox [0 0 100 100] {resources}",
+                "0 0 1 rg 0 0 40 40 re f q 0.5 0 0 0.5 50 50 cm /X0 Do Q"u8.ToArray()),
+            Stream(7, $"/Type /XObject /Subtype /Form /BBox [0 0 100 100] {resources}",
+                "1 0 0 rg 0 0 40 40 re f q 0.5 0 0 0.5 50 50 cm /X1 Do Q"u8.ToArray()));
+    }
+
+    /// <summary>
+    /// A 100x100 page covered by a 2x2 raw (Flate-less) DeviceCMYK image whose every sample is
+    /// (141,142,156,78) - a mid-dark photograph tone. MuPDF paints it (99,88,80); the one-minus-black
+    /// shortcut paints (36,35,21), so one pixel tells the two conversions apart.
+    /// </summary>
+    public static byte[] CreateRawCmykImagePdf()
+    {
+        byte[] samples =
+        {
+            141, 142, 156, 78, 141, 142, 156, 78,
+            141, 142, 156, 78, 141, 142, 156, 78,
+        };
+        string content = "q 100 0 0 100 0 0 cm /Im1 Do Q";
+
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /XObject << /Im1 5 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            new PdfObjectDefinition(5, $"<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceCMYK /BitsPerComponent 8 /Length {samples.Length} >>", samples));
+    }
+
+    /// <summary>
     /// A 200x100 page filled by a 2x2 image whose first sample row is black and second row white, placed either
     /// with the upright unit-square matrix or with a mirrored one. Pins which edge of the placement the first
     /// sample row lands on.

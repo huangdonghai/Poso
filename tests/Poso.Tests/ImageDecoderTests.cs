@@ -44,6 +44,31 @@ public class ImageDecoderTests
     }
 
     /// <summary>
+    /// A raw DeviceCMYK image must be converted by the same maths as every other CMYK colour in the
+    /// document. The one-minus-black shortcut is far darker than the coated-paper conversion MuPDF
+    /// applies, and it is photographs - where most samples are mid-dark - that carry it: a book page
+    /// came out 13% wrong against the oracle from nothing but this.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Backends))]
+    public void RawCmykImage_UsesTheSharedCmykConversion(IGraphicsFactory factory)
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateRawCmykImagePdf());
+        using IGraphicsContext context = factory.CreateContext(100, 100);
+        document.Pages[0].Render(factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] pixels = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(pixels);
+        int offset = (((image.Height / 2) * image.Width) + (image.Width / 2)) * image.BytesPerPixel;
+        (byte B, byte G, byte R) centre = (pixels[offset], pixels[offset + 1], pixels[offset + 2]);
+
+        // MuPDF paints this sample (99,88,80); the shortcut paints (36,35,21).
+        Assert.True(Math.Abs(centre.R - 99) <= 10 && Math.Abs(centre.G - 88) <= 10 && Math.Abs(centre.B - 80) <= 10,
+            $"the image must come out MuPDF's conversion (got {centre})");
+    }
+
+    /// <summary>
     /// A 64x64 solid (220,40,60) JPEG whose frame header is extended sequential (SOF1). Embedded rather
     /// than encoded at run time because the SkiaSharp build under test has no JPEG encoder.
     /// </summary>
@@ -264,7 +289,9 @@ public class ImageDecoderTests
         }
 
         Assert.True(lumaAt(0) > 231, $"index 0 is CMYK all-zero (white), got luma {lumaAt(0)}");
-        Assert.True(lumaAt(1) < 24, $"index 1 is full key (black), got luma {lumaAt(1)}");
+        // MuPDF paints full key as (35,31,32), not pure black: its DeviceCMYK conversion goes through a
+        // coated-paper profile. What this index has to prove is that the table was read at all.
+        Assert.True(lumaAt(1) < 90, $"index 1 is full key (near black), got luma {lumaAt(1)}");
 
         int redOffset = ((2 * image.Width) + 2) * image.BytesPerPixel;
         Assert.True(

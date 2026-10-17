@@ -668,12 +668,15 @@ public static class PdfImageDecoder
         return (value, value, value);
     }
 
+    /// <summary>
+    /// Runs raw CMYK samples through the shared DeviceCMYK conversion. The one-minus-black shortcut is
+    /// not that: MuPDF converts through a coated-paper profile, which is several times brighter in the
+    /// dark tones a photograph is mostly made of, so the shortcut left every CMYK photo underexposed.
+    /// </summary>
     private static (byte R, byte G, byte B) CmykToRgb(float c, float m, float y, float k)
     {
-        float r = 1f - Math.Min(1f, c + k);
-        float g = 1f - Math.Min(1f, m + k);
-        float b = 1f - Math.Min(1f, y + k);
-        return (ToByte(r), ToByte(g), ToByte(b));
+        PosoColor rgb = PosoColor.FromCmyk(c, m, y, k);
+        return (rgb.R, rgb.G, rgb.B);
     }
 
     /// <summary>
