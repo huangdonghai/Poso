@@ -168,6 +168,19 @@ public static class PdfFixtures
         new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
         new PdfObjectDefinition(3, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"));
 
+    /// <summary>
+    /// A 100x100 page that fills through an ICCBased space whose stream declares <c>/N 1000000</c>.
+    /// The component count sizes the buffer a colour operator collects its operands in, so a file that
+    /// asks for a million of them gets a million floats of stack and overflows it before anything is
+    /// drawn. The blue rectangle after the fill is what proves the page survived.
+    /// </summary>
+    public static byte[] CreateBogusComponentCountPdf() => Build(1,
+        new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+        new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+        new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 5 0 R /Resources << /ColorSpace << /CS0 [ /ICCBased 4 0 R ] >> >> >>"),
+        Stream(4, "/N 1000000", "not an icc profile"u8.ToArray()),
+        Stream(5, string.Empty, "/CS0 cs 0.5 sc 0 0 100 100 re f\n0 0 1 rg 10 10 20 20 re f"u8.ToArray()));
+
     /// <summary>A simple two-page document; page 2 is rotated 90 degrees.</summary>
     public static byte[] CreateSimplePdf() => Build(1,
         new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),

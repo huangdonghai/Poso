@@ -28,6 +28,13 @@ public sealed class PdfContentInterpreter
 {
     private const int MaxFormDepth = 12;
 
+    /// <summary>
+    /// Ceiling for a color space's component count. The specification allows at most 31 colorants in a
+    /// DeviceN space, but /N and the colorant array come from the file, and an absurd value would be
+    /// used as the size of a stack buffer while collecting the operands of a colour operator.
+    /// </summary>
+    private const int MaxColorComponents = 64;
+
     private readonly PdfDocument _document;
     private readonly IGraphicsFactory _factory;
     private readonly IGraphicsContext _context;
@@ -1668,7 +1675,7 @@ public sealed class PdfContentInterpreter
                 {
                     case "ICCBased":
                         PdfStream? iccStream = _document.Resolve(array[1]) as PdfStream;
-                        int n = Math.Max(1, (int)(iccStream?.Dictionary.GetIntegerValue("N") ?? 3));
+                        int n = Math.Clamp((int)(iccStream?.Dictionary.GetIntegerValue("N") ?? 3), 1, MaxColorComponents);
                         // Apply the embedded ICC profile for matrix/TRC RGB/Gray; other profile types keep the
                         // device approximation chosen by component count below.
                         icc = iccStream is not null ? IccProfile.TryCreate(iccStream.Decode()) : null;
@@ -1697,7 +1704,7 @@ public sealed class PdfContentInterpreter
 
                     case "DeviceN":
                         kind = ColorSpaceKind.DeviceN;
-                        components = Math.Max(1, (_document.Resolve(array[1]) as PdfArray)?.Count ?? 1);
+                        components = Math.Clamp((_document.Resolve(array[1]) as PdfArray)?.Count ?? 1, 1, MaxColorComponents);
                         (baseKind, baseComponents) = DescribeBaseSpace(array.Count >= 3 ? array[2] : null);
                         tint = array.Count >= 4 ? PdfFunction.Create(_document, array[3]) : null;
                         break;
@@ -1808,7 +1815,7 @@ public sealed class PdfContentInterpreter
                 return (NameToKind(name.Value), ComponentsOfName(name));
 
             case PdfArray array when array.Count >= 2 && array[0] is PdfName family && family.Value == "ICCBased":
-                int n = Math.Max(1, (int)((_document.Resolve(array[1]) as PdfStream)?.Dictionary.GetIntegerValue("N") ?? 3));
+                int n = Math.Clamp((int)((_document.Resolve(array[1]) as PdfStream)?.Dictionary.GetIntegerValue("N") ?? 3), 1, MaxColorComponents);
                 return (ComponentsToKind(n), n);
 
             default:

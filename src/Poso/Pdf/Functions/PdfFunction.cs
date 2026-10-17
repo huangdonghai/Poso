@@ -28,7 +28,9 @@ public abstract class PdfFunction
     /// <summary>Clamps inputs to the domain, evaluates, and clamps outputs to the range.</summary>
     public void Evaluate(ReadOnlySpan<float> input, Span<float> output)
     {
-        Span<float> clamped = stackalloc float[input.Length];
+        // The scratch buffers are sized by /Domain and /Range read from the file, so only small ones
+        // may go on the stack; a corrupt function dictionary declaring a million outputs would overflow it.
+        Span<float> clamped = input.Length <= 64 ? stackalloc float[input.Length] : new float[input.Length];
         for (int i = 0; i < input.Length; i++)
         {
             clamped[i] = i * 2 + 1 < Domain.Length
@@ -36,7 +38,7 @@ public abstract class PdfFunction
                 : input[i];
         }
 
-        Span<float> raw = stackalloc float[output.Length];
+        Span<float> raw = output.Length <= 64 ? stackalloc float[output.Length] : new float[output.Length];
         EvaluateCore(clamped, raw);
 
         for (int i = 0; i < output.Length; i++)
@@ -309,7 +311,7 @@ internal sealed class SampledFunction : PdfFunction
         int n = OutputCount;
 
         // Normalized coordinate per input axis, clamped so corner indices stay in range.
-        Span<float> position = stackalloc float[m];
+        Span<float> position = m <= 64 ? stackalloc float[m] : new float[m];
         for (int axis = 0; axis < m; axis++)
         {
             float value = axis < input.Length ? input[axis] : 0f;

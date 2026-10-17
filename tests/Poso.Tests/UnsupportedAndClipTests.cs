@@ -51,6 +51,22 @@ public class UnsupportedAndClipTests
         Assert.Contains(features, f => f.Kind == PdfUnsupportedKind.PatternColorSpace);
     }
 
+    /// <summary>
+    /// A colour space whose file-supplied component count is absurd must be survived, not walked: the
+    /// count sizes the buffer that collects the operator's operands, and taking it at face value asks
+    /// for that much stack. A stack overflow cannot be caught, so it would end the whole render.
+    /// </summary>
+    [Fact]
+    public void BogusComponentCount_StillRendersTheRestOfThePage()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateBogusComponentCountPdf());
+        using IGraphicsContext context = Factory.CreateContext(100, 100);
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        Assert.True(IsBlue(ReadPixels(image), image.Width, 80, 20), "Rectangle after the unusable colour should still render");
+    }
+
     [Fact]
     public void JpxImage_Lenient_SkipsImageButStillRenders()
     {
