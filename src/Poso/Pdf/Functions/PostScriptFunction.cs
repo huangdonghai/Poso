@@ -78,6 +78,15 @@ internal sealed class PostScriptFunction : PdfFunction
     /// </summary>
     private const int MaxExecutionDepth = 64;
 
+    private const double DegreesToRadians = Math.PI / 180;
+
+    /// <summary>Folds an angle into the 0..360 range the specification's atan reports.</summary>
+    private static double ToDegrees(double radians)
+    {
+        double degrees = radians / DegreesToRadians;
+        return degrees < 0 ? degrees + 360 : degrees;
+    }
+
     private static void Execute(List<Cell> cells, List<object> stack, int depth = 0)
     {
         if (depth > MaxExecutionDepth)
@@ -125,29 +134,41 @@ internal sealed class PostScriptFunction : PdfFunction
             case "abs": return Unary(stack, Math.Abs);
             case "ceiling": return Unary(stack, Math.Ceiling);
             case "floor": return Unary(stack, Math.Floor);
-            case "round": return Unary(stack, Math.Round);
+            case "round": return Unary(stack, static v => v >= 0 ? Math.Floor(v + 0.5) : Math.Ceiling(v - 0.5));
             case "truncate": return Unary(stack, Math.Truncate);
             case "sqrt": return Unary(stack, v => Math.Sqrt(Math.Max(0, v)));
-            case "exp": return Unary(stack, Math.Exp);
+            case "exp": return Binary(stack, Math.Pow);
             case "ln": return Unary(stack, v => Math.Log(Math.Max(double.Epsilon, v)));
             case "log": return Unary(stack, v => Math.Log10(Math.Max(double.Epsilon, v)));
-            case "sin": return Unary(stack, Math.Sin);
-            case "cos": return Unary(stack, Math.Cos);
-            case "atan": return Unary(stack, Math.Atan);
+            // The specification's trigonometric operators work in degrees, which is what the functions
+            // written by shading tools assume: one program computes sin(angle*1440) for a moiré ramp.
+            case "sin": return Unary(stack, v => Math.Sin(v * DegreesToRadians));
+            case "cos": return Unary(stack, v => Math.Cos(v * DegreesToRadians));
+            case "atan": return Binary(stack, (y, x) => ToDegrees(Math.Atan2(y, x)));
             case "cvi": return Unary(stack, Math.Truncate);
             case "cvr": return Unary(stack, v => v);
             case "pi": stack.Add(Math.PI); return true;
 
-            case "atan2":
+            case "copy":
             {
-                if (stack.Count < 2)
+                if (stack.Count < 1)
                 {
                     return true;
                 }
 
-                double x = AsNumber(Pop(stack));
-                double y = AsNumber(Pop(stack));
-                stack.Add(Math.Atan2(y, x));
+                int count = (int)AsNumber(Pop(stack));
+                if (count <= 0 || count > stack.Count)
+                {
+                    return true;
+                }
+
+                // The topmost count objects are repeated above themselves, so the stack grows by count.
+                int first = stack.Count - count;
+                for (int i = 0; i < count; i++)
+                {
+                    stack.Add(stack[first + i]);
+                }
+
                 return true;
             }
 

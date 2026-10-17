@@ -58,6 +58,39 @@ public class FunctionTests
         Assert.Equal(0.0, function.Evaluate(new float[] { 0.7f })[0], 4);
     }
 
+    /// <summary>
+    /// The specification's trig operators take degrees, its <c>atan</c> takes two operands and answers in
+    /// degrees folded into 0..360, <c>exp</c> is the binary power, and <c>copy</c> repeats the top of the
+    /// stack. Shading functions use all of them: one paints a moiré ramp with <c>sin(angle*1440)</c> and
+    /// another builds a colour wheel out of <c>sin cos atan</c>.
+    /// </summary>
+    [Fact]
+    public void PostScript_Type4_TrigonometryIsInDegrees()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateSimplePdf());
+
+        PdfFunction sine = PostScript(document, "sin", new double[] { 0, 360 }, new double[] { -1, 1 })!;
+        Assert.Equal(1.0, sine.Evaluate(new float[] { 90f })[0], 4);
+        Assert.Equal(-1.0, sine.Evaluate(new float[] { 270f })[0], 4);
+
+        PdfFunction cosine = PostScript(document, "cos", new double[] { 0, 360 }, new double[] { -1, 1 })!;
+        Assert.Equal(-1.0, cosine.Evaluate(new float[] { 180f })[0], 4);
+
+        PdfFunction angle = PostScript(document, "atan", new double[] { -1, 1, -1, 1 }, new double[] { 0, 360 })!;
+        Assert.Equal(45.0, angle.Evaluate(new float[] { 1f, 1f })[0], 3);
+        Assert.Equal(270.0, angle.Evaluate(new float[] { -1f, 0f })[0], 3);
+
+        PdfFunction power = PostScript(document, "exp", new double[] { 0, 4, 0, 4 }, new double[] { 0, 100 })!;
+        Assert.Equal(8.0, power.Evaluate(new float[] { 2f, 3f })[0], 4);
+
+        PdfFunction copied = PostScript(
+            document, "2 copy mul", new double[] { 0, 1, 0, 1 }, new double[] { 0, 1, 0, 1, 0, 1 })!;
+        float[] three = copied.Evaluate(new float[] { 0.3f, 0.5f });
+        Assert.Equal(0.3, three[0], 3);
+        Assert.Equal(0.5, three[1], 3);
+        Assert.Equal(0.15, three[2], 3);
+    }
+
     [Fact]
     public void Sampled_Type0_LinearRamp()
     {
