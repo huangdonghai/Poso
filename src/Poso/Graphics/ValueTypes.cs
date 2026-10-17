@@ -120,12 +120,15 @@ public enum TextRenderMode
     Stroke = 1,
     FillStroke = 2,
 
-    /// <summary>Tr 3: the glyphs are neither painted nor clipped. PDF numbers this mode 3; the names
-    /// below follow the same numbering, so the clip modes are 4, 5 and 6.</summary>
+    /// <summary>Tr 3: neither painted nor clipped. The four painting modes are 0-3 and the four that
+    /// add the glyph outlines to the clip are 4-7, each the mode below it with clipping added.</summary>
     Invisible = 3,
     FillClip = 4,
     StrokeClip = 5,
     FillStrokeClip = 6,
+
+    /// <summary>Tr 7: the outlines are added to the clip and nothing is painted.</summary>
+    Clip = 7,
 }
 
 /// <summary>

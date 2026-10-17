@@ -1332,7 +1332,8 @@ public sealed class PdfContentInterpreter
                 };
             }
 
-            if (_state.RenderMode is TextRenderMode.FillClip or TextRenderMode.StrokeClip or TextRenderMode.FillStrokeClip)
+            if (_state.RenderMode is TextRenderMode.FillClip or TextRenderMode.StrokeClip
+                or TextRenderMode.FillStrokeClip or TextRenderMode.Clip)
             {
                 _context.AddTextClipRun(graphicsFont, glyphs.Slice(0, glyphCount), drawMatrix);
             }
