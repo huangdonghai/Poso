@@ -72,6 +72,38 @@ public class UnsupportedAndClipTests
     /// page must survive: MuPDF's reader drops only the re-entry, so refusing the whole page for the
     /// cycle - or not bounding it at all and overflowing the stack - both lose pages the reader shows.
     /// </summary>
+    /// <summary>
+    /// Clipping-only text (<c>7 Tr</c>) must clip the fill that follows it even when the font comes from
+    /// the system rather than the file: the whole-page blue has to survive only inside the glyph outlines.
+    /// </summary>
+    [Fact]
+    public void ClippingOnlyText_ClipsTheFillAfterTheTextObject()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateClippingOnlyTextPdf());
+        using IGraphicsContext context = Factory.CreateContext(100, 50);
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+
+        Assert.False(IsBlue(pixels, image.Width, 45, 95), "outside the glyph outlines the page must stay white");
+
+        int blue = 0;
+        for (int y = 0; y < image.Height; y++)
+        {
+            for (int x = 0; x < image.Width; x++)
+            {
+                if (IsBlue(pixels, image.Width, y, x))
+                {
+                    blue++;
+                }
+            }
+        }
+
+        Assert.True(blue > 20 && blue < image.Width * image.Height / 2,
+            $"the word should be painted and nothing else (blue pixels {blue} of {image.Width * image.Height})");
+    }
+
     [Fact]
     public void MutualFormCycle_RendersEveryLevelBeforeTheCycle()
     {

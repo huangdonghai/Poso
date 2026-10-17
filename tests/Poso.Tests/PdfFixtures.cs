@@ -172,6 +172,41 @@ public static class PdfFixtures
         Stream(5, string.Empty, Encoding.ASCII.GetBytes("1 0 0 RG 1 w 10 50 m 190 50 l S")));
 
     /// <summary>
+    /// A 100x50 page that sets clipping-only text render mode (<c>7 Tr</c>) with a non-embedded base-14
+    /// font, shows a word, then fills the whole page blue. The clip must survive <c>ET</c>, so blue
+    /// appears only inside the glyph outlines and the far corner stays white.
+    /// </summary>
+    public static byte[] CreateClippingOnlyTextPdf()
+    {
+        string content = "BT 7 Tr 10 20 TD /F1 20 Tf (waves) Tj ET\n0 0 1 rg 0 0 100 50 re f";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 50] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            new PdfObjectDefinition(5, "<< /Type /Font /Subtype /Type1 /BaseFont /Times-Bold >>"));
+    }
+
+    /// <summary>
+    /// A 2x2 image in a two-colorant <c>DeviceN</c> space whose tint transform maps the colorants onto the
+    /// red and green channels of RGB. Reading the samples as base components - what the old approximation
+    /// did - walks the raster half a pixel at a time and yields greys instead.
+    /// </summary>
+    public static byte[] CreateDeviceNImagePdf()
+    {
+        byte[] samples = [255, 0, 0, 255, 128, 128, 0, 0];
+        string content = "q 100 0 0 100 0 0 cm /Im1 Do Q";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /XObject << /Im1 5 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            new PdfObjectDefinition(5, $"<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace 6 0 R /BitsPerComponent 8 /Length {samples.Length} >>", samples),
+            new PdfObjectDefinition(6, "[ /DeviceN [ /C /M ] /DeviceRGB 7 0 R ]"),
+            Stream(7, "/FunctionType 4 /Domain [0 1 0 1] /Range [0 1 0 1 0 1]", Encoding.ASCII.GetBytes("{ 0 }")));
+    }
+
+    /// <summary>
     /// A 100x100 page that fills through an ICCBased space whose stream declares <c>/N 1000000</c>.
     /// The component count sizes the buffer a colour operator collects its operands in, so a file that
     /// asks for a million of them gets a million floats of stack and overflows it before anything is
