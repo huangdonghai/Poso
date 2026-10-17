@@ -50,6 +50,37 @@ public class PdfParsingTests
         Assert.Equal(200f, document.Pages[0].Width);
     }
 
+    /// <summary>
+    /// A page box written as an indirect reference is still the page's box.
+    /// </summary>
+    [Fact]
+    public void Open_IndirectMediaBox_ReadsTheReferencedArray()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateIndirectPageBoxPdf());
+
+        Assert.Equal(300f, document.Pages[0].Width);
+        Assert.Equal(200f, document.Pages[0].Height);
+    }
+
+    /// <summary>
+    /// A page whose declared boxes describe nothing is rendered from the default box, which is what
+    /// MuPDF does: an empty /MediaBox, an empty /CropBox, or a /CropBox lying wholly outside the media
+    /// box each used to give a zero-sized page that no back end can even allocate a surface for.
+    /// </summary>
+    [Theory]
+    [InlineData(0, 612f, 792f)]
+    [InlineData(1, 612f, 792f)]
+    [InlineData(2, 612f, 792f)]
+    [InlineData(3, 540f, 720f)]
+    public void Open_DegeneratePageBoxes_FallBackToTheDefaultBox(int index, float width, float height)
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreatePageBoxVariantsPdf());
+
+        Assert.Equal(4, document.Pages.Count);
+        Assert.Equal(width, document.Pages[index].Width);
+        Assert.Equal(height, document.Pages[index].Height);
+    }
+
     [Fact]
     public void Open_SimplePdf_ReadsPagesBoxesAndContent()
     {

@@ -24,11 +24,20 @@ public sealed class PdfPage
         _dictionary = dictionary;
         _inherited = inherited;
 
-        _mediaBox = ParseBox(inherited, "MediaBox") ?? RectF.FromLbrb(0, 0, 612, 792); // Default: Letter
-        _cropBox = ParseBox(inherited, "CropBox") ?? _mediaBox;
+        RectF declaredMedia = ParseBox("MediaBox") ?? DefaultBox;
+        _mediaBox = declaredMedia.IsEmpty ? DefaultBox : declaredMedia;
+
+        // The visible page is the crop box clipped to the media box, and a file whose boxes leave
+        // nothing - an empty /CropBox, or one wholly outside the media box - is rendered from the
+        // default box rather than as a zero-sized page that no back end can draw.
+        RectF crop = ParseBox("CropBox") is { } declaredCrop ? declaredCrop.Intersect(_mediaBox) : _mediaBox;
+        _cropBox = crop.IsEmpty ? DefaultBox : crop;
         _rotation = NormalizeRotation(inherited.TryGetValue("Rotate", out var rotate) && rotate is PdfNumber rotateNumber ? rotateNumber.AsInt() : 0);
         _userUnit = UserUnitOf(inherited);
     }
+
+    /// <summary>The page box MuPDF falls back to when the file's own boxes describe nothing.</summary>
+    private static readonly RectF DefaultBox = RectF.FromLbrb(0, 0, 612, 792); // Letter
 
     private readonly RectF _mediaBox;
     private readonly RectF _cropBox;
@@ -189,14 +198,18 @@ public sealed class PdfPage
         return _textPage;
     }
 
-    private static RectF? ParseBox(Dictionary<string, PdfObject> inherited, string key)
+    /// <summary>
+    /// One of the page's boxes. A box may be written as an indirect reference, which the inheritable
+    /// attribute map holds unresolved, so it is resolved here rather than read as a type test.
+    /// </summary>
+    private RectF? ParseBox(string key)
     {
-        if (!inherited.TryGetValue(key, out var value) || value is PdfNull)
+        if (!_inherited.TryGetValue(key, out var value) || value is PdfNull)
         {
             return null;
         }
 
-        return value switch
+        return _document.Resolve(value) switch
         {
             PdfArray array when array.Count >= 4 && array[0] is PdfNumber => RectF.FromLbrb(
                 array.GetNumber(0)?.AsFloat() ?? 0,
