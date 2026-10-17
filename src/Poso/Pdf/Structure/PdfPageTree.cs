@@ -7,6 +7,13 @@ public static class PdfPageTree
 {
     private const int MaxPages = 5_000_000;
 
+    /// <summary>
+    /// A page tree is walked recursively, so an unbounded descent - a /Kids chain that refers back to
+    /// itself, or simply thousands of intermediate nodes - overflows the stack and takes the process
+    /// down with it, which is far worse than refusing one document.
+    /// </summary>
+    private const int MaxTreeDepth = 512;
+
     /// <summary>Inheritable page attributes defined by the PDF specification.</summary>
     private static readonly string[] InheritableKeys = { "Resources", "MediaBox", "CropBox", "Rotate", "UserUnit" };
 
@@ -26,17 +33,46 @@ public static class PdfPageTree
 
         var pages = new List<PdfPage>();
         var inherited = new Dictionary<string, PdfObject>(StringComparer.Ordinal);
-        Visit(document, root, inherited, pages);
+        Visit(document, root, inherited, pages, new HashSet<PdfDictionary>(ReferenceEqualityComparer.Instance), 0);
         return pages;
     }
 
-    private static void Visit(PdfDocument document, PdfDictionary node, Dictionary<string, PdfObject> inherited, List<PdfPage> pages)
+    private static void Visit(
+        PdfDocument document,
+        PdfDictionary node,
+        Dictionary<string, PdfObject> inherited,
+        List<PdfPage> pages,
+        HashSet<PdfDictionary> onPath,
+        int depth)
     {
         if (pages.Count >= MaxPages)
         {
             throw new PdfFormatException($"The page count exceeds the limit ({MaxPages}); the file may be corrupt");
         }
 
+        if (depth >= MaxTreeDepth || !onPath.Add(node))
+        {
+            throw new PdfFormatException("The page tree is nested too deeply or refers back to itself");
+        }
+
+        try
+        {
+            Walk(document, node, inherited, pages, onPath, depth);
+        }
+        finally
+        {
+            onPath.Remove(node);
+        }
+    }
+
+    private static void Walk(
+        PdfDocument document,
+        PdfDictionary node,
+        Dictionary<string, PdfObject> inherited,
+        List<PdfPage> pages,
+        HashSet<PdfDictionary> onPath,
+        int depth)
+    {
         // Merge the current node's inheritable attributes (the node itself takes precedence over ancestors).
         var merged = MergeInheritable(node, inherited);
 
@@ -62,7 +98,7 @@ public static class PdfPageTree
             // A node with /Kids is treated as an intermediate node (some files omit /Type).
             if (document.Resolve(kidDictionary.Get("Kids")) is PdfArray)
             {
-                Visit(document, kidDictionary, kidInherited, pages);
+                Visit(document, kidDictionary, kidInherited, pages, onPath, depth + 1);
             }
             else
             {

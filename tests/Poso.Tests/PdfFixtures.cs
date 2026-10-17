@@ -158,6 +158,16 @@ public static class PdfFixtures
         return stream.ToArray();
     }
 
+    /// <summary>
+    /// A page tree whose only intermediate node lists itself in its own <c>/Kids</c>. Walking that
+    /// recursively without a path guard runs until the stack overflows and the process dies, so the
+    /// whole render run goes with it rather than this one document.
+    /// </summary>
+    public static byte[] CreateCyclicPageTreePdf() => Build(1,
+        new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+        new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+        new PdfObjectDefinition(3, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"));
+
     /// <summary>A simple two-page document; page 2 is rotated 90 degrees.</summary>
     public static byte[] CreateSimplePdf() => Build(1,
         new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),

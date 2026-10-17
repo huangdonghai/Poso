@@ -36,6 +36,18 @@ public class PdfParsingTests
         Assert.Equal(20f, page.Height);
     }
 
+    /// <summary>
+    /// A page tree node that lists itself among its own /Kids must be reported as a bad document, not
+    /// walked until the stack gives out - a StackOverflowException cannot be caught, so it kills every
+    /// other document in the process too.
+    /// </summary>
+    [Fact]
+    public void Open_CyclicPageTree_ReportsACorruptDocument()
+    {
+        Assert.Throws<PdfFormatException>(
+            () => PdfDocument.FromArray(PdfFixtures.CreateCyclicPageTreePdf()).Pages.Count);
+    }
+
     [Fact]
     public void Open_SimplePdf_ReadsPagesBoxesAndContent()
     {

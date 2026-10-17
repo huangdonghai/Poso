@@ -71,8 +71,20 @@ internal sealed class PostScriptFunction : PdfFunction
         }
     }
 
-    private static void Execute(List<Cell> cells, List<object> stack)
+    /// <summary>
+    /// A type 4 program is its own interpreter, and a procedure can be fed back to it by for/loop or by
+    /// a self-referential array. Without a bound that is an uncatchable stack overflow, so the evaluation
+    /// simply stops and leaves whatever is already on the stack as the result.
+    /// </summary>
+    private const int MaxExecutionDepth = 64;
+
+    private static void Execute(List<Cell> cells, List<object> stack, int depth = 0)
     {
+        if (depth > MaxExecutionDepth)
+        {
+            return;
+        }
+
         foreach (Cell cell in cells)
         {
             switch (cell.Kind)
@@ -87,7 +99,7 @@ internal sealed class PostScriptFunction : PdfFunction
                     stack.Add(cell.Items!); // a code array sits on the stack until if/ifelse
                     break;
                 case CellKind.Operator:
-                    if (!ApplyOperator(cell.Operator!, stack))
+                    if (!ApplyOperator(cell.Operator!, stack, depth))
                     {
                         return; // unknown operator: stop; whatever is on the stack is the result
                     }
@@ -97,7 +109,7 @@ internal sealed class PostScriptFunction : PdfFunction
         }
     }
 
-    private static bool ApplyOperator(string op, List<object> stack)
+    private static bool ApplyOperator(string op, List<object> stack, int depth)
     {
         switch (op)
         {
@@ -262,7 +274,7 @@ internal sealed class PostScriptFunction : PdfFunction
                 bool condition = AsBool(Pop(stack));
                 if (condition && code is not null)
                 {
-                    Execute(code, stack);
+                    Execute(code, stack, depth + 1);
                 }
 
                 return true;
@@ -278,7 +290,7 @@ internal sealed class PostScriptFunction : PdfFunction
                 List<Cell>? falseCode = AsProcedure(Pop(stack));
                 List<Cell>? trueCode = AsProcedure(Pop(stack));
                 bool condition = AsBool(Pop(stack));
-                Execute(condition ? trueCode ?? new List<Cell>() : falseCode ?? new List<Cell>(), stack);
+                Execute(condition ? trueCode ?? new List<Cell>() : falseCode ?? new List<Cell>(), stack, depth + 1);
                 return true;
             }
 
