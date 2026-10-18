@@ -54,6 +54,15 @@ public sealed class PdfContentInterpreter
     /// </summary>
     private readonly FormChain _sharedForms;
     private Matrix3x2 _pageBaseMatrix;
+
+    /// <summary>
+    /// The CTM as it stood when the content stream now executing was entered: the page's base transform
+    /// for page content, and for a form the transform its <c>Do</c> left the content in. A shading pattern
+    /// is placed relative to this rather than to the live CTM - MuPDF records the enclosing stream's
+    /// transform when the pattern is set, so a <c>cm</c> anywhere inside the stream that paints with it
+    /// moves the shape being filled but not the gradient.
+    /// </summary>
+    private Matrix3x2 _streamEntryMatrix;
     private readonly Stack<bool> _marks = new();
     private bool _suppressContent;
 
@@ -224,6 +233,7 @@ public sealed class PdfContentInterpreter
 
         _state.Ctm = baseMatrix;
         _pageBaseMatrix = baseMatrix;
+        _streamEntryMatrix = baseMatrix;
         _context.SetMatrix(baseMatrix);
 
         if (_options.Background is { } background)
@@ -269,6 +279,7 @@ public sealed class PdfContentInterpreter
         _suppressContent = false;
         _state.Ctm = baseMatrix;
         _pageBaseMatrix = baseMatrix;
+        _streamEntryMatrix = baseMatrix;
         _context.SetMatrix(baseMatrix);
         ExecuteContent(content, resources);
     }
@@ -1570,7 +1581,7 @@ public sealed class PdfContentInterpreter
                     {
                         _context.Save();
                         _context.ClipPath(path, evenOdd);
-                        PaintShading(fillShading, _fillShadingMatrix);
+                        PaintShading(fillShading, _fillShadingMatrix, _streamEntryMatrix);
                         _context.Restore();
                     }
                     else
@@ -1992,8 +2003,9 @@ public sealed class PdfContentInterpreter
 
         if (shading is { IsSupported: true })
         {
-            // The shading is defined directly in user space (no pattern matrix).
-            PaintShading(shading, Matrix3x2.Identity);
+            // The shading is defined directly in user space (no pattern matrix), and `sh` is painted by the
+            // CTM as it stands - unlike a shading pattern, which is placed by the stream's entry transform.
+            PaintShading(shading, Matrix3x2.Identity, _state.Ctm);
             return;
         }
 
@@ -2011,10 +2023,10 @@ public sealed class PdfContentInterpreter
             return;
         }
 
-        PaintShading(shading, matrix);
+        PaintShading(shading, matrix, _streamEntryMatrix);
     }
 
-    private void PaintShading(Shading.PdfShading shading, in Matrix3x2 shadingToUser)
+    private void PaintShading(Shading.PdfShading shading, in Matrix3x2 shadingToUser, in Matrix3x2 userToDevice)
     {
         RectF clip = _context.ClipBounds;
         if (clip.IsEmpty)
@@ -2022,7 +2034,7 @@ public sealed class PdfContentInterpreter
             return;
         }
 
-        Matrix3x2 shadingToDevice = shadingToUser * _state.Ctm;
+        Matrix3x2 shadingToDevice = shadingToUser * userToDevice;
         IImage? image = shading.Rasterize(_factory, clip, shadingToDevice);
         if (image is null)
         {
@@ -2393,12 +2405,16 @@ public sealed class PdfContentInterpreter
                 _state.StrokeAlpha = 1f;
             }
 
+            Matrix3x2 outerStreamEntry = _streamEntryMatrix;
+            _streamEntryMatrix = _state.Ctm;
             try
             {
                 ExecuteContent(form.Decode(_diag), formResources);
             }
             finally
             {
+                _streamEntryMatrix = outerStreamEntry;
+
                 // A form may legally be left with q still open; the group has to be popped before that
                 // stray save level, otherwise the layer never composites back.
                 BalanceCanvasSaves(outerSaves + 1 + (pushedLayer ? 1 : 0));
