@@ -77,6 +77,19 @@ public sealed class PeachGraphicsContext : IGraphicsContext
 
     public RectF ClipBounds => _clipBounds;
 
+    /// <summary>
+    /// Device pixels per user unit for the current CTM, read off the determinant so a rotation or a
+    /// mirrored (flipped) axis still measures a positive scale; 0 when the matrix is degenerate.
+    /// </summary>
+    private float DeviceScale
+    {
+        get
+        {
+            float determinant = (_ctm.M11 * _ctm.M22) - (_ctm.M12 * _ctm.M21);
+            return MathF.Sqrt(MathF.Abs(determinant));
+        }
+    }
+
     /// <summary>How many Save calls have not yet been matched by a Restore.</summary>
     public int SaveDepth => _states.Count;
 
@@ -165,6 +178,47 @@ public sealed class PeachGraphicsContext : IGraphicsContext
         Target.PushClip(gp);
         _clipDepth++;
         _clipBounds = _clipBounds.Intersect(path.Bounds.TransformAabb(_ctm));
+    }
+
+    /// <summary>
+    /// Clips to the outline a stroke of the path covers, so a pattern used as a stroke colour is
+    /// confined to the stroke. <c>PathStroker</c> widens the path by the pen's geometry - caps, joins,
+    /// miter limit and dashes - so the clip is the shape <see cref="StrokePath"/> paints. A zero-width
+    /// pen is a one-device-pixel hairline on the canvas, which has no outline of its own, so the
+    /// outline is built at that width instead.
+    /// </summary>
+    public void ClipStroke(IPath path, in StrokeStyle style)
+    {
+        if (path.IsEmpty)
+        {
+            return;
+        }
+
+        float scale = DeviceScale;
+        if (scale <= 0f)
+        {
+            return;
+        }
+
+        StrokeStyle outlineStyle = style.Width > 0f ? style : style with { Width = 1f / scale };
+
+        using DrawScope scope = BeginDraw();
+        using PeachCore.GraphicsPath gp = path.ToGraphicsPath(evenOdd: false, Target, Matrix3x2.Identity);
+        PeachCore.Pen pen = Target.GetPen(PosoColor.Black.ToPaintColor());
+        pen.ApplyStrokeStyle(outlineStyle);
+
+        // The canvas owns the path once it is pushed as a clip: it lives until the clip level pops.
+        using PeachCore.GraphicsPath widened = Target.GetGraphicsPath();
+        PeachRaster.PathStroker.Stroke(gp, pen, widened, 0.25f / scale);
+        Target.PushClip(widened);
+        _clipDepth++;
+
+        // ClipBounds only sizes rasters, so it may overestimate; a miter can reach miterLimit * width / 2
+        // past the corner, which is the widest the outline ever gets.
+        float pad = outlineStyle.Width * 0.5f * MathF.Max(1f, outlineStyle.Join == LineJoin.Miter ? outlineStyle.MiterLimit : 1f);
+        RectF bounds = path.Bounds;
+        var strokeBounds = new RectF(bounds.X - pad, bounds.Y - pad, bounds.Width + (2f * pad), bounds.Height + (2f * pad));
+        _clipBounds = _clipBounds.Intersect(strokeBounds.TransformAabb(_ctm));
     }
 
     // ---- drawing ------------------------------------------------------------------------------------------

@@ -105,6 +105,8 @@ public sealed class PdfContentInterpreter
     private Matrix3x2 _strokeShadingMatrix = Matrix3x2.Identity;
     private PdfStream? _fillTiling;
     private Matrix3x2 _fillTilingMatrix = Matrix3x2.Identity;
+    private PdfStream? _strokeTiling;
+    private Matrix3x2 _strokeTilingMatrix = Matrix3x2.Identity;
     private float[] _fillLabWhite = DefaultLabWhitePoint;
     private float[] _fillLabRange = DefaultLabRange;
     private float[] _strokeLabWhite = DefaultLabWhitePoint;
@@ -1621,7 +1623,7 @@ public sealed class PdfContentInterpreter
                 {
                     if (_fillTiling is not null)
                     {
-                        PaintTiling(path, evenOdd);
+                        PaintTiling(path, _fillTiling, _fillTilingMatrix, evenOdd, stroke: false);
                     }
                     else if (_fillShading is { } fillShading)
                     {
@@ -1638,7 +1640,23 @@ public sealed class PdfContentInterpreter
 
                 if (stroke)
                 {
-                    _context.StrokePath(path, _state.Stroke, StrokePaintColor());
+                    // A pattern can be the stroke colour too (PDF 32000-1:2008 8.7.4.3). The pattern is
+                    // not walked along the path: it is painted once and confined to the stroke outline.
+                    if (_strokeTiling is not null)
+                    {
+                        PaintTiling(path, _strokeTiling, _strokeTilingMatrix, evenOdd, stroke: true);
+                    }
+                    else if (_strokeShading is { } strokeShading)
+                    {
+                        _context.Save();
+                        _context.ClipStroke(path, _state.Stroke);
+                        PaintShading(strokeShading, _strokeShadingMatrix, _streamEntryMatrix);
+                        _context.Restore();
+                    }
+                    else
+                    {
+                        _context.StrokePath(path, _state.Stroke, StrokePaintColor());
+                    }
                 }
             }
             finally
@@ -1913,6 +1931,7 @@ public sealed class PdfContentInterpreter
         if (stroke)
         {
             _strokeShading = null;
+            _strokeTiling = null;
         }
         else
         {
@@ -1989,15 +2008,25 @@ public sealed class PdfContentInterpreter
             }
         }
 
-        if (patternType == 1 && !stroke && patternObject is PdfStream tilingStream)
+        if (patternType == 1 && patternObject is PdfStream tilingStream)
         {
             // Tiling pattern: the cell is rasterized on demand at paint time (PaintTiling).
-            _fillTiling = tilingStream;
-            _fillTilingMatrix = ParsePatternMatrix(pattern);
+            Matrix3x2 matrix = ParsePatternMatrix(pattern);
+            if (stroke)
+            {
+                _strokeTiling = tilingStream;
+                _strokeTilingMatrix = matrix;
+            }
+            else
+            {
+                _fillTiling = tilingStream;
+                _fillTilingMatrix = matrix;
+            }
+
             return;
         }
 
-        _diag.Report(PdfUnsupportedKind.PatternColorSpace, "Unsupported pattern (only axial/radial shading and fill tiling patterns are supported)");
+        _diag.Report(PdfUnsupportedKind.PatternColorSpace, "Unsupported pattern (only axial/radial shading and tiling patterns are supported)");
     }
 
     private PdfObject? ResolvePatternObject(PdfObject? operand, PdfDictionary? resources)
@@ -2103,10 +2132,10 @@ public sealed class PdfContentInterpreter
     /// <summary>
     /// Fills the path with a Type 1 tiling pattern: rasterizes one cell of the pattern content stream
     /// at device scale, then blits it across the clipped path bounds on the (pattern -> device) lattice.
+    /// A stroke paints the same lattice, clipped to the stroke outline instead of the path interior.
     /// </summary>
-    private void PaintTiling(IPath path, bool evenOdd)
+    private void PaintTiling(IPath path, PdfStream stream, in Matrix3x2 patternMatrix, bool evenOdd, bool stroke)
     {
-        PdfStream stream = _fillTiling!;
         PdfDictionary dict = stream.Dictionary;
 
         float bx0 = 0f, by0 = 0f, bx1 = 100f, by1 = 100f;
@@ -2124,11 +2153,19 @@ public sealed class PdfContentInterpreter
         float yStep = dict.GetNumber("YStep")?.AsFloat() ?? cellHeight;
         if (cellWidth <= 0f || cellHeight <= 0f || xStep <= 0f || yStep <= 0f)
         {
-            _context.FillPath(path, FillPaintColor(), evenOdd);
+            if (stroke)
+            {
+                _context.StrokePath(path, _state.Stroke, StrokePaintColor());
+            }
+            else
+            {
+                _context.FillPath(path, FillPaintColor(), evenOdd);
+            }
+
             return;
         }
 
-        Matrix3x2 dt = _fillTilingMatrix * _state.Ctm;
+        Matrix3x2 dt = patternMatrix * _state.Ctm;
         float sx = MathF.Sqrt((dt.M11 * dt.M11) + (dt.M12 * dt.M12));
         float sy = MathF.Sqrt((dt.M21 * dt.M21) + (dt.M22 * dt.M22));
         if (sx <= 0f || sy <= 0f)
@@ -2155,7 +2192,15 @@ public sealed class PdfContentInterpreter
         try
         {
             _context.Save();
-            _context.ClipPath(path, evenOdd);
+            if (stroke)
+            {
+                _context.ClipStroke(path, _state.Stroke);
+            }
+            else
+            {
+                _context.ClipPath(path, evenOdd);
+            }
+
             _context.SetMatrix(Matrix3x2.Identity);
             RectF bounds = _context.ClipBounds;
             if (bounds.IsEmpty || !Matrix3x2.Invert(dt, out Matrix3x2 inv))

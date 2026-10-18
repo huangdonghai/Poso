@@ -1746,6 +1746,65 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// A 200x100 page whose only mark is a 20pt-wide horizontal band stroked with a Type 2 (axial)
+    /// shading pattern: the DeviceGray ramp from black at user x=0 to white at user x=200 that
+    /// <see cref="CreateAxialShadingPdf"/> fills with. A pattern selected in the stroking colour space
+    /// used to be ignored, so the band kept the default black stroke colour.
+    /// </summary>
+    public static byte[] CreateShadingStrokePdf()
+    {
+        string content = "[/Pattern /DeviceRGB] CS /ShP SCN 20 w 10 50 m 190 50 l S";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Pattern << /ShP 6 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            new PdfObjectDefinition(6, "<< /PatternType 2 /Shading << /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 200 0] /Domain [0 1] /Extend [true true] /Function 7 0 R >> >>"),
+            new PdfObjectDefinition(7, "<< /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /E 1 >>"));
+    }
+
+    /// <summary>
+    /// The same band stroked with a Type 1 tiling pattern instead of a shading: each 20pt cell is white
+    /// with its left half red, so the band alternates red and white along its length.
+    /// </summary>
+    public static byte[] CreateTilingStrokePdf()
+    {
+        byte[] cellContent = Encoding.ASCII.GetBytes("1 1 1 rg 0 0 20 20 re f\n1 0 0 rg 0 0 10 20 re f\n");
+        string patternDict = "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 20 20] /XStep 20 /YStep 20";
+        string content = "[/Pattern /DeviceRGB] CS /P0 SCN 20 w 10 50 m 190 50 l S";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Pattern << /P0 5 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            Stream(5, patternDict, cellContent));
+    }
+
+    /// <summary>
+    /// The shaded band again, this time under an ExtGState <c>/SMask</c> whose group is opaque
+    /// everywhere, with the clip limited to a window well away from the page origin. The stroke therefore
+    /// lands on a masked layer whose surface starts at (100,40) rather than (0,0): a shading raster sized
+    /// from the clip has to be placed in the device space the layer's own matrix works in, or it lands one
+    /// layer origin away and the band comes out blank.
+    /// </summary>
+    public static byte[] CreateOffsetMaskedShadingStrokePdf()
+    {
+        byte[] maskContent = Encoding.ASCII.GetBytes("1 g 0 0 200 100 re f");
+        string content = "q 100 40 90 20 re W n /GS1 gs [/Pattern /DeviceRGB] CS /ShP SCN 20 w 110 50 m 200 50 l S Q";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] "
+                + "/Resources << /Pattern << /ShP 6 0 R >> /ExtGState << /GS1 8 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            new PdfObjectDefinition(6, "<< /PatternType 2 /Shading << /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 200 0] /Domain [0 1] /Extend [true true] /Function 7 0 R >> >>"),
+            new PdfObjectDefinition(7, "<< /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /E 1 >>"),
+            new PdfObjectDefinition(8, "<< /Type /ExtGState /ca 1 /CA 1 /SMask << /S /Luminosity /G 9 0 R >> >>"),
+            Stream(9, "/Type /XObject /Subtype /Form /BBox [0 0 200 100] "
+                + "/Group << /Type /Group /S /Transparency /CS /DeviceGray >>", maskContent));
+    }
+
+    /// <summary>
     /// A document that stores page objects in an object stream (ObjStm) and describes the
     /// cross-reference with an xref stream.
     /// Object layout: 1=Catalog, 3/4 inside object stream 5, 6=content stream, 7=xref stream.

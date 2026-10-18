@@ -331,6 +331,28 @@ public sealed class SkiaGraphicsContext : IGraphicsContext
         _canvas.ClipPath(skPath, antialias: true);
     }
 
+    /// <summary>
+    /// Clips to the outline a stroke of the path covers, so a pattern used as a stroke colour is
+    /// confined to the stroke. Skia widens the path with the same paint state
+    /// <see cref="StrokePath"/> strokes with - caps, joins, dashes and the same hairline clamp for a
+    /// zero width - so the clip is the shape this back-end itself would paint.
+    /// </summary>
+    public void ClipStroke(IPath path, in StrokeStyle style)
+    {
+        if (path.IsEmpty)
+        {
+            return;
+        }
+
+        SkiaConversions.ApplyStrokeStyle(_strokePaint, style);
+        using SKPath skPath = SkiaConversions.ToSKPath(path, evenOdd: false);
+        using SKPath outline = new();
+        if (_strokePaint.GetFillPath(skPath, outline) && !outline.IsEmpty)
+        {
+            _canvas.ClipPath(outline, antialias: true);
+        }
+    }
+
     public void FillPath(IPath path, PosoColor color, bool evenOdd)
     {
         if (path.IsEmpty)

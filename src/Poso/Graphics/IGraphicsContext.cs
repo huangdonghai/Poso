@@ -37,6 +37,18 @@ public interface IGraphicsContext : IDisposable
     /// <summary>Restrict the clip region to the intersection of the path with the existing clip.</summary>
     void ClipPath(IPath path, bool evenOdd);
 
+    /// <summary>
+    /// Restrict the clip region to the area a stroke of <paramref name="path"/> with
+    /// <paramref name="style"/> covers - the outline the stroke itself would paint, joins, caps and
+    /// dashes included. A pattern used as a <em>stroke</em> colour (PDF 32000-1:2008 8.7.4.3) is
+    /// painted once over the clip and confined to the stroke with this, instead of being filled into
+    /// the path's interior. Back-ends that paint must implement it: the no-op default leaves the
+    /// pattern covering the whole clip. Back-ends that draw nothing may ignore it.
+    /// </summary>
+    void ClipStroke(IPath path, in StrokeStyle style)
+    {
+    }
+
     /// <summary>Fill the path.</summary>
     void FillPath(IPath path, PosoColor color, bool evenOdd);
 
