@@ -285,6 +285,12 @@ public sealed class PdfContentInterpreter
     }
 
     /// <summary>
+    /// The annotation subtypes whose whole appearance is defined by their quad points, so a file that
+    /// leaves out /AP can still be drawn (ISO 32000-1 12.5.6.2).
+    /// </summary>
+    private static readonly string[] MarkupSubtypes = ["Highlight", "Underline", "StrikeOut", "Squiggly"];
+
+    /// <summary>
     /// Renders the page's annotations on top of the content. Appearance streams (/AP) are composited
     /// like form XObjects mapped into the annotation rectangle; markup annotations
     /// (highlight/underline/strikeout/squiggly) without an appearance are drawn from their quadrilateral
@@ -331,6 +337,16 @@ public sealed class PdfContentInterpreter
                 continue;
             }
 
+            // A markup annotation carries its own geometry in /QuadPoints, so an absent appearance is
+            // still drawable. Anything else without one has no geometry here at all: a widget, above
+            // all, gets its appearance synthesised from /MK, /DA and the field value, which this
+            // viewer does not do - but filling its rectangle with a mark the file never asked for is
+            // a worse answer than leaving the page as the content drew it.
+            if (Array.IndexOf(MarkupSubtypes, subtype) < 0)
+            {
+                continue;
+            }
+
             PosoColor color = ParseColor(annot.Get("C"), subtype == "Highlight" ? new PosoColor(255, 255, 0) : PosoColor.Red);
             RenderMarkupFallback(subtype, annot, rect, color, opacity);
         }
@@ -344,6 +360,36 @@ public sealed class PdfContentInterpreter
         }
 
         PdfObject? candidate = ap.Get("N") ?? ap.Get("D");
+
+        // An annotation with appearance states - a check box or a radio button above all - keeps a
+        // dictionary of streams keyed by state name, and /AS names the one to show. Reading that as a
+        // stream finds nothing at all, which used to leave the whole widget to the markup fallback.
+        if (_document.Resolve(candidate) is PdfDictionary states)
+        {
+            string? state = annot.GetNameValue("AS") ?? annot.GetNameValue("V");
+            if (state is not null && _document.Resolve(states.Get(state)) is PdfStream named)
+            {
+                return named;
+            }
+
+            // A file that names a state it does not carry, or names none, falls back the way a viewer
+            // does: the /Off state, and failing that the first stream the dictionary holds.
+            if (_document.Resolve(states.Get("Off")) is PdfStream off)
+            {
+                return off;
+            }
+
+            foreach (string key in states.Keys)
+            {
+                if (_document.Resolve(states.Get(key)) is PdfStream first)
+                {
+                    return first;
+                }
+            }
+
+            return null;
+        }
+
         return _document.Resolve(candidate) as PdfStream;
     }
 

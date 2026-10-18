@@ -984,23 +984,32 @@ public static class PdfFixtures
     }
 
     /// <summary>
-    /// A page (200x100) over a light-gray background with two annotations: a /Square whose /AP
-    /// appearance paints a red rectangle into its Rect, and a /Highlight markup (yellow /C) over
-    /// the upper-right area via /QuadPoints.
+    /// A page (200x100) over a light-gray background with four annotations: a /Square whose /AP
+    /// appearance paints a red rectangle into its Rect, a /Highlight markup (yellow /C) over the
+    /// upper-right area via /QuadPoints, a form-field /Widget with no /AP at all, and a /Widget whose
+    /// /AP /N is a state dictionary (green /Off, blue /Yes) with /AS /Off.
     /// </summary>
     public static byte[] CreateAnnotationPdf()
     {
-        byte[] appearance = Encoding.ASCII.GetBytes("1 0 0 rg 0 0 10 10 re f");
+        byte[] red = Encoding.ASCII.GetBytes("1 0 0 rg 0 0 10 10 re f");
+        byte[] green = Encoding.ASCII.GetBytes("0 1 0 rg 0 0 10 10 re f");
+        byte[] blue = Encoding.ASCII.GetBytes("0 0 1 rg 0 0 10 10 re f");
         byte[] content = Encoding.ASCII.GetBytes("0.9 0.9 0.9 rg 0 0 200 100 re f");
 
+        PdfObjectDefinition Form(int number, byte[] body) =>
+            new(number, $"<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << >> /Length {body.Length} >>", body);
         return Build(1,
             new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
             new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
-            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << >> /Contents 4 0 R /Annots [6 0 R 8 0 R] >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << >> /Contents 4 0 R /Annots [6 0 R 8 0 R 9 0 R 10 0 R] >>"),
             Stream(4, string.Empty, content),
             new PdfObjectDefinition(6, "<< /Type /Annot /Subtype /Square /Rect [20 20 60 60] /AP << /N 7 0 R >> >>"),
-            new PdfObjectDefinition(7, $"<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << >> /Length {appearance.Length} >>", appearance),
-            new PdfObjectDefinition(8, "<< /Type /Annot /Subtype /Highlight /Rect [80 40 150 60] /C [1 1 0] /QuadPoints [80 40 150 40 150 60 80 60] >>"));
+            Form(7, red),
+            new PdfObjectDefinition(8, "<< /Type /Annot /Subtype /Highlight /Rect [80 40 150 60] /C [1 1 0] /QuadPoints [80 40 150 40 150 60 80 60] >>"),
+            new PdfObjectDefinition(9, "<< /Type /Annot /Subtype /Widget /FT /Tx /Rect [20 70 60 90] >>"),
+            new PdfObjectDefinition(10, "<< /Type /Annot /Subtype /Widget /FT /Btn /Rect [80 70 120 90] /AS /Off /AP << /N << /Off 11 0 R /Yes 12 0 R >> >> >>"),
+            Form(11, green),
+            Form(12, blue));
     }
 
     /// <summary>
