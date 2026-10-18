@@ -152,10 +152,86 @@ public class SoftMaskTests
         Assert.True(inside.R > 200 && inside.G < 60 && inside.B < 60, $"the image's own mask stands in for the group's (got {inside})");
     }
 
+    /// <summary>
+    /// A transparency group consumes the soft mask at its boundary: the mask in force at <c>Do</c> is cut
+    /// into the group's own pixels, and the content inside starts unmasked - so a form that clears the
+    /// mask with its own <c>/SMask /None</c> cannot undo it. MuPDF renders this fixture masked on the
+    /// right half; a plain form with the same content comes out whole, which the next test pins.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(MaskCapableFactories))]
+    public void ExtGStateMaskOnATransparencyGroup_SurvivesTheFormClearingIt(IGraphicsFactory factory)
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateSoftMaskClearedInsideAFormPdf(transparencyGroup: true));
+        using IGraphicsContext context = factory.CreateContext(200, 200);
+        document.Pages[0].Render(factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] px = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(px);
+
+        (byte B, byte G, byte R) left = Sample(px, image.Width, 100, 50);
+        (byte B, byte G, byte R) right = Sample(px, image.Width, 100, 150);
+
+        Assert.True(right.R > 150 && right.G < 90 && right.B < 90, $"white-masked half should stay red (got {right})");
+        Assert.True(left.R > 200 && left.G > 200 && left.B > 200, $"black mask must erase the group (got {left})");
+    }
+
+    /// <summary>
+    /// The same content without a transparency group: there is no boundary for the mask to bind to, so it
+    /// stays in the graphics state and the form's own <c>/SMask /None</c> clears it. The square comes out
+    /// over both halves. This is the half of the rule that makes the test above meaningful.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(MaskCapableFactories))]
+    public void ExtGStateMaskOnAPlainForm_IsClearedByTheFormItself(IGraphicsFactory factory)
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateSoftMaskClearedInsideAFormPdf(transparencyGroup: false));
+        using IGraphicsContext context = factory.CreateContext(200, 200);
+        document.Pages[0].Render(factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] px = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(px);
+
+        (byte B, byte G, byte R) left = Sample(px, image.Width, 100, 50);
+        (byte B, byte G, byte R) right = Sample(px, image.Width, 100, 150);
+
+        Assert.True(left.R > 150 && left.G < 90 && left.B < 90, $"the cleared mask must leave the left half red (got {left})");
+        Assert.True(right.R > 150 && right.G < 90 && right.B < 90, $"and the right half too (got {right})");
+    }
+
+    /// <summary>
+    /// A masked transparency group whose surface origin is not the page origin. The back end puts the
+    /// group on an off-surface that starts where its clip does, so half-strength blue has to land in the
+    /// top-right quadrant rather than nowhere: shifting that surface's matrix in user space instead of
+    /// device space displaces the content by the origin, scaled and flipped by the page matrix.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(MaskCapableFactories))]
+    public void MaskedGroupAwayFromTheOrigin_DrawsWhereItsBoxIs(IGraphicsFactory factory)
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateOffsetTransparencyGroupPdf());
+        using IGraphicsContext context = factory.CreateContext(200, 200);
+        document.Pages[0].Render(factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] px = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(px);
+
+        // User (150,150) -> device (col 150, row 50); 50% blue over white.
+        (byte B, byte G, byte R) inside = Sample(px, image.Width, 50, 150);
+        Assert.True(inside.B > 200 && inside.R is > 90 and < 200 && inside.G is > 90 and < 200,
+            $"the masked group should paint half-strength blue where its box is (got {inside})");
+
+        // Outside the group's box: untouched background.
+        (byte B, byte G, byte R) outside = Sample(px, image.Width, 50, 50);
+        Assert.True(outside.R > 200 && outside.G > 200 && outside.B > 200, $"outside the box stays white (got {outside})");
+    }
+
     // Both back ends composite their groups on an off-surface they own, so the mask can be cut in
     // before the layer is drawn back.
-    public static IEnumerable<object[]> MaskCapableFactories()
-    {
+    public static IEnumerable<object[]> MaskCapableFactories()    {
         yield return [Poso.PeachDrawing.PeachGraphicsFactory.Default];
         yield return [SkiaGraphicsFactory.Default];
     }

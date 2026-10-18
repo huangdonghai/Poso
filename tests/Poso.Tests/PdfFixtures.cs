@@ -1133,6 +1133,64 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// A 200x200 page that draws a red square from a form while an ExtGState soft mask whose group is
+    /// black on the left and white on the right is in effect, and whose form content clears the mask with
+    /// its own <c>/SMask /None</c> before painting.
+    /// <para>
+    /// With the form declared as a transparency group the mask was bound when <c>Do</c> met it, so the
+    /// group still comes out masked (MuPDF renders the left half white and the right half red). Without
+    /// the group there is no boundary for it to bind to, the state travels into the content, and the
+    /// form's own reset takes effect - so the square comes out whole.
+    /// </para>
+    /// </summary>
+    public static byte[] CreateSoftMaskClearedInsideAFormPdf(bool transparencyGroup)
+    {
+        byte[] square = Encoding.ASCII.GetBytes("/GS2 gs 1 0 0 rg 0 0 200 200 re f");
+        byte[] maskContent = Encoding.ASCII.GetBytes("0 g 0 0 100 200 re f 1 g 100 0 100 200 re f");
+        string group = transparencyGroup ? "/Group << /Type /Group /S /Transparency /CS /DeviceRGB >>" : string.Empty;
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] "
+                + "/Resources << /XObject << /Fm0 5 0 R >> /ExtGState << /GS1 7 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes("q /GS1 gs /Fm0 Do Q")),
+            Stream(5, "/Type /XObject /Subtype /Form /BBox [0 0 200 200] " + group
+                + "/Resources << /ExtGState << /GS2 8 0 R >> >>", square),
+            Stream(6, "/Type /XObject /Subtype /Form /BBox [0 0 200 200] "
+                + "/Group << /Type /Group /S /Transparency /CS /DeviceGray >>", maskContent),
+            new PdfObjectDefinition(7, "<< /Type /ExtGState /ca 1 /CA 1 /SMask << /S /Luminosity /G 6 0 R >> >>"),
+            new PdfObjectDefinition(8, "<< /Type /ExtGState /SMask /None >>"));
+    }
+
+    /// <summary>
+    /// A 200x200 page whose whole visible content is a blue square drawn from a transparency-group form
+    /// that covers only the top-right quadrant (its BBox is (100,100)-(200,200)), while a 50% luminosity
+    /// soft mask is in effect. Half-strength blue over white is the expected result; the point is the
+    /// offset.
+    /// <para>
+    /// A layer surface that starts at a device origin of (100, 0) has to shift the parent matrix in
+    /// device space. Shifting it in user space instead moves the content by the origin scaled and flipped
+    /// by the page matrix - off a surface this size, so the group vanishes and the page comes out white.
+    /// </para>
+    /// </summary>
+    public static byte[] CreateOffsetTransparencyGroupPdf()
+    {
+        byte[] square = Encoding.ASCII.GetBytes("0 0 1 rg 100 100 100 100 re f");
+        byte[] maskContent = Encoding.ASCII.GetBytes("0.5 g 100 100 100 100 re f");
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] "
+                + "/Resources << /XObject << /Fm0 5 0 R >> /ExtGState << /GS1 7 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes("q /GS1 gs /Fm0 Do Q")),
+            Stream(5, "/Type /XObject /Subtype /Form /BBox [100 100 200 200] "
+                + "/Group << /Type /Group /S /Transparency /CS /DeviceRGB >>", square),
+            Stream(6, "/Type /XObject /Subtype /Form /BBox [100 100 200 200] "
+                + "/Group << /Type /Group /S /Transparency /CS /DeviceGray >>", maskContent),
+            new PdfObjectDefinition(7, "<< /Type /ExtGState /ca 1 /CA 1 /SMask << /S /Luminosity /G 6 0 R >> >>"));
+    }
+
+    /// <summary>
     /// A 200x200 page that draws an image which carries its own <c>/SMask</c> while an ExtGState soft mask
     /// that paints nothing - so whose luminosity coverage is its all-black backdrop, zero - is in effect.
     /// MuPDF lets the image's own mask stand in for the group mask instead of multiplying both, so the red

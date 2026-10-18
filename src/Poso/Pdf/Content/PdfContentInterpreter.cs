@@ -2440,15 +2440,21 @@ public sealed class PdfContentInterpreter
             // content on an isolated off-surface that is composited back with the alpha/blend that were in
             // effect at the Do operator. The group opacity is applied once at the boundary, so element
             // alphas inside start from opaque. Back-ends without layer support treat PushLayer as a no-op.
-            // An ExtGState /SMask is deliberately not part of this boundary: it masks each element the form
-            // paints, not the form as a whole, so the state simply travels into the content.
+            //
+            // An ExtGState /SMask is consumed at that boundary, not left for the content. MuPDF renders a
+            // 50% mask over a group at 50%, where the same mask over a group that re-sets the identical
+            // mask inside lands at 25%: the group's own pixels carry the mask in force at Do, and the
+            // content starts unmasked. A plain form is the opposite - the mask stays in the graphics state
+            // and travels into the content, so the form's own /SMask /None can clear it there.
             bool pushedLayer = IsTransparencyGroup(dictionary);
             if (pushedLayer)
             {
                 byte groupAlpha = (byte)Math.Clamp((int)MathF.Round(_state.FillAlpha * 255f), 0, 255);
-                _context.PushLayer(null, groupAlpha, _state.BlendMode, null);
+                IImage? groupMask = _state.SoftMask is { } mask ? SoftMaskImage(mask, _context.ClipBounds) : null;
+                _context.PushLayer(null, groupAlpha, _state.BlendMode, groupMask);
                 _state.FillAlpha = 1f;
                 _state.StrokeAlpha = 1f;
+                _state.SoftMask = null;
             }
 
             Matrix3x2 outerStreamEntry = _streamEntryMatrix;

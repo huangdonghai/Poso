@@ -74,7 +74,41 @@ public sealed class SkiaGraphicsContext : IGraphicsContext
 
     public void Restore() => _canvas.Restore();
 
-    public void SetMatrix(in Matrix3x2 matrix) => _canvas.SetMatrix(SkiaConversions.ToSKMatrix(matrix));
+    /// <summary>
+    /// Set the device-space matrix, keeping any masked layer's surface origin. Each such layer owns an
+    /// off-surface whose pixel (0,0) is a device pixel other than (0,0), so a matrix that is absolute in
+    /// device space has to be shifted by that origin - otherwise everything drawn after it lands a
+    /// layer-origin away and misses the surface.
+    /// </summary>
+    public void SetMatrix(in Matrix3x2 matrix)
+    {
+        Matrix3x2 device = LayerOffset() is { } offset
+            ? matrix * Matrix3x2.CreateTranslation(-offset.X, -offset.Y)
+            : matrix;
+        _canvas.SetMatrix(SkiaConversions.ToSKMatrix(device));
+    }
+
+    /// <summary>
+    /// The summed origin of every masked layer currently open, or null when none is. Each nested layer
+    /// takes its parent's total matrix before applying its own shift, so the offsets add up.
+    /// </summary>
+    private (int X, int Y)? LayerOffset()
+    {
+        int x = 0;
+        int y = 0;
+        bool any = false;
+        foreach (Layer layer in _layers)
+        {
+            if (layer.Surface is not null)
+            {
+                x += layer.X;
+                y += layer.Y;
+                any = true;
+            }
+        }
+
+        return any ? (x, y) : null;
+    }
 
     public void ConcatMatrix(in Matrix3x2 matrix) => _canvas.Concat(SkiaConversions.ToSKMatrix(matrix));
 
@@ -126,8 +160,12 @@ public sealed class SkiaGraphicsContext : IGraphicsContext
         SKSurface surface = SKSurface.Create(new SKImageInfo(
             Math.Max(1, layerWidth), Math.Max(1, layerHeight), SKColorType.Bgra8888, SKAlphaType.Premul))!;
         SKCanvas layerCanvas = surface.Canvas;
-        layerCanvas.SetMatrix(_canvas.TotalMatrix);
-        layerCanvas.Translate(-x, -y);
+
+        // The surface covers the device region starting at (x,y), so the parent matrix has to be shifted
+        // by that origin *in device space*: translating after it, not before. Pre-multiplying the shift
+        // instead moves the content by (x,y) scaled and flipped by the page matrix, which lands off a
+        // surface this size and makes the whole group disappear.
+        layerCanvas.SetMatrix(_canvas.TotalMatrix.PostConcat(SKMatrix.CreateTranslation(-x, -y)));
 
         _layers.Push(new Layer(null, surface, _canvas, x, y, layerWidth, layerHeight, alpha, mode, maskImage));
         _canvas = layerCanvas;
