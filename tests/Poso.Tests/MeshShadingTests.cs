@@ -8,17 +8,22 @@ using Xunit;
 namespace Poso.Tests;
 
 /// <summary>
-/// M7: mesh shading (Type 7 lattice triangle) with Gouraud colour interpolation. The triangle has a
-/// black vertex at (0,0), white at (100,0) and mid-grey at (0,100); device rows are 100 - userY.
+/// M7: mesh shading. A <c>ShadingType 7</c> patch is a tensor-product surface: 16 control points and four
+/// corner colours, not a triangle with a colour at each vertex.
 /// </summary>
 public class MeshShadingTests
 {
     private static readonly IGraphicsFactory Factory = SkiaGraphicsFactory.Default;
 
+    /// <summary>
+    /// The ramp runs left to right and does not vary with y, which is what pins down both the point order
+    /// (boundary then interior) and which of the sixteen control points carry the four colours. MuPDF,
+    /// rendered from the same fixture: 13 at x=5, 126 at x=50, 241 at x=95, and 126 at every y probed.
+    /// </summary>
     [Fact]
-    public void Type7MeshTriangle_InterpolatesGouraud()
+    public void Type7Patch_InterpolatesItsCornerColoursAcrossTheSurface()
     {
-        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateMeshTrianglePdf());
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateType7PatchPdf());
         using IGraphicsContext context = Factory.CreateContext(100, 100);
         var features = new List<PdfUnsupportedFeature>();
         document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White), features.Add);
@@ -29,19 +34,20 @@ public class MeshShadingTests
         byte[] px = new byte[image.Width * image.Height * image.BytesPerPixel];
         image.CopyPixels(px);
 
-        (byte r, byte g, byte b) = Luma(px, image.Width, userX: 33, userY: 33);
-        Assert.True(Math.Abs(r - g) < 6 && Math.Abs(g - b) < 6, $"centroid should be neutral grey ({r},{g},{b})");
-        Assert.True(r is > 90 and < 165, $"centroid t~0.5 grey (~128), got {r}");
+        (byte r, byte g, byte b) = Luma(px, image.Width, userX: 5, userY: 50);
+        Assert.True(r < 40 && g < 40 && b < 40, $"the black corner should hold to its edge (got {r},{g},{b})");
 
-        (r, g, b) = Luma(px, image.Width, 6, 6);
-        Assert.True(r < 70, $"near black vertex should be dark, got {r}");
+        (r, g, b) = Luma(px, image.Width, 50, 50);
+        Assert.True(r is > 100 and < 160 && Math.Abs(r - g) < 6 && Math.Abs(g - b) < 6, $"mid-ramp grey (~126), got {r},{g},{b}");
 
-        (r, g, b) = Luma(px, image.Width, 88, 6);
-        Assert.True(r > 170, $"near white vertex should be bright, got {r}");
+        (r, g, b) = Luma(px, image.Width, 95, 50);
+        Assert.True(r > 200 && g > 200 && b > 200, $"the white corner should hold to its edge (got {r},{g},{b})");
 
-        // (90,90) lies outside the triangle (x+y>100) -> untouched, shows the white background.
-        (r, g, b) = Luma(px, image.Width, 90, 90);
-        Assert.True(r > 200 && g > 200 && b > 200, $"outside triangle should be white background ({r},{g},{b})");
+        (r, g, b) = Luma(px, image.Width, 50, 10);
+        Assert.True(r is > 100 and < 160, $"the ramp should not vary with y (got {r},{g},{b})");
+
+        (r, g, b) = Luma(px, image.Width, 50, 90);
+        Assert.True(r is > 100 and < 160, $"nor at the other end of y (got {r},{g},{b})");
     }
 
     private static (byte R, byte G, byte B) Luma(byte[] px, int width, int userX, int userY)

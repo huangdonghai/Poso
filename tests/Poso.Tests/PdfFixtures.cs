@@ -1525,10 +1525,12 @@ public static class PdfFixtures
     }
 
     /// <summary>
-    /// A 100x100 page painted with a Type 7 mesh triangle (lattice) using a single-argument grey
-    /// function. Vertices: (0,0)=black, (100,0)=white, (0,100)=mid-grey, filled with Gouraud shading.
+    /// A 100x100 page painted with one <c>ShadingType 7</c> tensor-product patch. Its 16 control points lie
+    /// on a uniform grid, so the surface is exactly the square, and its four corner colours make the left
+    /// edge black and the right edge white - which pins down both the stream's boundary-then-interior point
+    /// order and which corners the four colours belong to.
     /// </summary>
-    public static byte[] CreateMeshTrianglePdf()
+    public static byte[] CreateType7PatchPdf()
     {
         var bits = new List<int>();
         void Put(int value, int count)
@@ -1539,12 +1541,37 @@ public static class PdfFixtures
             }
         }
 
-        Put(1, 2); // flag = new triangle
-        Put(0, 8); Put(0, 8); Put(0, 8);       // vertex 0: coord (0,0), colour t=0 (raw 0 -> black)
-        Put(255, 8); Put(0, 8); Put(255, 8);   // vertex 1: coord (100,0) [raw 255], colour t=1 (raw 255 -> white)
-        Put(0, 8); Put(255, 8); Put(128, 8);   // vertex 2: coord (0,100) [raw 255], colour t~0.5 (raw 128 -> grey)
+        // Raw 0/85/170/255 through /Decode [0 100 ...] are 0, 33.3, 66.7, 100: a uniform 4x4 grid.
+        (int x, int y) Pole(int i, int j) => (new[] { 0, 85, 170, 255 }[i], new[] { 0, 85, 170, 255 }[j]);
 
-        var data = new byte[((bits.Count + 7) / 8)];
+        Put(0, 8); // flag 0: every point and colour follows.
+        // Table 76 order: the bottom edge, up the right, back along the top, down the left, then the interior.
+        int[] boundary = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+        foreach (int index in boundary)
+        {
+            (int i, int j) = index switch
+            {
+                0 => (0, 0), 1 => (0, 1), 2 => (0, 2), 3 => (0, 3),
+                4 => (1, 3), 5 => (2, 3), 6 => (3, 3),
+                7 => (3, 2), 8 => (3, 1), 9 => (3, 0),
+                10 => (2, 0), _ => (1, 0),
+            };
+            (int x, int y) = Pole(i, j);
+            Put(x, 8);
+            Put(y, 8);
+        }
+
+        foreach ((int i, int j) in new[] { (1, 1), (1, 2), (2, 2), (2, 1) })
+        {
+            (int x, int y) = Pole(i, j);
+            Put(x, 8);
+            Put(y, 8);
+        }
+
+        // The four corner colours, at points 0, 3, 6 and 9: left edge black, right edge white.
+        Put(0, 8); Put(0, 8); Put(255, 8); Put(255, 8);
+
+        var data = new byte[(bits.Count + 7) / 8];
         for (int i = 0; i < bits.Count; i++)
         {
             if (bits[i] != 0)
@@ -1553,7 +1580,7 @@ public static class PdfFixtures
             }
         }
 
-        string shading = "/ShadingType 7 /ColorSpace /DeviceGray /BitsPerCoordinate 8 /BitsPerComponent 8 /BitsPerFlag 2 /Decode [0 100 0 100 0 1] /Function 6 0 R";
+        string shading = "/ShadingType 7 /ColorSpace /DeviceGray /BitsPerCoordinate 8 /BitsPerComponent 8 /BitsPerFlag 8 /Decode [0 100 0 100 0 1] /Function 6 0 R";
         return Build(1,
             new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
             new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),

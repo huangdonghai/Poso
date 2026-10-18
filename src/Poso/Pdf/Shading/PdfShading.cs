@@ -615,12 +615,17 @@ public sealed class PdfShading
         var triangles = new List<MeshTriangle>();
         int vertexBits = (2 * bitsPerCoordinate) + (k * bitsPerComponent);
 
-        MeshVertex ReadVertex()
+        Vector2 ReadPoint()
         {
             int rx = reader.ReadBits(bitsPerCoordinate);
             int ry = reader.ReadBits(bitsPerCoordinate);
-            float x = decode[0] + ((float)(rx / coordScale) * (decode[1] - decode[0]));
-            float y = decode[2] + ((float)(ry / coordScale) * (decode[3] - decode[2]));
+            return new Vector2(
+                decode[0] + ((float)(rx / coordScale) * (decode[1] - decode[0])),
+                decode[2] + ((float)(ry / coordScale) * (decode[3] - decode[2])));
+        }
+
+        (byte R, byte G, byte B) ReadColour()
+        {
             var inputs = new float[k];
             for (int i = 0; i < k; i++)
             {
@@ -631,39 +636,72 @@ public sealed class PdfShading
             var outputs = new float[function.OutputCount];
             function.Evaluate(inputs, outputs);
             ColorToRgb(outputs, colorSpace, out byte r, out byte g, out byte b);
-            return new MeshVertex(new Vector2(x, y), r, g, b);
+            return (r, g, b);
+        }
+
+        MeshVertex ReadVertex()
+        {
+            // Point first, then its colour: that is the order types 4 and 6 write their vertices in.
+            Vector2 point = ReadPoint();
+            (byte R, byte G, byte B) colour = ReadColour();
+            return new MeshVertex(point, colour.R, colour.G, colour.B);
         }
 
         if (type == 7)
         {
-            var strip = new List<MeshVertex>();
-            while (reader.RemainingBits >= bitsPerFlag + vertexBits)
+            // A tensor patch specifies 16 control points but only four colours, one at each corner, and a
+            // continuation patch repeats part of the previous one: the first four points and the first two
+            // colours come from the patch before, the rest follow in the stream. The walk order is the
+            // boundary-then-interior order of 32000-1 Table 76.
+            int pointBits = 2 * bitsPerCoordinate;
+            int colourBits = k * bitsPerComponent;
+            Vector2[]? previousPoints = null;
+            (byte R, byte G, byte B)[]? previousColours = null;
+
+            while (reader.RemainingBits >= bitsPerFlag)
             {
-                int flag = bitsPerFlag > 0 ? reader.ReadBits(bitsPerFlag) : 1;
-                if (flag != 0)
+                int flag = bitsPerFlag > 0 ? reader.ReadBits(bitsPerFlag) : 0;
+                if (flag is not (0 or 1 or 2 or 3) || (flag != 0 && previousPoints is null))
                 {
-                    if (reader.RemainingBits < 3 * vertexBits)
+                    break;
+                }
+
+                int firstPoint = flag == 0 ? 0 : 4;
+                int firstColour = flag == 0 ? 0 : 2;
+                if (reader.RemainingBits < ((16 - firstPoint) * pointBits) + ((4 - firstColour) * colourBits))
+                {
+                    break;
+                }
+
+                Vector2[] points = new Vector2[16];
+                (byte R, byte G, byte B)[] colours = new (byte R, byte G, byte B)[4];
+                for (int i = firstPoint; i < 16; i++)
+                {
+                    points[i] = ReadPoint();
+                }
+
+                for (int i = firstColour; i < 4; i++)
+                {
+                    colours[i] = ReadColour();
+                }
+
+                if (flag != 0 && previousPoints is { } sharedPoints && previousColours is { } sharedColours)
+                {
+                    // The shared edge runs along the twelve boundary points, so it wraps at 12 rather
+                    // than at the 16 that includes the interior poles.
+                    for (int i = 0; i < 4; i++)
                     {
-                        break;
+                        points[i] = sharedPoints[((3 * flag) + i) % 12];
                     }
 
-                    strip.Clear();
-                    strip.Add(ReadVertex());
-                    strip.Add(ReadVertex());
-                    strip.Add(ReadVertex());
-                    triangles.Add(new MeshTriangle(strip[0], strip[1], strip[2]));
+                    colours[0] = sharedColours[flag];
+                    colours[1] = sharedColours[(flag + 1) % 4];
                 }
-                else
-                {
-                    if (strip.Count < 2 || reader.RemainingBits < vertexBits)
-                    {
-                        break;
-                    }
 
-                    strip.Add(ReadVertex());
-                    int n = strip.Count;
-                    triangles.Add(new MeshTriangle(strip[n - 3], strip[n - 2], strip[n - 1]));
-                }
+                EmitType7Patch(triangles, points, colours);
+
+                previousPoints = points;
+                previousColours = colours;
             }
         }
         else if (type == 4 || type == 6)
@@ -750,6 +788,69 @@ public sealed class PdfShading
 
         return Vertex(x, y, r, g, b);
     }
+
+    /// <summary>
+    /// Flattens one type 7 (tensor-product) patch. Its geometry is the cubic tensor surface of the 16
+    /// control points, but its colour is bilinear over the four corner colours the patch carries - unlike a
+    /// type 4 patch, where every control point brings its own colour and the surface blends them.
+    /// </summary>
+    private static void EmitType7Patch(
+        List<MeshTriangle> triangles,
+        Vector2[] points,
+        (byte R, byte G, byte B)[] corners)
+    {
+        // Table 76 walks the patch boundary and then names the four interior poles; the grid the surface
+        // is evaluated on is control[row, column], so the two orders differ by this permutation.
+        ReadOnlySpan<int> streamOrder = [0, 1, 2, 3, 11, 12, 13, 4, 10, 15, 14, 5, 9, 8, 7, 6];
+        var control = new MeshVertex[16];
+        for (int index = 0; index < 16; index++)
+        {
+            control[index] = new MeshVertex(points[streamOrder[index]], 0, 0, 0);
+        }
+
+        const int Divisions = 8;
+        var grid = new MeshVertex[Divisions + 1, Divisions + 1];
+        for (int i = 0; i <= Divisions; i++)
+        {
+            for (int j = 0; j <= Divisions; j++)
+            {
+                float u = (float)i / Divisions;
+                float v = (float)j / Divisions;
+                float[] bu = BernsteinCubic(u);
+                float[] bv = BernsteinCubic(v);
+                float x = 0f, y = 0f;
+                for (int a = 0; a < 4; a++)
+                {
+                    for (int b = 0; b < 4; b++)
+                    {
+                        float w = bu[a] * bv[b];
+                        x += w * control[(a * 4) + b].Position.X;
+                        y += w * control[(a * 4) + b].Position.Y;
+                    }
+                }
+
+                grid[i, j] = Vertex(
+                    x,
+                    y,
+                    Bilinear(corners[0].R, corners[1].R, corners[2].R, corners[3].R, u, v),
+                    Bilinear(corners[0].G, corners[1].G, corners[2].G, corners[3].G, u, v),
+                    Bilinear(corners[0].B, corners[1].B, corners[2].B, corners[3].B, u, v));
+            }
+        }
+
+        for (int i = 0; i < Divisions; i++)
+        {
+            for (int j = 0; j < Divisions; j++)
+            {
+                MeshVertex p00 = grid[i, j], p10 = grid[i + 1, j], p01 = grid[i, j + 1], p11 = grid[i + 1, j + 1];
+                triangles.Add(new MeshTriangle(p00, p10, p11));
+                triangles.Add(new MeshTriangle(p00, p11, p01));
+            }
+        }
+    }
+
+    private static float Bilinear(byte c00, byte c01, byte c11, byte c10, float u, float v) =>
+        ((1 - u) * (1 - v) * c00) + ((1 - u) * v * c01) + (u * v * c11) + (u * (1 - v) * c10);
 
     private static MeshVertex EvaluateCoonsPatch(MeshVertex[] c, float u, float v)
     {
