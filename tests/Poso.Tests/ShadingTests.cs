@@ -190,6 +190,36 @@ public class ShadingTests
         }
     }
 
+    /// <summary>
+    /// A shading painted inside a masked layer whose surface origin is not (0,0) has to land where the
+    /// clip put it. A back-end that measures the clip in the layer's own surface pixels but draws the
+    /// raster in the parent's device pixels offsets it by the layer origin, and the shading is lost -
+    /// two radial washes on the pdf.js issue13520 page came out as bare background that way.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(GraphicsFactories))]
+    public void ShadingOnAnOffsetMaskedLayer_LandsWhereTheClipPutIt(IGraphicsFactory factory)
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateOffsetMaskedShadingFillPdf());
+        using IGraphicsContext context = factory.CreateContext(200, 100);
+        document.Pages[0].Render(factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] pixels = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(pixels);
+
+        // The window is user x 100..190, y 40..60 and the ramp runs 0..1 across x 0..200.
+        byte left = GrayAt(pixels, image.Width, 50, 105);
+        byte right = GrayAt(pixels, image.Width, 50, 185);
+        Assert.True(left < 170, $"the window's dark end should carry the ramp (got {left})");
+        Assert.True(right > 200, $"the window's light end should carry the ramp (got {right})");
+        Assert.True(right > left + 40, $"the window should carry the ramp (left={left}, right={right})");
+
+        Assert.True(GrayAt(pixels, image.Width, 50, 95) > 240, "left of the window should stay white");
+        Assert.True(GrayAt(pixels, image.Width, 20, 150) > 240, "above the window should stay white");
+        Assert.True(GrayAt(pixels, image.Width, 80, 150) > 240, "below the window should stay white");
+    }
+
     public static IEnumerable<object[]> GraphicsFactories()
     {
         yield return [SkiaGraphicsFactory.Default];

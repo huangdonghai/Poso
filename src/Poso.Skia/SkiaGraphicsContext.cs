@@ -272,6 +272,20 @@ public sealed class SkiaGraphicsContext : IGraphicsContext
         get
         {
             SKRect bounds = _canvas.DeviceClipBounds;
+
+            // Inside a masked layer the canvas device space is the layer's own surface, whose pixel (0,0)
+            // is a device pixel other than (0,0). The clip has to be reported in the parent device space,
+            // the one SetMatrix and DrawDeviceRaster work in, otherwise anything sized from this box (a
+            // shading or tiling raster, a soft mask) is placed one layer origin away from its pixels.
+            if (LayerOffset() is { } offset)
+            {
+                bounds = new SKRect(
+                    bounds.Left + offset.X,
+                    bounds.Top + offset.Y,
+                    bounds.Right + offset.X,
+                    bounds.Bottom + offset.Y);
+            }
+
             return new RectF(bounds.Left, bounds.Top, bounds.Width, bounds.Height);
         }
     }

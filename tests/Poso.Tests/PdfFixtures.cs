@@ -1722,6 +1722,30 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// A 200x100 page whose only mark is a shading-pattern fill inside a window well away from the page
+    /// origin, drawn under an ExtGState <c>/SMask</c> whose group is opaque everywhere. The fill lands on
+    /// a masked layer whose surface starts at (100,40) rather than (0,0): a shading raster sized from the
+    /// clip has to be placed in the device space the layer's own matrix works in, or it is drawn one
+    /// layer origin away and the window comes out blank.
+    /// </summary>
+    public static byte[] CreateOffsetMaskedShadingFillPdf()
+    {
+        byte[] maskContent = Encoding.ASCII.GetBytes("1 g 0 0 200 100 re f");
+        string content = "q 100 40 90 20 re W n /GS1 gs [/Pattern /DeviceRGB] cs /ShP scn 100 40 90 20 re f Q";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] "
+                + "/Resources << /Pattern << /ShP 6 0 R >> /ExtGState << /GS1 8 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            new PdfObjectDefinition(6, "<< /PatternType 2 /Shading << /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 200 0] /Domain [0 1] /Extend [true true] /Function 7 0 R >> >>"),
+            new PdfObjectDefinition(7, "<< /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /E 1 >>"),
+            new PdfObjectDefinition(8, "<< /Type /ExtGState /ca 1 /CA 1 /SMask << /S /Luminosity /G 9 0 R >> >>"),
+            Stream(9, "/Type /XObject /Subtype /Form /BBox [0 0 200 100] "
+                + "/Group << /Type /Group /S /Transparency /CS /DeviceGray >>", maskContent));
+    }
+
+    /// <summary>
     /// A document that stores page objects in an object stream (ObjStm) and describes the
     /// cross-reference with an xref stream.
     /// Object layout: 1=Catalog, 3/4 inside object stream 5, 6=content stream, 7=xref stream.
