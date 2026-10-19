@@ -130,6 +130,44 @@ public class FunctionTests
         Assert.Equal(0.8, function.Evaluate(new float[] { 0.75f })[0], 4);
     }
 
+    /// <summary>
+    /// A stitching function with three-component sub-functions but no <c>/Range</c> (as pdf.js
+    /// issue6231.pdf writes for its Type 5 mesh) must derive its output width from the sub-functions,
+    /// the way MuPDF does. Defaulting the range to a single [0,1] collapses the RGB result to one
+    /// component and paints every shading red.
+    /// </summary>
+    [Fact]
+    public void Stitching_Type3_WithoutRange_InfersOutputWidthFromSubFunctions()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateSimplePdf());
+        var dictionary = new PdfDictionary();
+        dictionary["FunctionType"] = new PdfNumber(3, true);
+        dictionary["Domain"] = Arr(0, 1);
+        dictionary["Encode"] = Arr(0, 1, 0, 1);
+        dictionary["Functions"] = new PdfArray(new PdfObject[]
+        {
+            RgbExponential(0, 0, 1, 1, 1, 0),
+            RgbExponential(1, 0.5, 0, 1, 0, 0),
+        });
+
+        PdfFunction function = PdfFunction.Create(document, dictionary)!;
+        Assert.Equal(3, function.OutputCount);
+
+        float[] output = function.Evaluate(new float[] { 0.75f });
+        Assert.Equal(3, output.Length);
+    }
+
+    private static PdfDictionary RgbExponential(double r0, double g0, double b0, double r1, double g1, double b1)
+    {
+        var dictionary = new PdfDictionary();
+        dictionary["FunctionType"] = new PdfNumber(2, true);
+        dictionary["Domain"] = Arr(0, 1);
+        dictionary["C0"] = Arr(r0, g0, b0);
+        dictionary["C1"] = Arr(r1, g1, b1);
+        dictionary["E"] = new PdfNumber(1, false);
+        return dictionary;
+    }
+
     [Fact]
     public void Separation_TintTransform_EvaluatesFunction()
     {

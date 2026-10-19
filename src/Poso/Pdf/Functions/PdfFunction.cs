@@ -191,7 +191,10 @@ internal sealed class StitchingFunction : PdfFunction
         }
 
         float[] domain = ReadFloats(dictionary.GetArray("Domain"), new float[] { 0f, 1f });
-        float[] range = ReadFloats(dictionary.GetArray("Range"), new float[] { 0f, 1f });
+        // /Range is nominally required for a stitching function, but real files omit it and rely on the
+        // sub-functions to fix the output width (MuPDF does the same). Defaulting to a single [0,1] range
+        // would collapse a three-component RGB stitching function down to one output, painting only red.
+        float[] range = ReadFloats(dictionary.GetArray("Range"), UnitRange(functions[0].OutputCount));
         float[] encode = ReadFloats(dictionary.GetArray("Encode"), DefaultEncode(functions.Count));
 
         return new StitchingFunction(domain, range, functions.ToArray(), encode);
