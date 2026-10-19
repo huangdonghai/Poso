@@ -34,10 +34,6 @@ internal static class Jbig2Halftone
         int hdpw = data[bodyStart + 1];
         int hdph = data[bodyStart + 2];
         uint grayMax = ReadUInt32(data, bodyStart + 3);
-        if (hdMmr)
-        {
-            return null; // MMR pattern dictionary not yet supported
-        }
 
         int n = (int)grayMax + 1;
         if (hdpw <= 0 || hdph <= 0 || n <= 0 || n > 65536 || (long)hdpw * n > 100000)
@@ -47,16 +43,36 @@ internal static class Jbig2Halftone
 
         int collectiveWidth = hdpw * n;
         int stride = (collectiveWidth + 7) / 8;
-        sbyte[] gbat =
-        [
-            (sbyte)(-hdpw), 0, -3, -1, 2, -2, -2, -2,
-        ];
-        int gbStatsSize = hdTemplate == 0 ? 1 << 16 : hdTemplate == 1 ? 1 << 13 : 1 << 10;
-        byte[] gbStats = new byte[gbStatsSize];
         int bodyData = bodyStart + 7;
-        var mq = new Jbig2MqDecoder(data, bodyData, bodyEnd);
-
-        byte[]? collective = Jbig2GenericArithmetic.DecodeShared(hdTemplate, gbat, mq, gbStats, collectiveWidth, hdph);
+        byte[]? collective;
+        if (hdMmr)
+        {
+            // §7.4.4.2 HDHDAT (MMR): a single Group 4 codeword for the collective bitmap (HDPW*n) × HDPH.
+            // PDFium decodes via _FaxG4Decode then explicitly inverts every output byte
+            // (JBig2_GeneralDecoder.cpp line 3731: `(*pImage)->m_pData[i] = ~(*pImage)->m_pData[i];`),
+            // meaning its internal convention is "fax raw has 1=black, invert to get MuPDF's 0=black".
+            // CcittFax's blackIs1:true preserves the fax raw convention (1=black); we must additionally
+            // invert so the collective bitmap uses MuPDF's 0=black convention that the shared slicing
+            // loop below expects when it treats `bit != 0` as "pattern pixel is black".
+            byte[] raw = CcittFaxDecoder.Decode(data, bodyData, bodyEnd - bodyData, collectiveWidth, hdph,
+                k: -1, encodedByteAlign: false, blackIs1: true, endOfBlock: false, endOfLine: false, out _, out _);
+            collective = new byte[raw.Length];
+            for (int i = 0; i < raw.Length; i++)
+            {
+                collective[i] = (byte)~raw[i];
+            }
+        }
+        else
+        {
+            sbyte[] gbat =
+            [
+                (sbyte)(-hdpw), 0, -3, -1, 2, -2, -2, -2,
+            ];
+            int gbStatsSize = hdTemplate == 0 ? 1 << 16 : hdTemplate == 1 ? 1 << 13 : 1 << 10;
+            byte[] gbStats = new byte[gbStatsSize];
+            var mq = new Jbig2MqDecoder(data, bodyData, bodyEnd);
+            collective = Jbig2GenericArithmetic.DecodeShared(hdTemplate, gbat, mq, gbStats, collectiveWidth, hdph);
+        }
         if (collective is null)
         {
             return null;
@@ -138,12 +154,12 @@ internal static class Jbig2Halftone
         bool hDefPixel = (flags & 0x80) != 0;
         cursor += 1;
 
-        // MMR bitplanes are not yet validated against the oracle: degrade. Skip (arithmetic) is supported.
-        if (hMmr)
-        {
-            return false;
-        }
-
+        // §7.4.5.2 HMMR=1: each of the GSBPP gray-scale bitplanes is a Group 4 codeword packed
+        // back-to-back without per-plane length prefixes. Cursor management mirrors PDFium's
+        // GSIDProc::decode_MMR (JBig2_GeneralDecoder.cpp line 3302/3316): align bitpos to byte,
+        // then offset(3) to skip the EOFB tail padding. MuPDF uses explicit EOFB detection
+        // (jbig2_mmr.c line 1280) but arrives at the same final cursor position on well-formed
+        // streams, so both oracles render identically.
         if (cursor + 20 > bodyEnd)
         {
             return false;
@@ -175,13 +191,13 @@ internal static class Jbig2Halftone
         }
 
         // Decode gray-scale bitplanes (Annex C.5): shared MQ + stats, high plane first, cumulative XOR.
-        sbyte[] gbat =
+        sbyte[] gbatArith =
         [
             (sbyte)(hTemplate <= 1 ? 3 : 2), -1, -3, -1, 2, -2, -2, -2,
         ];
         int gbStatsSize = hTemplate == 0 ? 1 << 16 : hTemplate == 1 ? 1 << 13 : 1 << 10;
         byte[] gbStats = new byte[gbStatsSize];
-        var mq = new Jbig2MqDecoder(data, cursor, bodyEnd);
+        var mqArith = new Jbig2MqDecoder(data, cursor, bodyEnd);
         int gsStride = (hgw + 7) / 8;
 
         // §6.6.5.1: when skip is enabled, HSKIP is COMPUTED geometrically — grid cells whose pattern falls
@@ -210,11 +226,36 @@ internal static class Jbig2Halftone
         }
 
         byte[][] planes = new byte[hbpp][];
+        int mmrCursor = cursor;
         for (int j = hbpp - 1; j >= 0; j--)
         {
-            byte[]? plane = skip is not null
-                ? Jbig2GenericArithmetic.DecodeSharedWithSkip(hTemplate, gbat, mq, gbStats, hgw, hgh, skip, skipStride)
-                : Jbig2GenericArithmetic.DecodeShared(hTemplate, gbat, mq, gbStats, hgw, hgh);
+            byte[]? plane;
+            if (hMmr)
+            {
+                int remaining = bodyEnd - mmrCursor;
+                if (remaining <= 0)
+                {
+                    return false;
+                }
+                byte[] raw = CcittFaxDecoder.Decode(data, mmrCursor, remaining, hgw, hgh, k: -1,
+                    encodedByteAlign: false, blackIs1: true, endOfBlock: false, endOfLine: false, out _, out int bitsConsumed);
+                // Apply PDFium's byte-inversion (line 3731) so gray-bit 1 in the plane corresponds
+                // to the black pixel in the MMR stream (which under fax raw is encoded as bit=1).
+                plane = new byte[raw.Length];
+                for (int i = 0; i < raw.Length; i++)
+                {
+                    plane[i] = (byte)~raw[i];
+                }
+                // align to next byte boundary then skip the 3-byte EOFB tail padding, exactly as
+                // PDFium's `pStream->alignByte(); pStream->offset(3);` sequence does.
+                mmrCursor += (bitsConsumed + 7) / 8 + 3;
+            }
+            else
+            {
+                plane = skip is not null
+                    ? Jbig2GenericArithmetic.DecodeSharedWithSkip(hTemplate, gbatArith, mqArith, gbStats, hgw, hgh, skip, skipStride)
+                    : Jbig2GenericArithmetic.DecodeShared(hTemplate, gbatArith, mqArith, gbStats, hgw, hgh);
+            }
             if (plane is null)
             {
                 return false;

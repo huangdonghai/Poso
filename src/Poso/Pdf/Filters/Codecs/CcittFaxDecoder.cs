@@ -28,8 +28,26 @@ public static class CcittFaxDecoder
     // Returns packed rows (ceil(columns/8) bytes each), rows*ceil(columns/8) total. Bits beyond
     // the last column in a row are zero.
     public static byte[] Decode(byte[] data, int columns, int rows, int k, bool encodedByteAlign, bool blackIs1, bool endOfBlock, bool endOfLine)
+        => Decode(data, 0, data.Length, columns, rows, k, encodedByteAlign, blackIs1, endOfBlock, endOfLine, out _, out _);
+
+    /// <summary>
+    /// Range-aware overload reporting bytes pulled from the source. JBIG2's caller usually wants the
+    /// *precise* bit position (see the <c>bitsConsumed</c> overload below) so it can align to a byte
+    /// boundary and skip the EOFB tail padding exactly as PDFium does.
+    /// </summary>
+    public static byte[] Decode(byte[] data, int offset, int length, int columns, int rows, int k, bool encodedByteAlign, bool blackIs1, bool endOfBlock, bool endOfLine, out int consumed)
+        => Decode(data, offset, length, columns, rows, k, encodedByteAlign, blackIs1, endOfBlock, endOfLine, out consumed, out _);
+
+    /// <summary>
+    /// Range-aware overload reporting both byte-position and the precise bit cursor. <paramref name="bitsConsumed"/>
+    /// is the number of bits the decoder has actually consumed (may be less than <c>consumed*8</c> because
+    /// the internal bit buffer prefetches up to 4 bytes ahead); JBIG2 MMR plane sequences need this to
+    /// align to the next byte boundary and skip the 3-byte EOFB tail padding exactly as PDFium's
+    /// <c>pStream->alignByte(); pStream->offset(3);</c> does at JBig2_GeneralDecoder.cpp line 3302.
+    /// </summary>
+    public static byte[] Decode(byte[] data, int offset, int length, int columns, int rows, int k, bool encodedByteAlign, bool blackIs1, bool endOfBlock, bool endOfLine, out int consumed, out int bitsConsumed)
     {
-        var decoder = new State(data, columns, rows, k, encodedByteAlign, blackIs1, endOfBlock, endOfLine);
+        var decoder = new State(data, offset, length, columns, rows, k, encodedByteAlign, blackIs1, endOfBlock, endOfLine);
         int bytesPerRow = (columns + 7) / 8;
         var output = new byte[Math.Max(0, rows) * bytesPerRow];
         int produced = 0;
@@ -45,6 +63,8 @@ public static class CcittFaxDecoder
             output[produced++] = (byte)value;
         }
 
+        consumed = decoder.SourcePosition - offset;
+        bitsConsumed = decoder.BitsConsumed;
         return output;
     }
 
@@ -52,6 +72,19 @@ public static class CcittFaxDecoder
     {
         private readonly byte[] _data;
         private int _sourcePos;
+        private readonly int _sourceEnd;
+        private readonly int _sourceStart;
+
+        /// <summary>Byte index just past the last byte read from the source buffer.</summary>
+        public int SourcePosition => _sourcePos;
+
+        /// <summary>
+        /// Precise number of bits consumed by the decoder since construction, ignoring the bytes
+        /// still pending in the internal bit buffer. JBIG2's MMR codewords pack back-to-back with
+        /// an explicit EOFB tail; the caller uses this to align to the next byte boundary and then
+        /// skip 3 bytes for the padding, mirroring PDFium's pStream cursor arithmetic.
+        /// </summary>
+        public int BitsConsumed => (_sourcePos - _sourceStart) * 8 - _inputBits;
 
         private readonly int _columns;
         private readonly int _rows;
@@ -74,8 +107,14 @@ public static class CcittFaxDecoder
         private bool _err;
 
         public State(byte[] data, int columns, int rows, int k, bool byteAlign, bool blackIs1, bool endOfBlock, bool endOfLine)
+            : this(data, 0, data.Length, columns, rows, k, byteAlign, blackIs1, endOfBlock, endOfLine) { }
+
+        public State(byte[] data, int offset, int length, int columns, int rows, int k, bool byteAlign, bool blackIs1, bool endOfBlock, bool endOfLine)
         {
             _data = data;
+            _sourceStart = offset;
+            _sourceEnd = offset + length;
+            _sourcePos = offset;
             _columns = columns <= 0 ? 1728 : columns;
             _rows = rows;
             _encoding = k;
@@ -675,7 +714,7 @@ public static class CcittFaxDecoder
             while (_inputBits < n)
             {
                 int c;
-                if (_sourcePos >= _data.Length)
+                if (_sourcePos >= _sourceEnd)
                 {
                     c = -1;
                 }
