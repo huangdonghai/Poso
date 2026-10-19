@@ -345,6 +345,29 @@ public class ContentRenderTests
         Assert.True(or > 240 && og > 240 && ob > 240, $"outside the ellipse must stay clear (r={or} g={og} b={ob})");
     }
 
+    /// <summary>
+    /// A Type3 glyph procedure that begins with d1 is a stencil: it is painted with the text's colour and
+    /// its own colour operators are ignored (MuPDF sets FZ_DEVFLAG_MASK for d1, FZ_DEVFLAG_COLOR for d0).
+    /// pdf.js issue12705.pdf's glyphs fill themselves white, which left the page empty.
+    /// </summary>
+    [Fact]
+    public void Type3StencilGlyph_PaintsInTextColor()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateType3StencilGlyphPdf());
+        using IGraphicsContext context = Factory.CreateContext(100, 100);
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+
+        // The glyph box spans user x 10..58, y 40..88; sample its middle (device row 40, column 30).
+        (byte b, byte g, byte r, _) = PixelAt(pixels, image.Width, 40, 30);
+        Assert.True(r < 80 && g < 80 && b < 80, $"a d1 glyph must paint in the text colour, not its own white (r={r} g={g} b={b})");
+
+        (byte ob, byte og, byte or, _) = PixelAt(pixels, image.Width, 5, 5);
+        Assert.True(or > 240 && og > 240 && ob > 240, $"outside the glyph must stay white (r={or} g={og} b={ob})");
+    }
+
     private static byte[] ReadPixels(IImage image)
     {
         byte[] pixels = new byte[image.Width * image.Height * image.BytesPerPixel];

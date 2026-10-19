@@ -127,6 +127,10 @@ public sealed class PdfContentInterpreter
     /// <summary>Width reported by the d0/d1 operator of a Type3 glyph procedure (glyph space units).</summary>
     public float Type3GlyphWidthGlyphSpace { get; private set; }
 
+    // True while a d1 (stencil) Type3 glyph procedure runs: colour operators inside it are ignored and
+    // the text's own colour paints the shape.
+    private bool _type3Stencil;
+
     /// <summary>Optional text extraction sink.</summary>
     public ITextSink? TextSink { get; set; }
 
@@ -1130,6 +1134,8 @@ public sealed class PdfContentInterpreter
         // Type3 glyph metrics
         if (lexer.Match(token, "d0"u8))
         {
+            // d0: the glyph is coloured - its own operators, including colour, stand as written.
+            _type3Stencil = false;
             PopNumber(operands); // wy (unused)
             Type3GlyphWidthGlyphSpace = PopNumber(operands);
             operands.Clear();
@@ -1138,12 +1144,22 @@ public sealed class PdfContentInterpreter
 
         if (lexer.Match(token, "d1"u8))
         {
+            // d1: the glyph is a stencil - MuPDF and PDFium paint it with the text's colour and ignore
+            // colour operators inside the procedure (pdf.js issue12705.pdf's glyphs fill white under d1,
+            // and every reference still shows black text).
+            _type3Stencil = true;
             PopNumber(operands); // lly
             PopNumber(operands); // llx
             PopNumber(operands); // ury
             PopNumber(operands); // urx
             PopNumber(operands); // wy
             Type3GlyphWidthGlyphSpace = PopNumber(operands);
+            operands.Clear();
+            return;
+        }
+
+        if (_type3Stencil && IsColorOperator(lexer, token))
+        {
             operands.Clear();
             return;
         }
@@ -1588,6 +1604,14 @@ public sealed class PdfContentInterpreter
         return scaled;
     }
 
+    private static bool IsColorOperator(PdfLexer lexer, PdfToken token) =>
+        lexer.Match(token, "g"u8) || lexer.Match(token, "G"u8) ||
+        lexer.Match(token, "rg"u8) || lexer.Match(token, "RG"u8) ||
+        lexer.Match(token, "k"u8) || lexer.Match(token, "K"u8) ||
+        lexer.Match(token, "cs"u8) || lexer.Match(token, "CS"u8) ||
+        lexer.Match(token, "sc"u8) || lexer.Match(token, "SC"u8) ||
+        lexer.Match(token, "scn"u8) || lexer.Match(token, "SCN"u8);
+
     private float ExecuteType3Glyph(Type3PdfFont font, int code, Matrix3x2 textSpaceMatrix)
     {
         PdfStream? glyphStream = font.GetGlyphStream(code);
@@ -1597,11 +1621,20 @@ public sealed class PdfContentInterpreter
         }
 
         Type3GlyphWidthGlyphSpace = 0f;
+        bool outerStencil = _type3Stencil;
+        _type3Stencil = false;
         _context.Save();
         // canvas = FontMatrix * textSpaceMatrix * CTM
         _context.ConcatMatrix(font.FontMatrix * textSpaceMatrix);
-        ExecuteContent(glyphStream.Decode(_diag), font.Resources);
-        _context.Restore();
+        try
+        {
+            ExecuteContent(glyphStream.Decode(_diag), font.Resources);
+        }
+        finally
+        {
+            _context.Restore();
+            _type3Stencil = outerStencil;
+        }
 
         return Type3GlyphWidthGlyphSpace * Math.Abs(font.FontMatrix.M11);
     }

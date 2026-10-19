@@ -1880,6 +1880,19 @@ public static class PdfFixtures
         new PdfObjectDefinition(6, "<< /ca .5 /CA .5 >>"));
 
     /// <summary>
+    /// A 100x100 page showing one Type3 glyph whose procedure declares d1 (a stencil) and fills itself
+    /// WHITE. A d1 glyph is painted with the text's colour and its own colour operators are ignored, so the
+    /// square must appear black - pdf.js issue12705.pdf's glyphs are exactly this.
+    /// </summary>
+    public static byte[] CreateType3StencilGlyphPdf() => Build(1,
+        new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+        new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+        new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>"),
+        Stream(4, string.Empty, Encoding.ASCII.GetBytes("BT 10 40 Td /F1 60 Tf (A) Tj ET")),
+        new PdfObjectDefinition(5, "<< /Type /Font /Subtype /Type3 /FontMatrix [.001 0 0 .001 0 0] /FirstChar 65 /LastChar 65 /Widths [800] /Encoding << /Type /Encoding /Differences [65 /A] >> /CharProcs << /A 6 0 R >> >>"),
+        Stream(6, string.Empty, Encoding.ASCII.GetBytes("800 0 0 0 800 800 d1\n1 1 1 rg\n0 0 m 800 0 l 800 800 l 0 800 l h f")));
+
+    /// <summary>
     /// A 100x100 page whose only marks are two annotations with no appearance stream: a red-stroked Square
     /// and a blue-stroked, green-filled Circle (ISO 32000-1 12.5.5.2/12.5.5.3 leave their drawing to the
     /// viewer) - the shape of pdf.js annotation-square-circle-without-appearance.pdf.
