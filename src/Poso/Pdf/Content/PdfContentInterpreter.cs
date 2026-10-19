@@ -2923,8 +2923,22 @@ public sealed class PdfContentInterpreter
 
         ApplyInlineAbbreviations(dictionary);
 
-        // Binary data runs until whitespace followed by "EI"
+        // Binary data runs until whitespace followed by "EI". The single white-space character that
+        // separates ID from its data is not part of the data (a CRLF counts as that one line ending).
+        // Including it shifted every inline image by one byte, so pdf.js issue11124.pdf - whose samples
+        // legitimately contain the characters "EI " (not preceded by white space) - decoded off by one
+        // and its colours scrambled.
         int dataStart = lexer.Position;
+        if (dataStart < lexer.Data.Length && lexer.Data[dataStart] == (byte)'\r' &&
+            dataStart + 1 < lexer.Data.Length && lexer.Data[dataStart + 1] == (byte)'\n')
+        {
+            dataStart += 2;
+        }
+        else if (dataStart < lexer.Data.Length && PdfLexer.IsWhiteSpace(lexer.Data[dataStart]))
+        {
+            dataStart++;
+        }
+
         int dataEnd = FindInlineImageEnd(lexer.Data, dataStart);
         byte[] raw = lexer.Data.AsSpan(dataStart, dataEnd - dataStart).ToArray();
 

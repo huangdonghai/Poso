@@ -1851,6 +1851,18 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// A 100x100 page whose content is one 1x1 inline image filled with the three bytes 'z','E','I'
+    /// (RGB 122,69,73). The data deliberately contains the characters "EI" not preceded by white space (so
+    /// it is data, not the terminator), and the single white-space after <c>ID</c> is not part of it. Reading
+    /// that separator as data shifted the samples by a byte (pdf.js issue11124.pdf decoded off by one).
+    /// </summary>
+    public static byte[] CreateInlineImageWithEmbeddedEiPdf() => Build(1,
+        new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+        new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+        new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R >>"),
+        Stream(4, string.Empty, Encoding.ASCII.GetBytes("q 100 0 0 100 0 0 cm\nBI /W 1 /H 1 /CS /RGB /BPC 8\nID\nzEI\nEI Q")));
+
+    /// <summary>
     /// A 100x100 page showing a 2x2 Indexed image whose palette is over a <c>/Lab</c> base. Every sample
     /// is index 1, whose Lab bytes are L*=50, a*=+80, b*=+60 (red-orange). Read as raw RGB the same bytes
     /// are a pale cyan; only a real Lab conversion makes the fill red-dominant - pdf.js

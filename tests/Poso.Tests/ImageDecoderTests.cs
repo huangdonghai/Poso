@@ -35,6 +35,29 @@ public class ImageDecoderTests
     }
 
     /// <summary>
+    /// The single white-space after an inline image's ID is a separator, not data; the data here itself
+    /// contains the byte pair "EI" (not preceded by white space, so not the terminator). Treating the
+    /// separator as data shifted the samples one byte and decoded the wrong colour.
+    /// </summary>
+    [Fact]
+    public void InlineImage_SkipsTheSeparatorAndKeepsEmbeddedEi()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateInlineImageWithEmbeddedEiPdf());
+        using IGraphicsContext context = Factory.CreateContext(100, 100);
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        var pixels = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(pixels);
+        int offset = ((50 * image.Width) + 50) * image.BytesPerPixel;
+        (byte b, byte g, byte r) = (pixels[offset], pixels[offset + 1], pixels[offset + 2]);
+
+        // Data bytes 'z','E','I' are RGB 122,69,73; an off-by-one read would start at the separator (10,122,69).
+        Assert.True(r is > 110 and < 140 && g < 90 && b is > 55 and < 90,
+            $"inline samples must not shift past the ID separator (r={r} g={g} b={b})");
+    }
+
+    /// <summary>
     /// A SOF1 extended sequential JPEG must render on every back end. PeachDrawing's codec has no SOF1
     /// support and hands back nothing at all, which left a book cover - whose only content is one such
     /// image - blank on that back end while Skia drew it correctly. The image path now falls back to the
