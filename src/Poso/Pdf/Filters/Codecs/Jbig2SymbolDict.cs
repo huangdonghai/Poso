@@ -908,20 +908,33 @@ internal static class Jbig2SymbolDict
         {
             sbDsOffset -= 32;
         }
+        bool sbRTemplate = (tf & 0x8000) != 0;
 
-        if (sbRefine)
+        // §7.4.3.1 header field order (matching PDFium, which decodes the pdf.js SBHUFF+SBREFINE
+        // corpus): region-info (17) + SBTF (2) + SBHF (2 if SBHUFF) + SBRA (4 if SBREFINE && !SBRTEMPLATE)
+        // + SBNUMINSTANCES (4). MuPDF skips SBRA on the Huffman path (and gets an all-black fallback
+        // on these files); the previous Poso gate rejected SBREFINE outright. Read HF first, then SBRA.
+        int minLen = 17 + 2 + 2 + 4;
+        if (sbRefine && !sbRTemplate)
         {
-            return false; // Huffman text refinement interleaves arithmetic/MMR codewords: not yet oracle-verified
+            minLen += 4;
         }
-
-        // 7.4.3.1.2: huffman flags (2 bytes after the text flags at bodyStart+17).
-        if (bodyEnd - bodyStart < 17 + 2 + 2 + 4)
+        if (bodyEnd - bodyStart < minLen)
         {
             return false;
         }
         ushort hf = (ushort)((data[bodyStart + 19] << 8) | data[bodyStart + 20]);
         int cursor = bodyStart + 21;
-        // 7.4.3.1.4: SBNUMINSTANCES (sbrat is NOT read for the Huffman path).
+        sbyte[] sbrat = new sbyte[4];
+        if (sbRefine && !sbRTemplate)
+        {
+            for (int i = 0; i < 4; i++)
+            {
+                sbrat[i] = (sbyte)data[cursor + i];
+            }
+            cursor += 4;
+        }
+        // 7.4.3.1.5: SBNUMINSTANCES.
         int sbNumInstances = (int)ReadUInt32(data, cursor);
         cursor += 4;
         if (sbNumInstances < 0 || sbNumInstances > 1000000)
@@ -938,6 +951,23 @@ internal static class Jbig2SymbolDict
             return false;
         }
 
+        // §7.4.3.1.6: refinement tables, only when SBREFINE=1. RDW/H/X/Y select B.14 (small), B.15 (large),
+        // or a custom table; RSIZE selects B.1 or a custom.
+        Jbig2Huffman.Table? rdw = null, rdh = null, rdx = null, rdy = null, rsize = null;
+        if (sbRefine)
+        {
+            rdw = SelectTable((hf >> 6) & 3, referredTables, ref tableIndex, 14, 15, oobTwo: false, customTwo: false);
+            rdh = SelectTable((hf >> 8) & 3, referredTables, ref tableIndex, 14, 15, oobTwo: false, customTwo: false);
+            rdx = SelectTable((hf >> 10) & 3, referredTables, ref tableIndex, 14, 15, oobTwo: false, customTwo: false);
+            rdy = SelectTable((hf >> 12) & 3, referredTables, ref tableIndex, 14, 15, oobTwo: false, customTwo: false);
+            int rsizeSel = (hf >> 14) & 1;
+            rsize = rsizeSel == 0 ? Jbig2Huffman.Standard(1) : NextCustom(referredTables, ref tableIndex);
+            if (rdw is null || rdh is null || rdx is null || rdy is null || rsize is null)
+            {
+                return false;
+            }
+        }
+
         int sbNumSyms = referredSymbols.Length;
         var hs = new Jbig2Huffman.State(data, cursor, bodyEnd);
         Jbig2Huffman.Table? symCodes = BuildSymbolIdTable(hs, sbNumSyms);
@@ -945,6 +975,10 @@ internal static class Jbig2SymbolDict
         {
             return false;
         }
+
+        // Arithmetic refinement stats persist across instances within this text region (§6.4.11).
+        int grStatsSize = sbRTemplate ? 1 << 10 : 1 << 13;
+        byte[] grStats = sbRefine ? new byte[grStatsSize] : [];
 
         int textStride = (regionWidth + 7) / 8;
         byte[] textImage = new byte[textStride * regionHeight];
@@ -1000,6 +1034,60 @@ internal static class Jbig2SymbolDict
                 }
 
                 Jbig2Symbol ib = id >= sbNumSyms || id < 0 ? default : referredSymbols[id];
+
+                // §6.4.11: SBREFINE interleave — one RI bit decides whether this instance is placed as-is
+                // or refined. When refined: RDW/RDH/RDX/RDY/BMSIZE come from Huffman tables, then BMSIZE
+                // bytes of arithmetic refinement codeword follow (decoded by Jbig2Refinement). Huffman
+                // and arithmetic decoders share the underlying byte stream, so align to a byte boundary
+                // before entering arithmetic and advance by BMSIZE afterwards.
+                if (sbRefine)
+                {
+                    int ri = hs.GetBits(1, out code);
+                    if (code != 0)
+                    {
+                        return false;
+                    }
+                    if (ri != 0)
+                    {
+                        int rdwVal = hs.Get(rdw!, out code); if (code != 0) return false;
+                        int rdhVal = hs.Get(rdh!, out code); if (code != 0) return false;
+                        int rdxVal = hs.Get(rdx!, out code); if (code != 0) return false;
+                        int rdyVal = hs.Get(rdy!, out code); if (code != 0) return false;
+                        int bmSize = hs.Get(rsize!, out code); if (code != 0) return false;
+                        hs.SkipToByteBoundary();
+
+                        int newW = ib.Width + rdwVal;
+                        int newH = ib.Height + rdhVal;
+                        if (newW <= 0 || newH <= 0 || newW > 100000 || newH > 100000)
+                        {
+                            return false;
+                        }
+
+                        // NB: PDFium's Huffman-refinement uses `>> 2` (arith path uses `>> 1`), which is
+                        // why the pdf.js SBHUFF+SBREFINE corpus renders differently in Chrome vs a strict
+                        // spec decoder. We mirror Chrome's behaviour because that is what our oracle
+                        // (PDFium) produced.
+                        int alignX = (rdwVal >> 2) + rdxVal;
+                        int alignY = (rdhVal >> 2) + rdyVal;
+                        int mqStart = hs.Offset();
+                        int mqEnd = Math.Min(bodyEnd, mqStart + bmSize);
+                        if (mqStart > mqEnd)
+                        {
+                            return false;
+                        }
+                        var mq = new Jbig2MqDecoder(data, mqStart, mqEnd);
+                        byte[]? refined = Jbig2Refinement.Decode(
+                            sbRTemplate ? 1 : 0, false, sbrat, mq, grStats,
+                            newW, newH, ib.Packed, ib.Width, ib.Height, alignX, alignY);
+                        if (refined is null)
+                        {
+                            return false;
+                        }
+                        ib = new Jbig2Symbol(newW, newH, refined);
+
+                        hs.Advance(bmSize);
+                    }
+                }
 
                 if (!transposed && (refCorner == 2 || refCorner == 3) && ib.Width > 0)
                 {
