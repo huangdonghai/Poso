@@ -80,6 +80,36 @@ public class MeshShadingTests
         Assert.True(r is > 100 and < 160 && Math.Abs(r - g) < 6 && Math.Abs(g - b) < 6, $"mid-ramp grey (~126), got {r},{g},{b}");
     }
 
+    /// <summary>
+    /// A <c>ShadingType 5</c> lattice-form Gouraud triangle mesh is rows of vertices, not flagged patches.
+    /// MuPDF reads a full /VerticesPerRow per row and stitches quads between adjacent rows; a two-by-two
+    /// lattice is one quad. Type 5 was previously dropped (only 4/6/7 parsed), so the whole mesh painted
+    /// as background - this locks the row-major reader and the Gouraud colour through the ramp.
+    /// </summary>
+    [Fact]
+    public void Type5Lattice_StitchesRowsIntoAGouraudRamp()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateType5LatticePdf());
+        using IGraphicsContext context = Factory.CreateContext(100, 100);
+        var features = new List<PdfUnsupportedFeature>();
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White), features.Add);
+
+        Assert.DoesNotContain(features, f => f.Kind == PdfUnsupportedKind.Shading);
+
+        using IImage image = context.Snapshot();
+        byte[] px = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(px);
+
+        (byte r, byte g, byte b) = Luma(px, image.Width, userX: 5, userY: 50);
+        Assert.True(r < 40 && g < 40 && b < 40, $"left edge should be black (got {r},{g},{b})");
+
+        (r, g, b) = Luma(px, image.Width, 95, 50);
+        Assert.True(r > 200 && g > 200 && b > 200, $"right edge should be white (got {r},{g},{b})");
+
+        (r, g, b) = Luma(px, image.Width, 50, 50);
+        Assert.True(r is > 90 and < 165 && Math.Abs(r - g) < 8 && Math.Abs(g - b) < 8, $"mid-ramp grey, got {r},{g},{b}");
+    }
+
     private static (byte R, byte G, byte B) Luma(byte[] px, int width, int userX, int userY)
     {
         int deviceRow = 100 - userY;

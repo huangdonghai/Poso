@@ -107,7 +107,7 @@ public sealed class PdfShading
             return null; // function/axial/radial shadings cannot map colour without a function
         }
 
-        if (type is 4 or 6 or 7)
+        if (type is 4 or 5 or 6 or 7)
         {
             if (resolved is not PdfStream meshStream)
             {
@@ -713,6 +713,41 @@ public sealed class PdfShading
 
                 previousPoints = points;
                 previousColours = colours;
+            }
+        }
+        else if (type == 5)
+        {
+            // Lattice-form Gouraud-shaded triangle mesh (PDF 32000-1 12.6.4.2): no flags; vertices arrive
+            // in rows of /VerticesPerRow and each adjacent pair of rows is stitched into a band of quads,
+            // split as two Gouraud triangles. Mirrors MuPDF's fz_process_shade_type5 (which reads a full
+            // row every time and splits quad (ref[i],ref[i+1],buf[i+1],buf[i]) into (v0,v1,v3)+(v3,v2,v1))
+            // so the raster matches its edge walking and stays deterministic.
+            int verticesPerRow = (int)(dictionary.GetIntegerValue("VerticesPerRow") ?? 0);
+            if (verticesPerRow < 2)
+            {
+                return null;
+            }
+
+            MeshVertex[]? previousRow = null;
+            while (reader.RemainingBits >= (verticesPerRow * vertexBits))
+            {
+                var row = new MeshVertex[verticesPerRow];
+                for (int i = 0; i < verticesPerRow; i++)
+                {
+                    row[i] = ReadVertex();
+                }
+
+                if (previousRow is { } refRow)
+                {
+                    for (int i = 0; i < verticesPerRow - 1; i++)
+                    {
+                        MeshVertex v0 = refRow[i], v1 = refRow[i + 1], v2 = row[i + 1], v3 = row[i];
+                        triangles.Add(new MeshTriangle(v0, v1, v3));
+                        triangles.Add(new MeshTriangle(v3, v2, v1));
+                    }
+                }
+
+                previousRow = row;
             }
         }
         else if (type == 4 || type == 6)

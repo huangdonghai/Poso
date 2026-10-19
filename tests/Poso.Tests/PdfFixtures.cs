@@ -1675,6 +1675,30 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// A 100x100 page painted with one <c>ShadingType 5</c> lattice-form Gouraud triangle mesh: two rows of
+    /// two vertices, so a single quad that becomes a left-to-right black-to-white ramp. The row's first
+    /// vertex is (0,0) and last (0,100) at colour 0; the second row is (100,0) and (100,100) at colour 1 -
+    /// which pins down the row-major read order and the quad stitching between consecutive rows.
+    /// </summary>
+    public static byte[] CreateType5LatticePdf()
+    {
+        // Each vertex: x, y, colour, all 8 bits. Row 0 black on the left edge, row 1 white on the right.
+        byte[] data =
+        [
+            0x00, 0x00, 0x00,   0x00, 0xFF, 0x00,   // row 0: (0,0,black) (0,100,black)
+            0xFF, 0x00, 0xFF,   0xFF, 0xFF, 0xFF,   // row 1: (100,0,white) (100,100,white)
+        ];
+        string shading = "/ShadingType 5 /ColorSpace /DeviceRGB /BitsPerCoordinate 8 /BitsPerComponent 8 /VerticesPerRow 2 /Decode [0 100 0 100 0 1] /Function 6 0 R";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Shading << /S0 5 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes("q 0 0 100 100 re W n /S0 sh Q")),
+            Stream(5, shading, data),
+            new PdfObjectDefinition(6, "<< /FunctionType 2 /C0 [0 0 0] /C1 [1 1 1] /Domain [0 1] /N 1 >>"));
+    }
+
+    /// <summary>
     /// A 100x100 page filled with a Type 1 tiling pattern. Each 20x20 cell is white with its left
     /// half (pattern x 0..10) painted red, tiled across the whole page.
     /// </summary>
