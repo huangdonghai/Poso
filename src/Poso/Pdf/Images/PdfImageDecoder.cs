@@ -183,6 +183,14 @@ public static class PdfImageDecoder
                 : 1f;
         }
 
+        // A present /Decode whose bounds exceed [0,1] is expressed in palette-index units (e.g. [255 0]
+        // reverses an Indexed image), so the decoded value is the index itself; the default [0,1] must be
+        // scaled back up by the sample range. pdf.js issue10339_reduced.pdf draws the same palette image
+        // twice, once with Decode[255 0], and treating its decoded 0..255 value as a 0..1 fraction sent the
+        // lookup far out of range and swapped the two halves' tones.
+        bool indexedDecodeIsIndexUnits = decodeArray is not null &&
+            (decodeMin[0] > 1f || decodeMax[0] > 1f);
+
         // Soft mask (alpha)
         byte[]? alpha = null;
         if (document.Resolve(dictionary.Get("SMask")) is PdfStream softMaskStream)
@@ -277,7 +285,7 @@ public static class PdfImageDecoder
                             ColorSpaceKind.DeviceGray => GrayToRgb(sampleValues[0]),
                             ColorSpaceKind.DeviceRgb => (ToByte(sampleValues[0]), ToByte(sampleValues[1]), ToByte(sampleValues[2])),
                             ColorSpaceKind.DeviceCmyk => CmykToRgb(sampleValues[0], sampleValues[1], sampleValues[2], sampleValues[3]),
-                            ColorSpaceKind.Indexed => IndexedToRgb(space, (int)(sampleValues[0] * maxSample)),
+                            ColorSpaceKind.Indexed => IndexedToRgb(space, indexedDecodeIsIndexUnits ? (int)MathF.Round(sampleValues[0]) : (int)(sampleValues[0] * maxSample)),
                             _ => GrayToRgb(sampleValues[0]),
                         };
                     }
@@ -729,6 +737,52 @@ public static class PdfImageDecoder
         _ => Array.Empty<byte>(),
     };
 
+    private static float[]? ReadLabWhite(PdfDictionary? lab)
+    {
+        if (lab?.GetArray("WhitePoint") is { Count: >= 3 } white)
+        {
+            return new[]
+            {
+                white.GetNumber(0)?.AsFloat() ?? 0.9505f,
+                white.GetNumber(1)?.AsFloat() ?? 1f,
+                white.GetNumber(2)?.AsFloat() ?? 1.089f,
+            };
+        }
+
+        return null;
+    }
+
+    private static float[]? ReadLabRange(PdfDictionary? lab)
+    {
+        if (lab?.GetArray("Range") is { Count: >= 4 } range)
+        {
+            return new[]
+            {
+                range.GetNumber(0)?.AsFloat() ?? -128f,
+                range.GetNumber(1)?.AsFloat() ?? 127f,
+                range.GetNumber(2)?.AsFloat() ?? -128f,
+                range.GetNumber(3)?.AsFloat() ?? 127f,
+            };
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Converts one Indexed palette entry over a Lab base: the three bytes are L* (0..100) and a*/b* over
+    /// the /Range. Treating them as RGB (the generic three-component path) turned pdf.js
+    /// issue10339_reduced.pdf's blue Lab gradient into brown - every channel read from the wrong component.
+    /// </summary>
+    private static (byte R, byte G, byte B) LabEntryToRgb(byte[] lookup, int offset, ColorSpaceInfo lab)
+    {
+        float l = lookup[offset] / 255f * 100f;
+        float[] range = lab.LabRange ?? new[] { -128f, 127f, -128f, 127f };
+        float a = range[0] + (lookup[offset + 1] / 255f * (range[1] - range[0]));
+        float b = range[2] + (lookup[offset + 2] / 255f * (range[3] - range[2]));
+        PosoColor colour = Poso.Pdf.Colors.Cielab.ToRgb(l, a, b, lab.LabWhite ?? Array.Empty<float>());
+        return (colour.R, colour.G, colour.B);
+    }
+
     private static (byte R, byte G, byte B) IndexedToRgb(ColorSpaceInfo space, int index)
     {
         byte[] lookup = space.Lookup;
@@ -742,6 +796,12 @@ public static class PdfImageDecoder
         int maxIndex = (lookup.Length / baseComponents) - 1;
         int clamped = Math.Clamp(index, 0, Math.Max(maxIndex, 0));
         int offset = clamped * baseComponents;
+
+        // A palette over a Lab base holds L*, a*, b* triplets rather than RGB.
+        if (space.Base is { Kind: ColorSpaceKind.Lab } labBase)
+        {
+            return LabEntryToRgb(lookup, offset, labBase);
+        }
 
         // A palette over a Separation or DeviceN holds one tint per colorant, and the entry is only a
         // colour once the space's tint transform has run over it.
@@ -1022,6 +1082,7 @@ public static class PdfImageDecoder
         Indexed,
         Separation,
         DeviceN,
+        Lab,
     }
 
     private sealed class ColorSpaceInfo
@@ -1034,7 +1095,9 @@ public static class PdfImageDecoder
             IccProfile? icc = null,
             PdfFunction? tint = null,
             ColorSpaceKind baseKind = ColorSpaceKind.DeviceGray,
-            ColorSpaceInfo? baseSpace = null)
+            ColorSpaceInfo? baseSpace = null,
+            float[]? labWhite = null,
+            float[]? labRange = null)
         {
             Kind = kind;
             Components = components;
@@ -1044,6 +1107,8 @@ public static class PdfImageDecoder
             Tint = tint;
             BaseKind = baseKind;
             Base = baseSpace;
+            LabWhite = labWhite;
+            LabRange = labRange;
         }
 
         public ColorSpaceKind Kind { get; }
@@ -1053,6 +1118,12 @@ public static class PdfImageDecoder
         public byte[] Lookup { get; }
 
         public int BaseComponents { get; }
+
+        /// <summary>Lab white point (normalized XYZ) for a Lab space, or null for the D65 default.</summary>
+        public float[]? LabWhite { get; }
+
+        /// <summary>Lab /Range [aMin aMax bMin bMax] for a Lab space, or null for the -128..127 default.</summary>
+        public float[]? LabRange { get; }
 
         /// <summary>Embedded ICC profile to apply, when the space is ICCBased and the profile is a supported matrix/TRC type; null otherwise.</summary>
         public IccProfile? Icc { get; }
@@ -1080,6 +1151,7 @@ public static class PdfImageDecoder
                     "DeviceGray" or "G" or "CalGray" => new ColorSpaceInfo(ColorSpaceKind.DeviceGray, 1, Array.Empty<byte>(), 0),
                     "DeviceRGB" or "RGB" or "CalRGB" => new ColorSpaceInfo(ColorSpaceKind.DeviceRgb, 3, Array.Empty<byte>(), 0),
                     "DeviceCMYK" or "CMYK" => new ColorSpaceInfo(ColorSpaceKind.DeviceCmyk, 4, Array.Empty<byte>(), 0),
+                    "Lab" => new ColorSpaceInfo(ColorSpaceKind.Lab, 3, Array.Empty<byte>(), 3),
                     _ => null,
                 };
 
@@ -1126,6 +1198,16 @@ public static class PdfImageDecoder
                         (ColorSpaceKind baseKind, int baseWidth) = DescribeBaseSpace(document, array.Count >= 3 ? array[2] : null);
                         PdfFunction? tint = array.Count >= 4 ? PdfFunction.Create(document, array[3]) : null;
                         return new ColorSpaceInfo(ColorSpaceKind.DeviceN, colorants, Array.Empty<byte>(), baseWidth, null, tint, baseKind);
+                    }
+
+                    case "Lab":
+                    {
+                        // [/Lab << /WhitePoint .. /Range [aMin aMax bMin bMax] >>]. The palette or image
+                        // components are L* (0..100) and a*/b* over the /Range; Cielab turns them into sRGB.
+                        PdfDictionary? lab = array.Count >= 2 ? document.Resolve(array[1]) as PdfDictionary : null;
+                        float[]? white = ReadLabWhite(lab);
+                        float[]? range = ReadLabRange(lab);
+                        return new ColorSpaceInfo(ColorSpaceKind.Lab, 3, Array.Empty<byte>(), 3, labWhite: white, labRange: range);
                     }
 
                     default:

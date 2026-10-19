@@ -14,6 +14,27 @@ public class ImageDecoderTests
     private static readonly IGraphicsFactory Factory = SkiaGraphicsFactory.Default;
 
     /// <summary>
+    /// An Indexed palette whose base is /Lab stores L*, a*, b* per entry, not RGB. Reading the three
+    /// bytes as RGB turned pdf.js issue10339_reduced.pdf's blue Lab gradient brown; converting through
+    /// Cielab keeps the colour.
+    /// </summary>
+    [Fact]
+    public void IndexedOverLabPalette_ConvertsLabToRgb()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateIndexedLabImagePdf());
+        using IGraphicsContext context = Factory.CreateContext(100, 100);
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        var pixels = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(pixels);
+        int offset = ((50 * image.Width) + 50) * image.BytesPerPixel;
+        (byte b, byte g, byte r) = (pixels[offset], pixels[offset + 1], pixels[offset + 2]);
+
+        Assert.True(r > g && r > b && r > 120, $"a Lab(50,+80,+60) palette entry should be red-dominant (r={r} g={g} b={b})");
+    }
+
+    /// <summary>
     /// A SOF1 extended sequential JPEG must render on every back end. PeachDrawing's codec has no SOF1
     /// support and hands back nothing at all, which left a book cover - whose only content is one such
     /// image - blank on that back end while Skia drew it correctly. The image path now falls back to the
