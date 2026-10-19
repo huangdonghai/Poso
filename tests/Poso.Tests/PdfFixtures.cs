@@ -1854,6 +1854,37 @@ public static class PdfFixtures
         new PdfObjectDefinition(6, "<< /ca .5 /CA .5 >>"));
 
     /// <summary>
+    /// A 100x100 page filled by a tiling pattern whose cell shows one ZapfDingbats glyph through
+    /// /Differences [1 /a109] - a109 is the spade U+2660. The glyph name must resolve through the Adobe
+    /// Glyph List and the family must map the Dingbats block, or nothing paints (pdf.js issue15716.pdf).
+    /// </summary>
+    public static byte[] CreateTilingDingbatPdf()
+    {
+        byte[] cell = Encoding.ASCII.GetBytes("BT /F1 40 Tf 10 20 Td (\u0001) Tj ET");
+        string patternDict = "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 100 100] /XStep 100 /YStep 100 /Resources << /Font << /F1 6 0 R >> >>";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Pattern << /P0 5 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes("[/Pattern /DeviceRGB] cs /P0 scn 0 0 100 100 re f")),
+            Stream(5, patternDict, cell),
+            new PdfObjectDefinition(6, "<< /Type /Font /Subtype /Type1 /BaseFont /ZapfDingbats /Encoding << /Type /Encoding /Differences [1 /a109] >> >>"));
+    }
+
+    public static byte[] CreateTilingTextPdf()
+    {
+        byte[] cell = Encoding.ASCII.GetBytes("BT /F1 40 Tf 10 20 Td (A) Tj ET");
+        string patternDict = "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 100 100] /XStep 100 /YStep 100 /Resources << /Font << /F1 6 0 R >> >>";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Pattern << /P0 5 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes("[/Pattern /DeviceRGB] cs /P0 scn 0 0 100 100 re f")),
+            Stream(5, patternDict, cell),
+            new PdfObjectDefinition(6, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"));
+    }
+
+    /// <summary>
     /// A 100x100 page filled with a Type 1 tiling pattern. Each 20x20 cell is white with its left
     /// half (pattern x 0..10) painted red, tiled across the whole page.
     /// </summary>

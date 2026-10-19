@@ -35,6 +35,53 @@ public class TilingPatternTests
         AssertWhite(Sample(px, image.Width, 50, 35), "col 35 (cell1 right)");
     }
 
+    [Fact]
+    public void TilingPatternCell_WithText_RendersInk()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateTilingTextPdf());
+        using IGraphicsContext context = Factory.CreateContext(100, 100);
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+        using IImage image = context.Snapshot();
+        byte[] px = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(px);
+        int painted = 0;
+        for (int i = 0; i < px.Length; i += 4)
+        {
+            if (px[i] < 250 || px[i + 1] < 250 || px[i + 2] < 250)
+            {
+                painted++;
+            }
+        }
+
+        Assert.True(painted > 0, "text inside a tiling pattern must paint");
+    }
+
+    /// <summary>
+    /// ZapfDingbats addresses its shapes through glyph names such as a109 (spade U+2660) in /Differences.
+    /// The Adobe Glyph List must resolve the name and the family must map the Dingbats block; resolving to
+    /// Wingdings (whose shapes sit in the private use area) left the cell, and pdf.js issue15716.pdf, blank.
+    /// </summary>
+    [Fact]
+    public void TilingPatternCell_WithZapfDingbats_RendersGlyph()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateTilingDingbatPdf());
+        using IGraphicsContext context = Factory.CreateContext(100, 100);
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+        using IImage image = context.Snapshot();
+        byte[] px = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(px);
+        int painted = 0;
+        for (int i = 0; i < px.Length; i += 4)
+        {
+            if (px[i] < 250 || px[i + 1] < 250 || px[i + 2] < 250)
+            {
+                painted++;
+            }
+        }
+
+        Assert.True(painted > 0, "a ZapfDingbats glyph named a109 must paint the spade");
+    }
+
     /// <summary>
     /// /XStep and /YStep (500) far larger than the 20x20 cell: exactly one cell paints at the origin
     /// and the rest of the fill is a gap (the white backdrop). Sizing the raster tile by the step - and

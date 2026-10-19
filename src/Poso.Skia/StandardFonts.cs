@@ -27,7 +27,10 @@ internal static class StandardFonts
 
         if (ContainsAny(name, "zapfdingbats", "dingbat"))
         {
-            return "Wingdings";
+            // Address glyphs by Unicode (the Adobe Glyph List turns a109 into U+2660 and friends), so the
+            // family must actually map the Dingbats block. Wingdings keeps its shapes in the private use
+            // area and returns glyph 0 for U+2660/U+2701 - pdf.js issue15716.pdf then drew nothing.
+            return "Segoe UI Symbol";
         }
 
         if (ContainsAny(name, "courier"))
