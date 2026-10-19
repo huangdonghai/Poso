@@ -105,6 +105,38 @@ public class CcittTests
         Assert.True(light > 500, $"CCITT background should stay light (light={light})");
     }
 
+    /// <summary>
+    /// /BlackIs1 chooses which decoded bit is black, so the same codestream drawn with the default (false)
+    /// flag must be the exact pixel complement of the true render. Re-applying the flag on top of the
+    /// decoder's already-folded output made false equal true instead - which in practice inverted every
+    /// default-flag grayscale scan (pdf.js issue5747.pdf painted its whole page as a negative).
+    /// </summary>
+    [Fact]
+    public void CcittImage_BlackIs1False_IsTheComplementOfTrue()
+    {
+        byte[] raw = Convert.FromHexString(SmallRawHex);
+        byte[] RenderPdf(bool blackIs1)
+        {
+            using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateCcittImagePdf(raw, blackIs1));
+            using IGraphicsContext context = SkiaGraphicsFactory.Default.CreateContext(200, 100);
+            document.Pages[0].Render(SkiaGraphicsFactory.Default, context, new PdfRenderOptions(1f, 0f, PosoColor.White), _ => { });
+            using IImage image = context.Snapshot();
+            byte[] px = new byte[image.Width * image.Height * image.BytesPerPixel];
+            image.CopyPixels(px);
+            return px;
+        }
+
+        byte[] on = RenderPdf(true);
+        byte[] off = RenderPdf(false);
+        int bad = 0;
+        for (int i = 0; i < on.Length; i += 4)
+        {
+            if (Math.Abs(on[i] + off[i] - 255) > 4) { bad++; }
+        }
+
+        Assert.True(bad <= (on.Length / 4) / 100, $"false should invert true exactly; {bad} pixels disagreed");
+    }
+
     private static void AssertBits(byte[] raw, int columns, int rows, string[] expected)
     {
         byte[] decoded = CcittFaxDecoder.Decode(raw, columns, rows, k: -1, encodedByteAlign: false, blackIs1: true, endOfBlock: true, endOfLine: false);

@@ -428,7 +428,12 @@ public static class PdfImageDecoder
                     continue;
                 }
 
-                bool isBlack = blackIs1 ? bit == 1 : bit == 0;
+                // CcittFaxDecoder has already folded /BlackIs1 into its output, so a set bit means black for
+                // either flag value (its true-flag convention is pinned by the decoder's MuPDF bit tests, and a
+                // real default-flag scan - issue5747.pdf - needs the same). Re-deriving black from the flag here
+                // inverted every non-mask CCITT grayscale image whose /BlackIs1 is the default false: a scanned
+                // page painted as its own negative (91% ink against MuPDF's 18%).
+                bool isBlack = bit == 1;
                 byte value = isBlack ? (byte)0 : (byte)255;
                 pixels[offset] = value;
                 pixels[offset + 1] = value;

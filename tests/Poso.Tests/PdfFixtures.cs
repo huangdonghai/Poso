@@ -1413,11 +1413,13 @@ public static class PdfFixtures
 
     /// <summary>
     /// A page drawing a 24x12 CCITT Group 4 (K=-1) bilevel image scaled to fill a 200x100 page.
-    /// <paramref name="codestream"/> is the raw /CCITTFaxDecode data.
+    /// <paramref name="codestream"/> is the raw /CCITTFaxDecode data. <paramref name="blackIs1"/> selects the
+    /// /BlackIs1 flag: it only chooses which bit is black, so the same codestream rendered at false must be the
+    /// exact pixel complement of the true render.
     /// </summary>
-    public static byte[] CreateCcittImagePdf(byte[] codestream)
+    public static byte[] CreateCcittImagePdf(byte[] codestream, bool blackIs1 = true)
     {
-        string parms = "<</K -1/Columns 24/Rows 12/BlackIs1 true>>";
+        string parms = $"<</K -1/Columns 24/Rows 12/BlackIs1 {(blackIs1 ? "true" : "false")}>>";
         string content = "q 200 0 0 100 0 0 cm /Im1 Do Q";
         return Build(1,
             new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
