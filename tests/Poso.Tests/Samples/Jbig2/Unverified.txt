@@ -14,7 +14,12 @@ bitmap-symbol-symhuffrefine-textrefine
 bitmap-symbol-symhuffrefineseveral
 bitmap-symbol-texthuffrefine
 bitmap-symbol-texthuffrefineB15
+bitmap-symbol-texthuffrefinecustom
 bitmap-symbol-texthuffrefinecustomdims
 bitmap-symbol-texthuffrefinecustompos
+bitmap-symbol-texthuffrefinecustomposdims
 bitmap-symbol-texthuffrefinecustomsize
+bitmap-symbol-texthuffrefineone
+bitmap-symbol-texthuffrefineseveral
 bitmap-trailing-7fff-stripped-harder-refine
+issue20439

@@ -601,8 +601,15 @@ public static class Jbig2Decoder
         int cursor = position + 5;
 
         byte referredFlags = data[cursor++];
-        int referredToCount = referredFlags >> 5 & 7;
-        if (referredFlags == 7)
+        // §7.2.4: the top 3 bits of the referred-flags byte are the count prefix; the low 5 bits are
+        // retain-bitmap flags. A count of 7 signals an extended header (24-bit count in the next 3
+        // bytes, 5-bit retain prefix in the low bits of that first byte, then ceil(count/8) retain bytes).
+        // The old `referredFlags == 7` check only matched a byte value of literally 0x07, so files that
+        // used the extended form with any retain bits set (0xE7, 0xFF, …) fell through to the reserved
+        // branch and blew up segment-length parsing on downstream segments (pdf.js's issue20439).
+        int countPrefix = (referredFlags >> 5) & 7;
+        int referredToCount = countPrefix;
+        if (countPrefix == 7)
         {
             // Extended count: 3 bytes follow the first byte's retain bits.
             if (cursor + 3 > data.Length)
@@ -611,11 +618,11 @@ public static class Jbig2Decoder
             }
 
             referredToCount = (int)(ReadUInt32(data, cursor - 1) & 0x1FFFFFFF);
-            cursor += 2; // skip remaining 2 of the 3-byte count (already read 1 at cursor-1)
+            cursor += 3; // step past the 3 bytes that follow the referredFlags byte
             int retainBytes = (referredToCount + 7) / 8;
             cursor += retainBytes;
         }
-        else if (referredFlags is 5 or 6)
+        else if (countPrefix is 5 or 6)
         {
             return false; // reserved
         }
