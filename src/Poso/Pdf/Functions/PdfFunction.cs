@@ -159,17 +159,22 @@ internal sealed class StitchingFunction : PdfFunction
 {
     private readonly PdfFunction[] _functions;
     private readonly float[] _encode;
+    private readonly float[] _bounds;
 
-    private StitchingFunction(float[] domain, float[] range, PdfFunction[] functions, float[] encode)
+    private StitchingFunction(float[] domain, float[] range, PdfFunction[] functions, float[] encode, float[] bounds)
         : base(domain, range)
     {
         _functions = functions;
         _encode = encode;
+        _bounds = bounds;
     }
 
     public static PdfFunction? Create(PdfDocument document, PdfDictionary dictionary)
     {
-        PdfArray? functionArray = dictionary.GetArray("Functions");
+        // The auxiliary arrays are read through the document so that an indirect reference
+        // (/Functions 27 0 R rather than an inlined array) still resolves - real files such as
+        // pdf.js issue7821.pdf store every stitching operand as an indirect object.
+        PdfArray? functionArray = document.Resolve(dictionary.Get("Functions")) as PdfArray;
         if (functionArray is null || functionArray.Count == 0)
         {
             return null;
@@ -190,14 +195,15 @@ internal sealed class StitchingFunction : PdfFunction
             return null;
         }
 
-        float[] domain = ReadFloats(dictionary.GetArray("Domain"), new float[] { 0f, 1f });
+        float[] domain = ReadFloats(document.Resolve(dictionary.Get("Domain")) as PdfArray, new float[] { 0f, 1f });
         // /Range is nominally required for a stitching function, but real files omit it and rely on the
         // sub-functions to fix the output width (MuPDF does the same). Defaulting to a single [0,1] range
         // would collapse a three-component RGB stitching function down to one output, painting only red.
-        float[] range = ReadFloats(dictionary.GetArray("Range"), UnitRange(functions[0].OutputCount));
-        float[] encode = ReadFloats(dictionary.GetArray("Encode"), DefaultEncode(functions.Count));
+        float[] range = ReadFloats(document.Resolve(dictionary.Get("Range")) as PdfArray, UnitRange(functions[0].OutputCount));
+        float[] encode = ReadFloats(document.Resolve(dictionary.Get("Encode")) as PdfArray, DefaultEncode(functions.Count));
+        float[] bounds = ReadFloats(document.Resolve(dictionary.Get("Bounds")) as PdfArray, Array.Empty<float>());
 
-        return new StitchingFunction(domain, range, functions.ToArray(), encode);
+        return new StitchingFunction(domain, range, functions.ToArray(), encode, bounds);
     }
 
     private static float[] DefaultEncode(int count)
@@ -219,12 +225,30 @@ internal sealed class StitchingFunction : PdfFunction
         float dMin = Domain.Length >= 2 ? Domain[0] : 0f;
         float dMax = Domain.Length >= 2 ? Domain[1] : 1f;
         float span = dMax - dMin;
-        float normalized = span > 0 ? (x - dMin) / span : 0f;
-        int piece = Math.Clamp((int)(normalized * k), 0, k - 1);
+        int piece;
+        float local;
+        if (_bounds.Length == k - 1)
+        {
+            // /Bounds gives the domain breakpoints between sub-functions (PDF 32000-1 7.12.2.3);
+            // pick the piece whose interval contains x and normalise within it.
+            piece = 0;
+            while (piece < k - 1 && x > _bounds[piece])
+            {
+                piece++;
+            }
 
-        float pieceStart = dMin + (span * piece / k);
-        float pieceEnd = dMin + (span * (piece + 1) / k);
-        float local = pieceEnd > pieceStart ? (x - pieceStart) / (pieceEnd - pieceStart) : 0f;
+            float lower = piece == 0 ? dMin : _bounds[piece - 1];
+            float upper = piece == k - 1 ? dMax : _bounds[piece];
+            local = upper > lower ? (x - lower) / (upper - lower) : 0f;
+        }
+        else
+        {
+            float normalized = span > 0 ? (x - dMin) / span : 0f;
+            piece = Math.Clamp((int)(normalized * k), 0, k - 1);
+            float pieceStart = dMin + (span * piece / k);
+            float pieceEnd = dMin + (span * (piece + 1) / k);
+            local = pieceEnd > pieceStart ? (x - pieceStart) / (pieceEnd - pieceStart) : 0f;
+        }
 
         int encBase = piece * 2;
         float eMin = encBase < _encode.Length ? _encode[encBase] : 0f;

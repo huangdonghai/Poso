@@ -1091,6 +1091,29 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// A blue-to-green axial shading driven by a stitching function whose operands are every written as an
+    /// indirect reference (<c>/Functions 10 0 R</c> to the array <c>[11 0 R]</c>, <c>/Encode</c> and
+    /// <c>/Bounds</c> likewise) - the shape pdf.js issue7821.pdf uses. Reading <c>/Functions</c> as a plain
+    /// inline array returns null for an indirect reference, so the whole stitching function - and the
+    /// shading through it - silently disappears. It must resolve and paint the same ramp as the inline form.
+    /// </summary>
+    public static byte[] CreateStitchingIndirectShadingPdf()
+    {
+        string content = "[/Pattern /DeviceRGB] cs /ShP scn 0 0 100 100 re f";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Pattern << /ShP 6 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            new PdfObjectDefinition(6, "<< /PatternType 2 /Shading << /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 100 0] /Domain [0 1] /Extend [true true] /Function 7 0 R >> >>"),
+            new PdfObjectDefinition(7, "<< /FunctionType 3 /Domain [0 1] /Bounds 8 0 R /Encode 9 0 R /Functions 10 0 R >>"),
+            new PdfObjectDefinition(8, "[]"),
+            new PdfObjectDefinition(9, "[0 1]"),
+            new PdfObjectDefinition(10, "[11 0 R]"),
+            new PdfObjectDefinition(11, "<< /FunctionType 2 /Domain [0 1] /C0 [0 0 1] /C1 [0 1 0] /E 1 >>"));
+    }
+
+    /// <summary>
     /// A 100x100 page painted with a <c>ShadingType 1</c> (function-based) shading whose function returns
     /// the shading-space x as red and nothing else, placed by <c>/Matrix [100 0 0 100 0 0]</c>. The ramp
     /// proves both the matrix mapping and the two-input function call; the corpus file that uses nine of

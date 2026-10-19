@@ -84,6 +84,38 @@ public class ShadingTests
     }
 
     /// <summary>
+    /// A shading pattern whose colour map is a stitching function with every operand written as an
+    /// indirect reference must still paint (pdf.js issue7821.pdf). Resolving <c>/Functions</c> is what
+    /// keeps the whole shading from vanishing; the ramp must match the inline-operand form.
+    /// </summary>
+    [Fact]
+    public void StitchingIndirectOperands_ResolveAndPaint()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateStitchingIndirectShadingPdf());
+        using IGraphicsContext context = Factory.CreateContext(100, 100);
+        var features = new List<PdfUnsupportedFeature>();
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White), features.Add);
+
+        Assert.DoesNotContain(features, f => f.Kind == PdfUnsupportedKind.PatternColorSpace);
+        Assert.DoesNotContain(features, f => f.Kind == PdfUnsupportedKind.Shading);
+
+        using IImage image = context.Snapshot();
+        byte[] pixels = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(pixels);
+
+        (byte R, byte G, byte B) At(int x, int y)
+        {
+            int offset = ((y * image.Width) + x) * image.BytesPerPixel;
+            return (pixels[offset + 2], pixels[offset + 1], pixels[offset]);
+        }
+
+        (byte R, byte G, byte B) left = At(20, 50);
+        (byte R, byte G, byte B) right = At(80, 50);
+        Assert.True(left.B > 170 && left.G < 90, $"the blue end should show at x=20 (got {left})");
+        Assert.True(right.G > 170 && right.B < 90, $"the green end should show at x=80 (got {right})");
+    }
+
+    /// <summary>
     /// A function-based (Type 1) shading must paint: its function takes the shading-space point itself,
     /// and <c>/Matrix</c> is what places that space. Nine of these sit on one page of the pdf.js suite and
     /// all of them came out as the background.
