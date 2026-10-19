@@ -1891,6 +1891,18 @@ public static class PdfFixtures
         new PdfObjectDefinition(8, "<< /Type /OCG /Name (Hidden) >>"));
 
     /// <summary>
+    /// A 200x100 page whose whole content fills the page black under a clip that begins with a lone W
+    /// before the rectangle is built (pdf.js clippath.pdf). The clip has to come from the rectangle the
+    /// path ends up with - MuPDF and PDFium clip when the path is consumed - so only the 40..160 x 20..80
+    /// rectangle paints; clipping eagerly on the then-empty path left the page black.
+    /// </summary>
+    public static byte[] CreateDeferredClipPdf() => Build(1,
+        new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+        new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+        new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R >>"),
+        Stream(4, string.Empty, Encoding.ASCII.GetBytes("W\n40 20 m\n160 20 l\n160 80 l\n40 80 l\nh\nn\n0 0 0 sc\n0 0 200 100 re\nf")));
+
+    /// <summary>
     /// A tiling pattern whose /XStep and /YStep (500) are far larger than the 20x20 cell - pdf.js
     /// tiling-pattern-large-steps.pdf. The cell then paints once at each lattice point with a big gap
     /// between; sizing the raster tile by the step (as the old code did, clamped to a cap) drew nothing.

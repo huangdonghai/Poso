@@ -74,6 +74,13 @@ public sealed class PdfContentInterpreter
     private float _startY;
     private bool _hasCurrentPoint;
 
+    // A W/W* marks the pending clip rule; it is applied when the path is consumed (n, or a paint
+    // operator), not where W appears. pdf.js clippath.pdf opens with a lone W before its rectangle and
+    // expects the clip to come from that rectangle: MuPDF and PDFium clip at path end, so applying W
+    // eagerly on the then-empty path left the page unclipped.
+    private bool _pendingClip;
+    private bool _pendingClipEvenOdd;
+
     // Text matrices
     private Matrix3x2 _textMatrix = Matrix3x2.Identity;
     private Matrix3x2 _textLineMatrix = Matrix3x2.Identity;
@@ -838,22 +845,25 @@ public sealed class PdfContentInterpreter
 
         if (lexer.Match(token, "n"u8))
         {
+            ApplyPendingClip();
             ClearPath();
             operands.Clear();
             return;
         }
 
-        // Clipping
+        // Clipping - deferred until the path is consumed
         if (lexer.Match(token, "W"u8))
         {
-            ApplyClip(evenOdd: false);
+            _pendingClip = true;
+            _pendingClipEvenOdd = false;
             operands.Clear();
             return;
         }
 
         if (lexer.Match(token, "W*"u8))
         {
-            ApplyClip(evenOdd: true);
+            _pendingClip = true;
+            _pendingClipEvenOdd = true;
             operands.Clear();
             return;
         }
@@ -1620,6 +1630,7 @@ public sealed class PdfContentInterpreter
 
     private void PaintPath(bool fill, bool stroke, bool evenOdd)
     {
+        ApplyPendingClip();
         if (_path is { IsEmpty: false } && (fill || stroke) && !_suppressContent)
         {
             IPath path = _path.Build();
@@ -1676,6 +1687,17 @@ public sealed class PdfContentInterpreter
         }
 
         ClearPath();
+    }
+
+    private void ApplyPendingClip()
+    {
+        if (!_pendingClip)
+        {
+            return;
+        }
+
+        _pendingClip = false;
+        ApplyClip(_pendingClipEvenOdd);
     }
 
     private void ApplyClip(bool evenOdd)

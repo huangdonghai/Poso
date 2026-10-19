@@ -241,6 +241,28 @@ public class ContentRenderTests
         Assert.True(r < 60 && g > 200 && b < 60, $"green must stay opaque after an unclosed-q form (r={r} g={g} b={b})");
     }
 
+    /// <summary>
+    /// W before the path is built still clips to that path: MuPDF and PDFium apply the clip when the path
+    /// is consumed. pdf.js clippath.pdf opens with a lone W and expects the rectangle it then builds to
+    /// confine the following fill, not the whole page.
+    /// </summary>
+    [Fact]
+    public void ClipBeforePath_ClipsToTheFollowingPath()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateDeferredClipPdf());
+        using IGraphicsContext context = Factory.CreateContext(200, 100);
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+
+        (byte ib, byte ig, byte ir, _) = PixelAt(pixels, image.Width, 50, 100);
+        Assert.True(ir < 20 && ig < 20 && ib < 20, $"inside the deferred clip must be black (r={ir} g={ig} b={ib})");
+
+        (byte ob, byte og, byte or, _) = PixelAt(pixels, image.Width, 10, 20);
+        Assert.True(or > 240 && og > 240 && ob > 240, $"outside the deferred clip must stay white (r={or} g={og} b={ob})");
+    }
+
     private static byte[] ReadPixels(IImage image)
     {
         byte[] pixels = new byte[image.Width * image.Height * image.BytesPerPixel];
