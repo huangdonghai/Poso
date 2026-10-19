@@ -263,6 +263,25 @@ public class ContentRenderTests
         Assert.True(or > 240 && og > 240 && ob > 240, $"outside the deferred clip must stay white (r={or} g={og} b={ob})");
     }
 
+    /// <summary>
+    /// A Brotli-compressed content stream must decode before parsing. Brotli is not in ISO 32000, but pdf.js
+    /// accepts it and some generators use it for every stream - object and xref streams included - so a
+    /// missing filter leaves the whole file unreadable (pdf.js Brotli-Prototype-FileA.pdf).
+    /// </summary>
+    [Fact]
+    public void BrotliContent_DecodesAndRenders()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateBrotliContentPdf());
+        using IGraphicsContext context = Factory.CreateContext(100, 100);
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+
+        (byte b, byte g, byte r, _) = PixelAt(pixels, image.Width, 50, 50);
+        Assert.True(r > 200 && g < 60 && b < 60, $"the Brotli content must paint a red square (r={r} g={g} b={b})");
+    }
+
     private static byte[] ReadPixels(IImage image)
     {
         byte[] pixels = new byte[image.Width * image.Height * image.BytesPerPixel];

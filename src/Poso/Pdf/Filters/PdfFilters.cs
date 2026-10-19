@@ -86,6 +86,11 @@ public static class PdfFilters
                     current = RunLengthDecodeFilter.Decode(current);
                     break;
 
+                case "BrotliDecode":
+                case "Brotli":
+                    current = BrotliDecodeFilter.Decode(current);
+                    break;
+
                 case "DCTDecode":
                 case "DCT":
                 case "JPXDecode":

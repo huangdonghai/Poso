@@ -25,6 +25,32 @@ public static class PdfFixtures
     public static PdfObjectDefinition Stream(int number, string extraDictionary, byte[] data) =>
         new(number, $"<< /Length {data.Length}{(extraDictionary.Length > 0 ? " " + extraDictionary : string.Empty)} >>", data);
 
+    private static byte[] BrotliCompress(byte[] data)
+    {
+        using var output = new MemoryStream();
+        using (var brotli = new BrotliStream(output, CompressionLevel.Optimal, leaveOpen: true))
+        {
+            brotli.Write(data, 0, data.Length);
+        }
+
+        return output.ToArray();
+    }
+
+    /// <summary>
+    /// A 100x100 page whose content stream takes the non-standard /BrotliDecode filter - a prototype
+    /// extension pdf.js honours and some generators use for every stream (object and xref streams too, as
+    /// in pdf.js Brotli-Prototype-FileA.pdf). Without the filter the page has no content at all.
+    /// </summary>
+    public static byte[] CreateBrotliContentPdf()
+    {
+        byte[] content = BrotliCompress(Encoding.ASCII.GetBytes("1 0 0 rg 0 0 100 100 re f"));
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R >>"),
+            Stream(4, "/Filter /BrotliDecode", content));
+    }
+
     /// <summary>
     /// A 100x100 page stroking one horizontal line with an odd-length dash array. The spec says a dash
     /// pattern comes in pairs; this one carries three entries, which a back end that asserts the pairing
