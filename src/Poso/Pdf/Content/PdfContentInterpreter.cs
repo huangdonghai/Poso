@@ -2173,12 +2173,15 @@ public sealed class PdfContentInterpreter
             return;
         }
 
-        int tw = Math.Clamp((int)MathF.Round(xStep * sx), 1, 4096);
-        int th = Math.Clamp((int)MathF.Round(yStep * sy), 1, 4096);
+        // The cell is rasterised at the BBox's device size, not the step's: /XStep and /YStep are the
+        // lattice spacing and can far exceed the cell (a "large-steps" pattern draws one cell then a big
+        // gap), so sizing the buffer by the step squashes the content and the 4096 cap then mangles it.
+        int tw = Math.Clamp((int)MathF.Round(cellWidth * sx), 1, 4096);
+        int th = Math.Clamp((int)MathF.Round(cellHeight * sy), 1, 4096);
 
         Matrix3x2 tileMatrix =
             Matrix3x2.CreateTranslation(-bx0, -by0) *
-            Matrix3x2.CreateScale(sx, -sy) *
+            Matrix3x2.CreateScale(tw / cellWidth, -(float)th / cellHeight) *
             Matrix3x2.CreateTranslation(0f, th);
 
         IImage tile;
@@ -2232,10 +2235,13 @@ public sealed class PdfContentInterpreter
             {
                 for (int j = j0; j <= j1; j++)
                 {
-                    float px = i * xStep;
-                    float py = j * yStep;
-                    Vector2 a = Vector2.Transform(new Vector2(px, py + yStep), dt);
-                    Vector2 c = Vector2.Transform(new Vector2(px + xStep, py), dt);
+                    // Cell (i, j): the BBox content translated to the (i, j) lattice point. The drawn rect
+                    // spans the cell (BBox) extent, not a whole step - with large steps the content is one
+                    // small cell placed far apart, and a step-sized rect smears it across the gap.
+                    float ox = i * xStep;
+                    float oy = j * yStep;
+                    Vector2 a = Vector2.Transform(new Vector2(bx0 + ox, by1 + oy), dt);
+                    Vector2 c = Vector2.Transform(new Vector2(bx1 + ox, by0 + oy), dt);
                     float rx = Math.Min(a.X, c.X);
                     float ry = Math.Min(a.Y, c.Y);
                     float rw = Math.Abs(c.X - a.X);

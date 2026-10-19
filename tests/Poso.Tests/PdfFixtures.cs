@@ -1819,6 +1819,25 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// A tiling pattern whose /XStep and /YStep (500) are far larger than the 20x20 cell - pdf.js
+    /// tiling-pattern-large-steps.pdf. The cell then paints once at each lattice point with a big gap
+    /// between; sizing the raster tile by the step (as the old code did, clamped to a cap) drew nothing.
+    /// The red left half of the origin cell must show over the white page.
+    /// </summary>
+    public static byte[] CreateTilingLargeStepsPdf()
+    {
+        byte[] cellContent = Encoding.ASCII.GetBytes("1 1 1 rg 0 0 20 20 re f\n1 0 0 rg 0 0 10 20 re f\n");
+        string patternDict = "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 20 20] /XStep 500 /YStep 500";
+        string content = "1 1 1 rg 0 0 100 100 re f\n[/Pattern /DeviceRGB] cs /P0 scn 0 0 100 100 re f";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Pattern << /P0 5 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            Stream(5, patternDict, cellContent));
+    }
+
+    /// <summary>
     /// The same tiling page, but the cell's <c>/Resources</c> is an <b>indirect</b> dictionary and the cell
     /// paints through an image XObject it declares - the shape generators use for the cell artwork. Reading
     /// the resources without resolving the reference left the cell's <c>Do</c> unresolvable and the whole

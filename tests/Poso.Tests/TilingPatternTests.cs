@@ -36,6 +36,32 @@ public class TilingPatternTests
     }
 
     /// <summary>
+    /// /XStep and /YStep (500) far larger than the 20x20 cell: exactly one cell paints at the origin
+    /// and the rest of the fill is a gap (the white backdrop). Sizing the raster tile by the step - and
+    /// clamping its huge device width to the buffer cap - drew nothing at all (pdf.js
+    /// tiling-pattern-large-steps.pdf, 0% ink against MuPDF's 74%).
+    /// </summary>
+    [Fact]
+    public void LargeSteps_PaintTheCellOnceAtTheOrigin()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateTilingLargeStepsPdf());
+        using IGraphicsContext context = Factory.CreateContext(100, 100);
+        var features = new List<PdfUnsupportedFeature>();
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White), features.Add);
+
+        Assert.DoesNotContain(features, f => f.Kind == PdfUnsupportedKind.PatternColorSpace);
+
+        using IImage image = context.Snapshot();
+        byte[] px = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(px);
+
+        // The cell sits at pattern y 0..20, i.e. device rows 80..100 (y-down); sample its middle row.
+        AssertRed(Sample(px, image.Width, 90, 5), "origin cell left half should be red");
+        AssertWhite(Sample(px, image.Width, 90, 15), "origin cell right half should be white");
+        AssertWhite(Sample(px, image.Width, 50, 50), "the gap between large steps should stay white");
+    }
+
+    /// <summary>
     /// The cell artwork comes from an image XObject reached through an indirect /Resources dictionary.
     /// Unresolved, the cell's /Im1 Do found nothing and the entire pattern fill stayed blank.
     /// </summary>
