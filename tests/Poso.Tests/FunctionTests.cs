@@ -110,6 +110,29 @@ public class FunctionTests
         Assert.Equal(0.5, function.Evaluate(new float[] { 0.5f })[0], 3);
     }
 
+    /// <summary>
+    /// A sampled function with no /Encode must map the input domain across the whole table (indices
+    /// 0..Size-1). Defaulting the encode to [0,1] pinned every input to samples 0..1, so a 5-sample
+    /// white-to-black ramp read only white - pdf.js bug852992_reduced.pdf's luminosity mask stayed opaque.
+    /// </summary>
+    [Fact]
+    public void Sampled_DefaultEncodeMapsToSampleIndices()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateSimplePdf());
+        var dictionary = new PdfDictionary();
+        dictionary["FunctionType"] = new PdfNumber(0, true);
+        dictionary["Domain"] = Arr(0, 1);
+        dictionary["Range"] = Arr(0, 1);
+        dictionary["Size"] = Arr(3);
+        dictionary["BitsPerSample"] = new PdfNumber(8, true);
+        dictionary["Order"] = new PdfNumber(1, true);
+        var stream = new PdfStream(dictionary, new byte[] { 0x00, 0x80, 0xFF });
+
+        PdfFunction function = PdfFunction.Create(document, stream)!;
+        Assert.Equal(0.0, function.Evaluate(new float[] { 0f })[0], 2);
+        Assert.Equal(1.0, function.Evaluate(new float[] { 1f })[0], 2);
+    }
+
     [Fact]
     public void Stitching_Type3_SelectsSubFunction()
     {

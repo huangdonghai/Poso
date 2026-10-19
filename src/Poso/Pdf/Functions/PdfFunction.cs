@@ -311,10 +311,27 @@ internal sealed class SampledFunction : PdfFunction
         float[] domain = ReadFloats(dictionary.GetArray("Domain"), DefaultUnit(inputCount));
         float[] range = ReadFloats(dictionary.GetArray("Range"), DefaultUnit(outputCount));
 
-        float[] encode = ReadFloats(dictionary.GetArray("Encode"), DefaultUnit(inputCount * 2));
+        // /Encode defaults to [0 Size0-1 0 Size1-1 ...] - it maps the input domain onto the sample grid,
+        // so defaulting it to [0 1] pinned every axis to indices 0..1 and ignored the rest of the table.
+        // pdf.js bug852992_reduced.pdf's luminosity mask is a 5-sample white-to-black ramp; with only the
+        // first two (white) samples read, the mask stayed fully opaque.
+        float[] encode = ReadFloats(dictionary.GetArray("Encode"), DefaultEncode(size));
         float[] decode = ReadFloats(dictionary.GetArray("Decode"), DefaultUnit(outputCount * 2));
 
         return new SampledFunction(stream, domain, range, size, bitsPerSample, order, encode, decode);
+    }
+
+    /// <summary>The default /Encode: maps each input axis onto that axis's sample indices [0, size-1].</summary>
+    private static float[] DefaultEncode(int[] size)
+    {
+        var encode = new float[size.Length * 2];
+        for (int i = 0; i < size.Length; i++)
+        {
+            encode[i * 2] = 0f;
+            encode[(i * 2) + 1] = size[i] - 1;
+        }
+
+        return encode;
     }
 
     private static float[] DefaultUnit(int length)
