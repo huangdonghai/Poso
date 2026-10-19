@@ -165,6 +165,38 @@ public class MeshShadingTests
         Assert.True(r < 40 && g < 40 && b < 40, $"and the upper-left of the patch (got {r},{g},{b})");
     }
 
+    /// <summary>
+    /// A mesh may declare 32 bits per coordinate (pdf.js personwithdog.pdf). Reading the 32nd bit through
+    /// the int-returning bit reader overflowed to a negative value, which pushed every point off-page and
+    /// left the whole page blank; the lattice must paint.
+    /// </summary>
+    [Fact]
+    public void Type5Mesh_With32BitCoordinates_Paints()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateType5Mesh32BitPdf());
+        using IGraphicsContext context = Factory.CreateContext(100, 100);
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] px = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(px);
+
+        int painted = 0;
+        for (int y = 0; y < image.Height; y++)
+        {
+            for (int x = 0; x < image.Width; x++)
+            {
+                int off = ((y * image.Width) + x) * 4;
+                if (px[off] < 250 || px[off + 1] < 250 || px[off + 2] < 250)
+                {
+                    painted++;
+                }
+            }
+        }
+
+        Assert.True(painted > 0, "32-bit mesh coordinates must paint ink somewhere on the page");
+    }
+
     private static (byte R, byte G, byte B) Luma(byte[] px, int width, int userX, int userY)
     {
         int deviceRow = 100 - userY;

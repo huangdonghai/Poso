@@ -591,6 +591,26 @@ public sealed class PdfShading
 
             return value;
         }
+
+        /// <summary>
+        /// Reads up to 32 bits without sign trouble. A 32-bit coordinate read through the int-returning
+        /// ReadBits overflows into the sign bit and comes back negative: pdf.js personwithdog.pdf declares
+        /// BitsPerCoordinate 32, and every mesh point then decoded far outside the page, leaving the page
+        /// blank.
+        /// </summary>
+        public long ReadBitsWide(int count)
+        {
+            long value = 0;
+            for (int i = 0; i < count; i++)
+            {
+                int byteIndex = _bit >> 3;
+                int bit = byteIndex < _data.Length ? (_data[byteIndex] >> (7 - (_bit & 7))) & 1 : 0;
+                value = (value << 1) | (long)bit;
+                _bit++;
+            }
+
+            return value;
+        }
     }
 
     private static List<MeshTriangle>? ParseMesh(PdfStream stream, PdfDictionary dictionary, ShadingSpace colorSpace, PdfFunction function)
@@ -630,8 +650,8 @@ public sealed class PdfShading
 
         Vector2 ReadPoint()
         {
-            int rx = reader.ReadBits(bitsPerCoordinate);
-            int ry = reader.ReadBits(bitsPerCoordinate);
+            long rx = reader.ReadBitsWide(bitsPerCoordinate);
+            long ry = reader.ReadBitsWide(bitsPerCoordinate);
             return new Vector2(
                 decode[0] + ((float)(rx / coordScale) * (decode[1] - decode[0])),
                 decode[2] + ((float)(ry / coordScale) * (decode[3] - decode[2])));
