@@ -317,6 +317,34 @@ public class ContentRenderTests
         Assert.True(ink > 50, $"the fallback face must paint the text, got {ink} dark pixels");
     }
 
+    /// <summary>
+    /// Square and Circle annotations without an /AP stream must still be drawn from their /Rect, /C, /IC
+    /// and border width - the viewer generates the appearance (ISO 32000-1 12.5.5.2/12.5.5.3), as pdf.js
+    /// annotation-square-circle-without-appearance.pdf relies on.
+    /// </summary>
+    [Fact]
+    public void SquareAndCircleAnnotations_WithoutAppearance_AreDrawn()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateSquareCircleAnnotationPdf());
+        using IGraphicsContext context = Factory.CreateContext(100, 100);
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+
+        // Square top edge: user (25,37) -> device row 63; the red stroke must be there.
+        (byte sb, byte sg, byte sr, _) = PixelAt(pixels, image.Width, 63, 25);
+        Assert.True(sr > 180 && sg < 90 && sb < 90, $"the Square must be stroked in red (r={sr} g={sg} b={sb})");
+
+        // Circle centre: user (75,75) -> device row 25; the green interior must fill it.
+        (byte cb, byte cg, byte cr, _) = PixelAt(pixels, image.Width, 25, 75);
+        Assert.True(cg > 180 && cr < 120 && cb < 120, $"the Circle must be filled with its interior colour (r={cr} g={cg} b={cb})");
+
+        // Circle bounding-box corner: user (62,62) -> device row 38; outside the ellipse, so still white.
+        (byte ob, byte og, byte or, _) = PixelAt(pixels, image.Width, 38, 62);
+        Assert.True(or > 240 && og > 240 && ob > 240, $"outside the ellipse must stay clear (r={or} g={og} b={ob})");
+    }
+
     private static byte[] ReadPixels(IImage image)
     {
         byte[] pixels = new byte[image.Width * image.Height * image.BytesPerPixel];

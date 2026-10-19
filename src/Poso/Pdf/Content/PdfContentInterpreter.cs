@@ -351,6 +351,12 @@ public sealed class PdfContentInterpreter
             // all, gets its appearance synthesised from /MK, /DA and the field value, which this
             // viewer does not do - but filling its rectangle with a mark the file never asked for is
             // a worse answer than leaving the page as the content drew it.
+            if (subtype is "Square" or "Circle")
+            {
+                RenderShapeFallback(annot, rect, opacity, ellipse: subtype == "Circle");
+                continue;
+            }
+
             if (Array.IndexOf(MarkupSubtypes, subtype) < 0)
             {
                 continue;
@@ -466,6 +472,77 @@ public sealed class PdfContentInterpreter
 
             _context.FillPath(path.Build(), paint, false);
         }
+    }
+
+    /// <summary>
+    /// Square and Circle annotations have no required appearance stream (ISO 32000-1 12.5.5.2/12.5.5.3):
+    /// the viewer draws a rectangle, or an ellipse inscribed in the rectangle, stroked in /C and filled
+    /// with /IC when present. pdf.js annotation-square-circle-without-appearance.pdf is exactly that case.
+    /// </summary>
+    private void RenderShapeFallback(PdfDictionary annot, RectF rect, float opacity, bool ellipse)
+    {
+        PosoColor stroke = ParseColor(annot.Get("C"), PosoColor.Black);
+        PosoColor? interior = annot.Get("IC") is { } interiorColor
+            ? ParseColor(interiorColor, PosoColor.Black)
+            : null;
+
+        float width = 1f;
+        if (_document.Resolve(annot.Get("BS")) is PdfDictionary style && style.GetNumberValue("W") is double w)
+        {
+            width = (float)w;
+        }
+        else if (annot.GetArray("Border") is { Count: >= 3 } border)
+        {
+            width = border.GetNumber(2)?.AsFloat() ?? 1f;
+        }
+
+        if (width <= 0f)
+        {
+            width = 1f;
+        }
+
+        // Keep the stroke inside the annotation rectangle, the way a viewer does.
+        float inset = width * 0.5f;
+        RectF box = new(
+            rect.X + inset,
+            rect.Y + inset,
+            Math.Max(0.1f, rect.Width - width),
+            Math.Max(0.1f, rect.Height - width));
+
+        var path = new PathBuilder();
+        if (ellipse)
+        {
+            const float k = 0.5522847f; // cubic approximation of a quarter circle
+            float cx = box.X + (box.Width * 0.5f);
+            float cy = box.Y + (box.Height * 0.5f);
+            float rx = box.Width * 0.5f;
+            float ry = box.Height * 0.5f;
+            path.MoveTo(cx + rx, cy);
+            path.CubicTo(cx + rx, cy + (ry * k), cx + (rx * k), cy + ry, cx, cy + ry);
+            path.CubicTo(cx - (rx * k), cy + ry, cx - rx, cy + (ry * k), cx - rx, cy);
+            path.CubicTo(cx - rx, cy - (ry * k), cx - (rx * k), cy - ry, cx, cy - ry);
+            path.CubicTo(cx + (rx * k), cy - ry, cx + rx, cy - (ry * k), cx + rx, cy);
+            path.Close();
+        }
+        else
+        {
+            path.MoveTo(box.X, box.Y);
+            path.LineTo(box.X + box.Width, box.Y);
+            path.LineTo(box.X + box.Width, box.Y + box.Height);
+            path.LineTo(box.X, box.Y + box.Height);
+            path.Close();
+        }
+
+        byte alpha = (byte)Math.Clamp((int)MathF.Round(opacity * 255f), 0, 255);
+        IPath shape = path.Build();
+
+        _context.SetMatrix(_pageBaseMatrix);
+        if (interior is { } fill)
+        {
+            _context.FillPath(shape, fill.WithAlpha(alpha), false);
+        }
+
+        _context.StrokePath(shape, _state.Stroke with { Width = width, DashArray = null }, stroke.WithAlpha(alpha));
     }
 
     private static RectF ParseRectangle(PdfArray? array)
