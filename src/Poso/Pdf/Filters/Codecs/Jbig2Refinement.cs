@@ -126,11 +126,11 @@ internal static class Jbig2Refinement
         //   LTP ^= decode(startCtx). If LTP is 0, decode every pixel with the full mkctx; if LTP is 1,
         //   use the reference pixel directly when the 8-neighbourhood is uniform (typical), else fall
         //   back to decoding that pixel with mkctx.
-        // The start_context slot and mkctx layout follow MuPDF's jbig2dec (spec-conformant). PDFium
-        // uses a different bit layout for template 1 (image bits in the high positions, decoded bVal
-        // in bit 6), and the two disagree for template 1 + TPGRON. Callers gate that combination to
-        // null (see Jbig2Decoder's refinement case) until we adopt PDFium's exact T1 context.
-        uint startCtx = template != 0 ? 0x40u : 0x100u;
+        // The LTP row flag lives in a reserved stats slot: PDFium (JBig2_GeneralDecoder.cpp:1299, 1514)
+        // uses 0x0010 for template 0 and 0x0008 for template 1; MuPDF uses 0x100 / 0x40. T0 has been
+        // verified pixel-perfect against PDFium on this corpus regardless (the specific data doesn't
+        // distinguish the two slots), but T1+TPGRON does — matching PDFium's slot fixes that case.
+        uint startCtx = template != 0 ? 0x08u : 0x100u;
         int ltp = 0;
         for (int y = 0; y < h; y++)
         {
@@ -191,11 +191,13 @@ internal static class Jbig2Refinement
         byte[]? refPacked, int refW, int refH, int x, int y, int dx, int dy)
     {
         uint ctx = 0;
-        ctx |= (uint)GetImagePixel(image, w, h, stride, x - 1, y) << 0;
-        ctx |= (uint)GetImagePixel(image, w, h, stride, x + 1, y - 1) << 1;
-        ctx |= (uint)GetImagePixel(image, w, h, stride, x, y - 1) << 2;
         if (template == 0)
         {
+            // MuPDF/PDFium agree on template 0's context (image coding pixels at the top of the
+            // window, grat-offset pixel, then reference 3x3 window around (x-dx, y-dy) + grat offset).
+            ctx |= (uint)GetImagePixel(image, w, h, stride, x - 1, y) << 0;
+            ctx |= (uint)GetImagePixel(image, w, h, stride, x + 1, y - 1) << 1;
+            ctx |= (uint)GetImagePixel(image, w, h, stride, x, y - 1) << 2;
             ctx |= (uint)GetImagePixel(image, w, h, stride, x + grat[0], y + grat[1]) << 3;
             ctx |= (uint)GetRefPixel(refPacked, refW, refH, x - dx + 1, y - dy + 1) << 4;
             ctx |= (uint)GetRefPixel(refPacked, refW, refH, x - dx, y - dy + 1) << 5;
@@ -209,13 +211,25 @@ internal static class Jbig2Refinement
         }
         else
         {
-            ctx |= (uint)GetImagePixel(image, w, h, stride, x - 1, y - 1) << 3;
-            ctx |= (uint)GetRefPixel(refPacked, refW, refH, x - dx + 1, y - dy + 1) << 4;
-            ctx |= (uint)GetRefPixel(refPacked, refW, refH, x - dx, y - dy + 1) << 5;
-            ctx |= (uint)GetRefPixel(refPacked, refW, refH, x - dx + 1, y - dy) << 6;
-            ctx |= (uint)GetRefPixel(refPacked, refW, refH, x - dx, y - dy) << 7;
-            ctx |= (uint)GetRefPixel(refPacked, refW, refH, x - dx - 1, y - dy) << 8;
-            ctx |= (uint)GetRefPixel(refPacked, refW, refH, x - dx, y - dy - 1) << 9;
+            // PDFium's decode_Template1_unopt bit layout (JBig2_GeneralDecoder.cpp line ~1530):
+            //   bit 0-1 = ref(y-dy+1) at (x-dx+1, x-dx)
+            //   bit 2-4 = ref(y-dy)   at (x-dx+1, x-dx, x-dx-1)
+            //   bit 5   = ref(y-dy-1) at (x-dx)
+            //   bit 6   = image(y)    at (x-1)   [the previous decoded pixel on this row]
+            //   bit 7-9 = image(y-1)  at (x+1, x, x-1)
+            // MuPDF's layout is a bit permutation of this; the two diverge in the arithmetic stats
+            // slots they update, so a template-1+TPGRON codeword produces different output between
+            // the two. PDFium is the user-visible behaviour in Chrome; match it here.
+            ctx |= (uint)GetRefPixel(refPacked, refW, refH, x - dx + 1, y - dy + 1) << 0;
+            ctx |= (uint)GetRefPixel(refPacked, refW, refH, x - dx, y - dy + 1) << 1;
+            ctx |= (uint)GetRefPixel(refPacked, refW, refH, x - dx + 1, y - dy) << 2;
+            ctx |= (uint)GetRefPixel(refPacked, refW, refH, x - dx, y - dy) << 3;
+            ctx |= (uint)GetRefPixel(refPacked, refW, refH, x - dx - 1, y - dy) << 4;
+            ctx |= (uint)GetRefPixel(refPacked, refW, refH, x - dx, y - dy - 1) << 5;
+            ctx |= (uint)GetImagePixel(image, w, h, stride, x - 1, y) << 6;
+            ctx |= (uint)GetImagePixel(image, w, h, stride, x + 1, y - 1) << 7;
+            ctx |= (uint)GetImagePixel(image, w, h, stride, x, y - 1) << 8;
+            ctx |= (uint)GetImagePixel(image, w, h, stride, x - 1, y - 1) << 9;
         }
         return ctx;
     }

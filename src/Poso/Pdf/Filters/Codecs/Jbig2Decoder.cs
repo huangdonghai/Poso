@@ -378,16 +378,6 @@ public static class Jbig2Decoder
                     bool tpgron = (segFlags & 2) != 0;
                     int offset2 = 18;
 
-                    // GRTEMPLATE 1 + TPGRON 1: PDFium (which is the sole oracle for the pdf.js corpus
-                    // files that MuPDF fallbacks on) uses a different arithmetic-context bit layout from
-                    // MuPDF/spec here (see core/fxcodec/jbig2/jbig2_grrd_proc.cpp DecodeTemplate1Unopt).
-                    // Adopting PDFium's layout is a distinct work item; until then this specific
-                    // combination degrades to null so the image is skipped rather than mis-rendered.
-                    if (grTemplate == 1 && tpgron)
-                    {
-                        return null;
-                    }
-
                     sbyte[] grat = new sbyte[4]; // default zeros
                     if (grTemplate == 0)
                     {
