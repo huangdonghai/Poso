@@ -937,13 +937,26 @@ public static class PdfImageDecoder
         int rowBytes = (width * bitsPerComponent + 7) / 8;
         var alpha = new byte[width * height];
 
+        // A soft mask can invert its samples with /Decode [1 0] - a common way to encode an already
+        // complemented coverage channel. Ignoring the array read raw samples as alpha and flipped the mask:
+        // pdf.js issue1905.pdf's DCT/Flate images carry Decode[1 0] masks, and once the form-alpha leak was
+        // fixed their visible chart bars turned transparent (white) instead of opaque.
+        float decodeMin = 0f;
+        float decodeMax = 1f;
+        if (dictionary.GetArray("Decode") is { Count: >= 2 } decode)
+        {
+            decodeMin = decode.GetNumber(0)?.AsFloat() ?? 0f;
+            decodeMax = decode.GetNumber(1)?.AsFloat() ?? 1f;
+        }
+
         for (int y = 0; y < height; y++)
         {
             int bitOffset = 0;
             for (int x = 0; x < width; x++)
             {
                 int sample = ReadBits(data, y * rowBytes, ref bitOffset, bitsPerComponent);
-                alpha[(y * width) + x] = (byte)Math.Clamp((int)MathF.Round((float)sample / maxSample * 255f), 0, 255);
+                float value = decodeMin + ((float)sample / maxSample * (decodeMax - decodeMin));
+                alpha[(y * width) + x] = (byte)Math.Clamp((int)MathF.Round(value * 255f), 0, 255);
             }
         }
 

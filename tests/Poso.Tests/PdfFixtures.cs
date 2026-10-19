@@ -1819,6 +1819,21 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// A 100x100 page that draws a form (a red square) under an ExtGState with ca .5, then paints a full
+    /// green square afterwards. The form's content opens a q but never closes it - legal, and common. That
+    /// stray q must not strand the form's saved state (with its 0.5 alpha): if it does, the page-level Q
+    /// restores 0.5 and the following green square paints translucent. pdf.js issue1905_reduced.pdf washed
+    /// every image after exactly such a form.
+    /// </summary>
+    public static byte[] CreateFormWithUnclosedStatePdf() => Build(1,
+        new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+        new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+        new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /ExtGState << /G1 6 0 R >> /XObject << /Fm1 5 0 R >> >> /Contents 4 0 R >>"),
+        Stream(4, string.Empty, Encoding.ASCII.GetBytes("q /G1 gs /Fm1 Do Q 0 1 0 rg 0 0 100 100 re f")),
+        Stream(5, "/Type /XObject /Subtype /Form /BBox [0 0 100 100]", Encoding.ASCII.GetBytes("q 1 0 0 rg 0 0 100 100 re f")),
+        new PdfObjectDefinition(6, "<< /ca .5 /CA .5 >>"));
+
+    /// <summary>
     /// A 100x100 page filled with a Type 1 tiling pattern. Each 20x20 cell is white with its left
     /// half (pattern x 0..10) painted red, tiled across the whole page.
     /// </summary>

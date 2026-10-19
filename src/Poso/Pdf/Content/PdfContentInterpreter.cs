@@ -2467,6 +2467,7 @@ public sealed class PdfContentInterpreter
         }
 
         int outerSaves = _context.SaveDepth;
+        int outerStateDepth = _stateStack.Count;
         try
         {
             // A form XObject behaves as if its content were wrapped in q/Q
@@ -2526,8 +2527,16 @@ public sealed class PdfContentInterpreter
                 _streamEntryMatrix = outerStreamEntry;
 
                 // A form may legally be left with q still open; the group has to be popped before that
-                // stray save level, otherwise the layer never composites back.
+                // stray save level, otherwise the layer never composites back. The stray q also pushed a
+                // graphics state that is never Q'd: leave it on _stateStack and the outer Pop below would
+                // pop the form's own saved state instead, stranding it (with any transparency / alpha it
+                // carried, e.g. a form drawn under ca .5) so the next page-level Q restores it - watching
+                // pdf.js issue1905_reduced.pdf paint every following image at 50% opacity did exactly that.
                 BalanceCanvasSaves(outerSaves + 1 + (pushedLayer ? 1 : 0));
+                while (_stateStack.Count > outerStateDepth + 1)
+                {
+                    _stateStack.Pop();
+                }
 
                 if (pushedLayer)
                 {

@@ -220,6 +220,27 @@ public class ContentRenderTests
             $"stroked 'O' counter must stay white (thin outline); center ({cx},{cy}) was r={cr} g={cg} b={cb}");
     }
 
+    /// <summary>
+    /// A form whose content opens a q but never closes it must not strand the graphics state it was
+    /// drawn under (here ca .5). If the stray q is left on the state stack, the page-level Q restores the
+    /// form's 0.5 alpha and the following fill paints translucent - pdf.js issue1905_reduced.pdf washed
+    /// every image after such a form to half opacity.
+    /// </summary>
+    [Fact]
+    public void FormWithUnclosedQ_DoesNotLeakItsAlphaToLaterContent()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateFormWithUnclosedStatePdf());
+        using IGraphicsContext context = Factory.CreateContext(100, 100);
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+
+        // The green square is painted after the form, at full opacity; a leaked ca .5 would wash it.
+        (byte b, byte g, byte r, _) = PixelAt(pixels, image.Width, 50, 50);
+        Assert.True(r < 60 && g > 200 && b < 60, $"green must stay opaque after an unclosed-q form (r={r} g={g} b={b})");
+    }
+
     private static byte[] ReadPixels(IImage image)
     {
         byte[] pixels = new byte[image.Width * image.Height * image.BytesPerPixel];
