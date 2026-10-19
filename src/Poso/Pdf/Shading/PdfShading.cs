@@ -811,92 +811,60 @@ public sealed class PdfShading
         }
         else if (type == 6)
         {
-            // NOTE: a real Type 6 constant-colour tensor-product patch supplies 12 boundary control points
-            // (the four interior poles are computed) plus four corner colours - see MuPDF's
-            // fz_process_shade_type6. That correct reader is not implemented yet; this keeps the previous
-            // four-point Coons-patch approximation so behaviour is unchanged rather than regressing a type 6
-            // mesh to a blank or scrambled surface.
-            int per = 4;
-            var patch = new MeshVertex[per];
-            bool started = false;
-            while (reader.RemainingBits >= bitsPerFlag + vertexBits)
+            // Constant-colour tensor-product patch mesh (12.6.4.3): each patch carries 12 boundary control
+            // points and four corner colours - unlike type 7, which supplies all 16 points; the four interior
+            // poles are computed from the boundary. A continuation flag inherits the shared edge's four
+            // points and two seam colours from the previous patch. Mirrors MuPDF's fz_process_shade_type6.
+            int pointBits = 2 * bitsPerCoordinate;
+            int colourBits = k * bitsPerComponent;
+            Vector2[]? previousPoints = null;
+            (byte R, byte G, byte B)[]? previousColours = null;
+
+            while (reader.RemainingBits >= bitsPerFlag)
             {
-                int flag = bitsPerFlag > 0 ? reader.ReadBits(bitsPerFlag) : 1;
-                if (flag != 0 || !started)
-                {
-                    patch[0] = ReadVertex();
-                }
-
-                started = true;
-                bool ok = true;
-                for (int i = 1; i < per; i++)
-                {
-                    if (reader.RemainingBits < vertexBits)
-                    {
-                        ok = false;
-                        break;
-                    }
-
-                    patch[i] = ReadVertex();
-                }
-
-                if (!ok)
+                int flag = bitsPerFlag > 0 ? reader.ReadBits(bitsPerFlag) : 0;
+                if (flag is not (0 or 1 or 2 or 3) || (flag != 0 && previousPoints is null))
                 {
                     break;
                 }
 
-                EmitPatch(triangles, patch, tensor: false);
+                int firstPoint = flag == 0 ? 0 : 4;
+                int firstColour = flag == 0 ? 0 : 2;
+                if (reader.RemainingBits < ((12 - firstPoint) * pointBits) + ((4 - firstColour) * colourBits))
+                {
+                    break;
+                }
+
+                Vector2[] points = new Vector2[12];
+                (byte R, byte G, byte B)[] colours = new (byte R, byte G, byte B)[4];
+                for (int i = firstPoint; i < 12; i++)
+                {
+                    points[i] = ReadPoint();
+                }
+
+                for (int i = firstColour; i < 4; i++)
+                {
+                    colours[i] = ReadColour();
+                }
+
+                if (flag != 0 && previousPoints is { } pp && previousColours is { } pc)
+                {
+                    for (int i = 0; i < 4; i++)
+                    {
+                        points[i] = pp[((3 * flag) + i) % 12];
+                    }
+
+                    colours[0] = pc[flag];
+                    colours[1] = pc[(flag + 1) % 4];
+                }
+
+                EmitType6Patch(triangles, points, colours);
+                previousPoints = points;
+                previousColours = colours;
             }
         }
 
         return triangles.Count > 0 ? triangles : null;
-    }
-
-    private static void EmitPatch(List<MeshTriangle> triangles, MeshVertex[] control, bool tensor)
-    {
-        const int Divisions = 8;
-        var grid = new MeshVertex[Divisions + 1, Divisions + 1];
-        for (int i = 0; i <= Divisions; i++)
-        {
-            for (int j = 0; j <= Divisions; j++)
-            {
-                float u = (float)i / Divisions;
-                float v = (float)j / Divisions;
-                grid[i, j] = tensor ? EvaluateTensorPatch(control, u, v) : EvaluateCoonsPatch(control, u, v);
-            }
-        }
-
-        for (int i = 0; i < Divisions; i++)
-        {
-            for (int j = 0; j < Divisions; j++)
-            {
-                MeshVertex p00 = grid[i, j], p10 = grid[i + 1, j], p01 = grid[i, j + 1], p11 = grid[i + 1, j + 1];
-                triangles.Add(new MeshTriangle(p00, p10, p11));
-                triangles.Add(new MeshTriangle(p00, p11, p01));
-            }
-        }
-    }
-
-    private static MeshVertex EvaluateTensorPatch(MeshVertex[] c, float u, float v)
-    {
-        float[] bu = BernsteinCubic(u);
-        float[] bv = BernsteinCubic(v);
-        float x = 0f, y = 0f, r = 0f, g = 0f, b = 0f;
-        for (int i = 0; i < 4; i++)
-        {
-            for (int j = 0; j < 4; j++)
-            {
-                float w = bu[i] * bv[j];
-                MeshVertex p = c[(i * 4) + j];
-                x += w * p.Position.X;
-                y += w * p.Position.Y;
-                r += w * p.R;
-                g += w * p.G;
-                b += w * p.B;
-            }
-        }
-
-        return Vertex(x, y, r, g, b);
     }
 
     /// <summary>
@@ -912,12 +880,69 @@ public sealed class PdfShading
         // Table 76 walks the patch boundary and then names the four interior poles; the grid the surface
         // is evaluated on is control[row, column], so the two orders differ by this permutation.
         ReadOnlySpan<int> streamOrder = [0, 1, 2, 3, 11, 12, 13, 4, 10, 15, 14, 5, 9, 8, 7, 6];
-        var control = new MeshVertex[16];
+        var control = new Vector2[16];
         for (int index = 0; index < 16; index++)
         {
-            control[index] = new MeshVertex(points[streamOrder[index]], 0, 0, 0);
+            control[index] = points[streamOrder[index]];
         }
 
+        EmitTensorGrid(triangles, control, corners);
+    }
+
+    /// <summary>
+    /// Flattens one type 6 (constant-colour tensor-product) patch. Its boundary is twelve control points; the
+    /// four interior poles are computed from them so the surface is a full cubic tensor patch, then painted
+    /// with bilinear interpolation of the four corner colours exactly like type 7. The point -> pole layout
+    /// and the interior formulas mirror MuPDF's make_tensor_patch(type 6).
+    /// </summary>
+    private static void EmitType6Patch(
+        List<MeshTriangle> triangles,
+        Vector2[] v,
+        (byte R, byte G, byte B)[] corners)
+    {
+        Vector2 i11 = ComputeTensorInterior(v[0], v[1], v[11], v[3], v[9], v[8], v[4], v[6]);
+        Vector2 i12 = ComputeTensorInterior(v[3], v[2], v[4], v[0], v[6], v[7], v[11], v[9]);
+        Vector2 i21 = ComputeTensorInterior(v[9], v[8], v[10], v[6], v[0], v[1], v[5], v[3]);
+        Vector2 i22 = ComputeTensorInterior(v[6], v[7], v[5], v[9], v[3], v[2], v[10], v[0]);
+
+        var control = new Vector2[16];
+        control[0] = v[0];
+        control[1] = v[1];
+        control[2] = v[2];
+        control[3] = v[3];
+        control[4] = v[11];
+        control[5] = i11;
+        control[6] = i12;
+        control[7] = v[4];
+        control[8] = v[10];
+        control[9] = i21;
+        control[10] = i22;
+        control[11] = v[5];
+        control[12] = v[9];
+        control[13] = v[8];
+        control[14] = v[7];
+        control[15] = v[6];
+
+        EmitTensorGrid(triangles, control, corners);
+    }
+
+    /// <summary>Collapses the four interior poles of a type 6 patch from its boundary (PDF 1.7 p.330).</summary>
+    private static Vector2 ComputeTensorInterior(
+        Vector2 a, Vector2 b, Vector2 c, Vector2 d, Vector2 e, Vector2 f, Vector2 g, Vector2 h) =>
+        new(
+            ((-4f * a.X) + (6f * (b.X + c.X)) - (2f * (d.X + e.X)) + (3f * (f.X + g.X)) - h.X) / 9f,
+            ((-4f * a.Y) + (6f * (b.Y + c.Y)) - (2f * (d.Y + e.Y)) + (3f * (f.Y + g.Y)) - h.Y) / 9f);
+
+    /// <summary>
+    /// Flattens a tensor-product patch given its 16 control poles in row-major [row * 4 + column] order: the
+    /// geometry is the cubic Bernstein surface, the colour bilinear over the four corner colours. Shared by
+    /// type 6 (computed interior) and type 7 (streamed interior).
+    /// </summary>
+    private static void EmitTensorGrid(
+        List<MeshTriangle> triangles,
+        Vector2[] control,
+        (byte R, byte G, byte B)[] corners)
+    {
         const int Divisions = 8;
         var grid = new MeshVertex[Divisions + 1, Divisions + 1];
         for (int i = 0; i <= Divisions; i++)
@@ -934,8 +959,8 @@ public sealed class PdfShading
                     for (int b = 0; b < 4; b++)
                     {
                         float w = bu[a] * bv[b];
-                        x += w * control[(a * 4) + b].Position.X;
-                        y += w * control[(a * 4) + b].Position.Y;
+                        x += w * control[(a * 4) + b].X;
+                        y += w * control[(a * 4) + b].Y;
                     }
                 }
 
@@ -961,16 +986,6 @@ public sealed class PdfShading
 
     private static float Bilinear(byte c00, byte c01, byte c11, byte c10, float u, float v) =>
         ((1 - u) * (1 - v) * c00) + ((1 - u) * v * c01) + (u * v * c11) + (u * (1 - v) * c10);
-
-    private static MeshVertex EvaluateCoonsPatch(MeshVertex[] c, float u, float v)
-    {
-        float x = (1 - u) * (1 - v) * c[0].Position.X + u * (1 - v) * c[1].Position.X + (1 - u) * v * c[2].Position.X + u * v * c[3].Position.X;
-        float y = (1 - u) * (1 - v) * c[0].Position.Y + u * (1 - v) * c[1].Position.Y + (1 - u) * v * c[2].Position.Y + u * v * c[3].Position.Y;
-        float r = (1 - u) * (1 - v) * c[0].R + u * (1 - v) * c[1].R + (1 - u) * v * c[2].R + u * v * c[3].R;
-        float g = (1 - u) * (1 - v) * c[0].G + u * (1 - v) * c[1].G + (1 - u) * v * c[2].G + u * v * c[3].G;
-        float b = (1 - u) * (1 - v) * c[0].B + u * (1 - v) * c[1].B + (1 - u) * v * c[2].B + u * v * c[3].B;
-        return Vertex(x, y, r, g, b);
-    }
 
     private static MeshVertex Vertex(float x, float y, float r, float g, float b) =>
         new(new Vector2(x, y), ClampByte(r), ClampByte(g), ClampByte(b));

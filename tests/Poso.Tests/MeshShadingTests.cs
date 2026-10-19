@@ -139,6 +139,32 @@ public class MeshShadingTests
         Assert.True(r is > 90 and < 165 && Math.Abs(r - g) < 8 && Math.Abs(g - b) < 8, $"mid-ramp grey, got {r},{g},{b}");
     }
 
+    /// <summary>
+    /// A <c>ShadingType 6</c> constant-colour tensor patch supplies 12 boundary points plus four corner
+    /// colours; the four interior poles are computed. A single flat-square patch painted all-black must cover
+    /// the page - the earlier Coons approximation scrambled real type 6 meshes (coons-allflags-withfunction).
+    /// </summary>
+    [Fact]
+    public void Type6ConstantColorPatch_PaintsItsComputedInteriorSurface()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateType6PatchPdf());
+        using IGraphicsContext context = Factory.CreateContext(100, 100);
+        var features = new List<PdfUnsupportedFeature>();
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White), features.Add);
+
+        Assert.DoesNotContain(features, f => f.Kind == PdfUnsupportedKind.Shading);
+
+        using IImage image = context.Snapshot();
+        byte[] px = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(px);
+
+        (byte r, byte g, byte b) = Luma(px, image.Width, 50, 50);
+        Assert.True(r < 40 && g < 40 && b < 40, $"the black surface should cover the centre (got {r},{g},{b})");
+
+        (r, g, b) = Luma(px, image.Width, 15, 85);
+        Assert.True(r < 40 && g < 40 && b < 40, $"and the upper-left of the patch (got {r},{g},{b})");
+    }
+
     private static (byte R, byte G, byte B) Luma(byte[] px, int width, int userX, int userY)
     {
         int deviceRow = 100 - userY;

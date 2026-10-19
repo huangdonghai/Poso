@@ -1725,6 +1725,36 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// A 100x100 page painted with one <c>ShadingType 6</c> constant-colour tensor-product patch: a single
+    /// flag-0 patch whose 12 boundary control points form a uniform grid over the page (so the cubic surface
+    /// is the flat square) with all four corner colours black. Type 6 supplies only the 12 boundary points and
+    /// four colours - the four interior poles are computed - so this exercises the reader and the computed
+    /// interior that the earlier Coons approximation got wrong (pdf.js coons-allflags-withfunction.pdf).
+    /// </summary>
+    public static byte[] CreateType6PatchPdf()
+    {
+        // flag(0) then 12 boundary points (x,y, 8-bit raw; /Decode [0 100 ...] maps raw 255 -> 100),
+        // walking the Table 76 boundary order, then four corner colours (all black).
+        byte[] data =
+        [
+            0x00,                                             // flag 0: new patch, all 12 points follow.
+            0x00, 0x00,  0x55, 0x00,  0xAA, 0x00,  0xFF, 0x00, // bottom edge (v0..v3)
+            0xFF, 0x55,  0xFF, 0xAA,  0xFF, 0xFF,              // right edge (v4..v6)
+            0xAA, 0xFF,  0x55, 0xFF,  0x00, 0xFF,              // top edge (v7..v9)
+            0x00, 0xAA,  0x00, 0x55,                           // left edge (v10..v11)
+            0x00, 0x00, 0x00, 0x00,                            // four corner colours: black.
+        ];
+        string shading = "/ShadingType 6 /ColorSpace /DeviceGray /BitsPerCoordinate 8 /BitsPerComponent 8 /BitsPerFlag 8 /Decode [0 100 0 100 0 1] /Function 6 0 R";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Shading << /S0 5 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes("q 0 0 100 100 re W n /S0 sh Q")),
+            Stream(5, shading, data),
+            new PdfObjectDefinition(6, "<< /FunctionType 2 /C0 [0] /C1 [1] /Domain [0 1] /N 1 >>"));
+    }
+
+    /// <summary>
     /// A 100x100 page painted with one <c>ShadingType 5</c> lattice-form Gouraud triangle mesh: two rows of
     /// two vertices, so a single quad that becomes a left-to-right black-to-white ramp. The row's first
     /// vertex is (0,0) and last (0,100) at colour 0; the second row is (100,0) and (100,100) at colour 1 -
