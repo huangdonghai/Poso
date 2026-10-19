@@ -1821,6 +1821,21 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// A 100x100 page filled edge to edge with a shading pattern whose axial shading declares a smaller
+    /// <c>/BBox</c> [20 20 80 80]. The shading must stop at its box - the corners stay the page's white.
+    /// (pdf.js issue8092.pdf paints a whole page with a pattern whose shading is boxed.)
+    /// </summary>
+    public static byte[] CreateAxialShadingBBoxPdf() => Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Pattern << /P0 5 0 R >> /ColorSpace << /Cs1 8 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes("/Cs1 cs 1 1 1 rg 0 0 100 100 re f /Pattern cs /P0 scn 0 0 100 100 re f")),
+            new PdfObjectDefinition(5, "<< /Type /Pattern /PatternType 2 /Shading 6 0 R >>"),
+            new PdfObjectDefinition(6, "<< /ShadingType 2 /ColorSpace /DeviceRGB /Coords [20 50 80 50] /Function 7 0 R /BBox [20 20 80 80] >>"),
+            new PdfObjectDefinition(7, "<< /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [0 0 1] /N 1 >>"),
+            new PdfObjectDefinition(8, "[/Pattern /DeviceRGB]"));
+
+    /// <summary>
     /// A 100x100 page with one ShadingType 5 lattice whose vertices are 32 bits per coordinate
     /// (pdf.js personwithdog.pdf declares BitsPerCoordinate 32). Reading a 32-bit coordinate through the
     /// int-returning bit reader overflows to a negative value, the mesh lands off-page and the page stays

@@ -288,6 +288,16 @@ public sealed class PdfShading
                 var device = new Vector2(deviceBounds.X + x + 0.5f, deviceBounds.Y + y + 0.5f);
                 Vector2 s = Vector2.Transform(device, deviceToShading);
 
+                // /BBox limits the painted region for every function-based shading, not just type 1: an
+                // axial or radial shading with a /BBox must stop at it (pdf.js issue8092.pdf fills the whole
+                // page with the pattern while its shading declares a smaller box). Types 2 and 3 carry no
+                // /Matrix, so the shading space is the placed space here.
+                if (_hasBounds && (s.X < _boundLeft || s.X > _boundRight ||
+                                   s.Y < _boundBottom || s.Y > _boundTop))
+                {
+                    continue;
+                }
+
                 if (!TryParameter(s, out float t))
                 {
                     continue; // transparent (outside the domain and not extended)

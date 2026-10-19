@@ -197,6 +197,29 @@ public class MeshShadingTests
         Assert.True(painted > 0, "32-bit mesh coordinates must paint ink somewhere on the page");
     }
 
+    /// <summary>
+    /// A function-based shading's /BBox limits the region that gets painted for axial and radial shadings
+    /// too, not only for the function type - a shading pattern filling a bigger area must leave the area
+    /// outside its box untouched (pdf.js issue8092.pdf fills a page with a boxed shading).
+    /// </summary>
+    [Fact]
+    public void AxialShading_StopsAtItsBBox()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateAxialShadingBBoxPdf());
+        using IGraphicsContext context = Factory.CreateContext(100, 100);
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] px = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(px);
+
+        (byte r, byte g, byte b) = Luma(px, image.Width, 50, 50);
+        Assert.True(r < 240 || b < 240, $"inside the /BBox the gradient must paint (got {r},{g},{b})");
+
+        (r, g, b) = Luma(px, image.Width, 5, 50);
+        Assert.True(r > 250 && g > 250 && b > 250, $"outside the /BBox the page must stay white (got {r},{g},{b})");
+    }
+
     private static (byte R, byte G, byte B) Luma(byte[] px, int width, int userX, int userY)
     {
         int deviceRow = 100 - userY;
