@@ -350,7 +350,7 @@ internal static class Jbig2Huffman
         hasOob = false;
         switch (b)
         {
-            case 1: return [new(1, 4, 0), new(2, 8, 16), new(3, 16, 272), new(0, -1, 32), new(3, 32, 65808)]; // A
+            case 1: return [new(1, 4, 0), new(2, 8, 16), new(3, 16, 272), new(0, 32, -1), new(3, 32, 65808)]; // A
             case 2: hasOob = true; return [new(1, 0, 0), new(2, 0, 1), new(3, 0, 2), new(4, 3, 3), new(5, 6, 11), new(0, 32, -1), new(6, 32, 75), new(6, 0, 0)]; // B
             case 3: hasOob = true; return [new(8, 8, -256), new(1, 0, 0), new(2, 0, 1), new(3, 0, 2), new(4, 3, 3), new(5, 6, 11), new(8, 32, -257), new(7, 32, 75), new(6, 0, 0)]; // C
             case 4: return [new(1, 0, 1), new(2, 0, 2), new(3, 0, 3), new(4, 3, 4), new(5, 6, 12), new(0, 32, -1), new(5, 32, 76)]; // D
