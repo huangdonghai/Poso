@@ -368,6 +368,33 @@ public class ContentRenderTests
         Assert.True(or > 240 && og > 240 && ob > 240, $"outside the glyph must stay white (r={or} g={og} b={ob})");
     }
 
+    /// <summary>
+    /// A Type3 glyph procedure with no /Resources on the font inherits the resources in force where the
+    /// text was shown - pdf.js pr4922.pdf's glyph procedures show text with the page's own fonts, and
+    /// resolving only against the font's (absent) resources left the page empty.
+    /// </summary>
+    [Fact]
+    public void Type3Glyph_InheritsTheCallersResources()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateType3InheritedResourcesPdf());
+        using IGraphicsContext context = Factory.CreateContext(100, 100);
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+
+        int ink = 0;
+        for (int i = 0; i < pixels.Length; i += 4)
+        {
+            if (pixels[i] < 200 || pixels[i + 1] < 200 || pixels[i + 2] < 200)
+            {
+                ink++;
+            }
+        }
+
+        Assert.True(ink > 50, $"the glyph procedure must resolve /F1 through the caller's resources, got {ink} dark pixels");
+    }
+
     private static byte[] ReadPixels(IImage image)
     {
         byte[] pixels = new byte[image.Width * image.Height * image.BytesPerPixel];

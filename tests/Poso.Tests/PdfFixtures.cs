@@ -1880,6 +1880,20 @@ public static class PdfFixtures
         new PdfObjectDefinition(6, "<< /ca .5 /CA .5 >>"));
 
     /// <summary>
+    /// A 100x100 page where a Type3 font carries NO /Resources and its glyph procedure draws an "X" using
+    /// a font defined in the page's resources. A glyph procedure inherits the resources in force where the
+    /// text was shown (pdf.js pr4922.pdf), so the X must appear.
+    /// </summary>
+    public static byte[] CreateType3InheritedResourcesPdf() => Build(1,
+        new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+        new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+        new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Font << /F1 5 0 R /T3 6 0 R >> >> /Contents 4 0 R >>"),
+        Stream(4, string.Empty, Encoding.ASCII.GetBytes("BT 10 10 Td /T3 60 Tf (A) Tj ET")),
+        new PdfObjectDefinition(5, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"),
+        new PdfObjectDefinition(6, "<< /Type /Font /Subtype /Type3 /FontMatrix [1 0 0 1 0 0] /FirstChar 65 /LastChar 65 /Widths [1] /Encoding << /Type /Encoding /Differences [65 /A] >> /CharProcs << /A 7 0 R >> >>"),
+        Stream(7, string.Empty, Encoding.ASCII.GetBytes("1 0 0 0 1 1 d1\nBT /F1 0.6 Tf 0 0 Td (X) Tj ET")));
+
+    /// <summary>
     /// A 100x100 page showing one Type3 glyph whose procedure declares d1 (a stencil) and fills itself
     /// WHITE. A d1 glyph is painted with the text's colour and its own colour operators are ignored, so the
     /// square must appear black - pdf.js issue12705.pdf's glyphs are exactly this.

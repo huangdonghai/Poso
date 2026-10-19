@@ -621,6 +621,22 @@ public sealed class PdfContentInterpreter
             return;
         }
 
+        // A Type3 glyph procedure with no /Resources of its own inherits the resources in force where the
+        // text was shown (pdf.js pr4922.pdf's glyph procedures draw text with the page's fonts).
+        PdfDictionary? outerResources = _currentResources;
+        _currentResources = resources;
+        try
+        {
+            ExecuteContentLoop(content, resources);
+        }
+        finally
+        {
+            _currentResources = outerResources;
+        }
+    }
+
+    private void ExecuteContentLoop(byte[] content, PdfDictionary? resources)
+    {
         var lexer = new PdfLexer(content);
         var operands = new Stack<PdfObject>();
 
@@ -1612,6 +1628,10 @@ public sealed class PdfContentInterpreter
         lexer.Match(token, "sc"u8) || lexer.Match(token, "SC"u8) ||
         lexer.Match(token, "scn"u8) || lexer.Match(token, "SCN"u8);
 
+    // Resources in force for the content stream being executed; a Type3 glyph procedure with no
+    // /Resources inherits these.
+    private PdfDictionary? _currentResources;
+
     private float ExecuteType3Glyph(Type3PdfFont font, int code, Matrix3x2 textSpaceMatrix)
     {
         PdfStream? glyphStream = font.GetGlyphStream(code);
@@ -1623,12 +1643,13 @@ public sealed class PdfContentInterpreter
         Type3GlyphWidthGlyphSpace = 0f;
         bool outerStencil = _type3Stencil;
         _type3Stencil = false;
+        PdfDictionary? glyphResources = font.Resources ?? _currentResources;
         _context.Save();
         // canvas = FontMatrix * textSpaceMatrix * CTM
         _context.ConcatMatrix(font.FontMatrix * textSpaceMatrix);
         try
         {
-            ExecuteContent(glyphStream.Decode(_diag), font.Resources);
+            ExecuteContent(glyphStream.Decode(_diag), glyphResources);
         }
         finally
         {
