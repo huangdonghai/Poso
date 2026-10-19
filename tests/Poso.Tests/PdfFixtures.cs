@@ -1884,6 +1884,25 @@ public static class PdfFixtures
     /// /Differences [1 /a109] - a109 is the spade U+2660. The glyph name must resolve through the Adobe
     /// Glyph List and the family must map the Dingbats block, or nothing paints (pdf.js issue15716.pdf).
     /// </summary>
+    /// <summary>
+    /// A 200x50 page drawing "ABC" with a TrueType font whose embedded /FontFile2 is garbage. The back end
+    /// must fall back to a system face and still paint the text (pdf.js bug1200096.pdf's subset program does
+    /// not load, and its Skia render came out blank).
+    /// </summary>
+    public static byte[] CreateTextWithBrokenEmbeddedFontPdf()
+    {
+        string widths = string.Join(' ', Enumerable.Repeat("500", 95));
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 50] /Resources << /Font << /F1 4 0 R >> >> /Contents 8 0 R >>"),
+            new PdfObjectDefinition(4, $"<< /Type /Font /Subtype /TrueType /BaseFont /KVIQXV#20Times#20New#20Roman /Encoding /WinAnsiEncoding /FirstChar 32 /LastChar 126 /Widths 5 0 R /FontDescriptor 6 0 R >>"),
+            new PdfObjectDefinition(5, $"[{widths}]"),
+            new PdfObjectDefinition(6, "<< /Type /FontDescriptor /FontName /KVIQXV#20Times#20New#20Roman /Flags 32 /FontBBox [0 -200 1000 800] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile2 7 0 R >>"),
+            Stream(7, string.Empty, Enumerable.Repeat((byte)0x5A, 64).ToArray()),
+            Stream(8, string.Empty, Encoding.ASCII.GetBytes("BT 10 20 TD /F1 20 Tf (ABC) Tj ET")));
+    }
+
     public static byte[] CreateTilingDingbatPdf()
     {
         byte[] cell = Encoding.ASCII.GetBytes("BT /F1 40 Tf 10 20 Td (\u0001) Tj ET");

@@ -8,14 +8,20 @@ public sealed class SkiaFont : IFont
 {
     private readonly SKTypeface _typeface;
 
+    // Parsed cmap for the formats Skia's own typeface cannot map (0 and 2). pdf.js bug1200096.pdf's big
+    // Times subset carries a (3,1) format 2 table plus a (1,0) format 0 table; SKTypeface.GetGlyph returned
+    // 0 for every code, so the text silently painted nothing.
+    private readonly Dictionary<int, ushort>? _extraCmap;
+
     // Unit font size (1f): advance widths are returned directly in em units
     private readonly SKFont _font;
 
-    private SkiaFont(SKTypeface typeface, bool usedFallback)
+    private SkiaFont(SKTypeface typeface, bool usedFallback, Dictionary<int, ushort>? extraCmap = null)
     {
         _typeface = typeface;
         _font = new SKFont(typeface, 1f);
         UsedFallback = usedFallback;
+        _extraCmap = extraCmap;
     }
 
     public static SkiaFont? Create(ReadOnlySpan<byte> fontData, string baseFontName)
@@ -25,7 +31,16 @@ public sealed class SkiaFont : IFont
             using var skData = SKData.CreateCopy(fontData);
             if (SKTypeface.FromData(skData) is { } embedded)
             {
-                return new SkiaFont(embedded, usedFallback: false);
+                // Only reject a face with no glyphs at all. A CID/Identity-H font legitimately has no cmap
+                // (codes address GIDs directly), so the cmap table must not be a requirement; when one is
+                // present but Skia cannot read it, ParseCmap supplies the missing mappings instead.
+                if (embedded.GlyphCount > 0)
+                {
+                    return new SkiaFont(embedded, usedFallback: false, ParseCmap(fontData));
+                }
+
+                embedded.Dispose();
+                return CreateFallback(baseFontName, usedFallback: true);
             }
 
             return CreateFallback(baseFontName, usedFallback: true);
@@ -61,7 +76,16 @@ public sealed class SkiaFont : IFont
     /// <summary>The underlying unit-size (1em) Skia font, for the batched glyph-run draw path.</summary>
     internal SKFont Font => _font;
 
-    public ushort GetGlyphId(uint codePoint) => (ushort)_font.GetGlyph((int)codePoint);
+    public ushort GetGlyphId(uint codePoint)
+    {
+        ushort glyphId = (ushort)_font.GetGlyph((int)codePoint);
+        if (glyphId == 0 && _extraCmap is not null && _extraCmap.TryGetValue((int)codePoint, out ushort mapped))
+        {
+            return mapped;
+        }
+
+        return glyphId;
+    }
 
     public float GetAdvanceWidth(ushort glyphId)
     {
@@ -188,4 +212,129 @@ public sealed class SkiaFont : IFont
         _font.Dispose();
         _typeface.Dispose();
     }
+
+    /// <summary>
+    /// Reads the cmap sub-tables SkiaSharp's typeface cannot use: format 0 (a 256-entry byte table) and
+    /// format 2 (high-byte mapping). Returns null when the program has neither.
+    /// </summary>
+    private static Dictionary<int, ushort>? ParseCmap(ReadOnlySpan<byte> font)
+    {
+        if (font.Length < 12)
+        {
+            return null;
+        }
+
+        int numTables = ReadU16(font, 4);
+        if (font.Length < 12 + (numTables * 16))
+        {
+            return null;
+        }
+
+        int cmap = -1;
+        for (int i = 0; i < numTables; i++)
+        {
+            int record = 12 + (i * 16);
+            if (font[record] == 'c' && font[record + 1] == 'm' && font[record + 2] == 'a' && font[record + 3] == 'p')
+            {
+                cmap = ReadU32(font, record + 8);
+                break;
+            }
+        }
+
+        if (cmap < 0 || cmap + 4 > font.Length)
+        {
+            return null;
+        }
+
+        int subTables = ReadU16(font, cmap + 2);
+        if (cmap + 4 + (subTables * 8) > font.Length)
+        {
+            return null;
+        }
+
+        Dictionary<int, ushort>? map = null;
+        for (int i = 0; i < subTables; i++)
+        {
+            int record = cmap + 4 + (i * 8);
+            int platform = ReadU16(font, record);
+            int encoding = ReadU16(font, record + 2);
+            int sub = cmap + ReadU32(font, record + 4);
+            if (sub + 2 > font.Length)
+            {
+                continue;
+            }
+
+            switch (ReadU16(font, sub))
+            {
+                case 0 when sub + 6 + 256 <= font.Length:
+                    map ??= new Dictionary<int, ushort>(256);
+                    for (int code = 0; code < 256; code++)
+                    {
+                        ushort glyph = font[sub + 6 + code];
+                        if (glyph != 0 && !map.ContainsKey(code))
+                        {
+                            map[code] = glyph;
+                        }
+                    }
+
+                    break;
+
+                case 2 when (platform == 3 && encoding == 1) || platform == 0:
+                    map ??= new Dictionary<int, ushort>();
+                    ParseCmapFormat2(font, sub, map);
+                    break;
+            }
+        }
+
+        return map;
+    }
+
+    private static void ParseCmapFormat2(ReadOnlySpan<byte> font, int sub, Dictionary<int, ushort> map)
+    {
+        int keys = sub + 6;
+        int subHeaders = keys + 512;
+        for (int high = 0; high < 256; high++)
+        {
+            int key = ReadU16(font, keys + (high * 2)) / 8;
+            int header = subHeaders + (key * 8);
+            if (header + 8 > font.Length)
+            {
+                continue;
+            }
+
+            int firstCode = ReadU16(font, header);
+            int entryCount = ReadU16(font, header + 2);
+            short delta = (short)ReadU16(font, header + 4);
+            int rangeOffset = ReadU16(font, header + 6);
+            for (int low = firstCode; low < firstCode + entryCount && low < 256; low++)
+            {
+                int address = header + 6 + rangeOffset + ((low - firstCode) * 2);
+                if (address + 2 > font.Length)
+                {
+                    continue;
+                }
+
+                int glyph = ReadU16(font, address);
+                if (glyph == 0)
+                {
+                    continue;
+                }
+
+                glyph = (glyph + delta) & 0xffff;
+                int code = (high << 8) | low;
+                if (glyph != 0 && !map.ContainsKey(code))
+                {
+                    map[code] = (ushort)glyph;
+                }
+            }
+        }
+    }
+
+    private static int ReadU16(ReadOnlySpan<byte> data, int offset) =>
+        offset + 1 < data.Length ? (data[offset] << 8) | data[offset + 1] : 0;
+
+    private static int ReadU32(ReadOnlySpan<byte> data, int offset) =>
+        offset + 3 < data.Length
+            ? (data[offset] << 24) | (data[offset + 1] << 16) | (data[offset + 2] << 8) | data[offset + 3]
+            : 0;
 }

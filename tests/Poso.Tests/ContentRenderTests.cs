@@ -282,6 +282,41 @@ public class ContentRenderTests
         Assert.True(r > 200 && g < 60 && b < 60, $"the Brotli content must paint a red square (r={r} g={g} b={b})");
     }
 
+    /// <summary>
+    /// When an embedded TrueType program cannot be loaded the text must still paint through a system
+    /// fallback. pdf.js bug1200096.pdf's subset program does not load and its Skia render was blank while
+    /// PeachDrawing, which also falls back, painted it.
+    /// </summary>
+    [Fact]
+    public void TextWithBrokenEmbeddedFont_FallsBackAndPaints()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateTextWithBrokenEmbeddedFontPdf());
+        using IGraphicsContext context = Factory.CreateContext(200, 50);
+
+        using (SkiaFont face = SkiaFont.Create(new byte[] { 1, 2, 3 }, "KVIQXV+Times New Roman")!)
+        {
+            Assert.True(face.UsedFallback, "a broken program must fall back");
+            Assert.NotEqual(0, face.GetGlyphId('A'));
+            Assert.True(face.GetAdvanceWidth(face.GetGlyphId('A')) > 0f, "fallback glyph must have an advance");
+        }
+
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+
+        int ink = 0;
+        for (int i = 0; i < pixels.Length; i += 4)
+        {
+            if (pixels[i] < 200 || pixels[i + 1] < 200 || pixels[i + 2] < 200)
+            {
+                ink++;
+            }
+        }
+
+        Assert.True(ink > 50, $"the fallback face must paint the text, got {ink} dark pixels");
+    }
+
     private static byte[] ReadPixels(IImage image)
     {
         byte[] pixels = new byte[image.Width * image.Height * image.BytesPerPixel];
