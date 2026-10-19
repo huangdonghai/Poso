@@ -1142,6 +1142,21 @@ public static class PdfFixtures
             Stream(8, "/FunctionType 4 /Domain [0 1 0 1 0 1 0 1 0 1] /Range [0 1 0 1 0 1 0 1]", Encoding.ASCII.GetBytes("{ pop pop pop pop 0 0 0 }")));
     }
 
+    /// <summary>
+    /// A 100x100 page whose only content is a shading painted inside an optional-content group that the
+    /// catalog's /OCProperties /D /OFF disables. The shading must not paint at all - pdf.js
+    /// issue11144_reduced.pdf's OFF layer painted a whole-page radial wash because the sh operator ignored
+    /// the suppressed-content state (and the matching clip skip left it unclipped).
+    /// </summary>
+    public static byte[] CreateHiddenOcgShadingPdf() => Build(1,
+        new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [7 0 R] /D << /OFF [7 0 R] >> >> >>"),
+        new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+        new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Shading << /S0 5 0 R >> /Properties << /MC0 7 0 R >> >> /Contents 4 0 R >>"),
+        Stream(4, string.Empty, Encoding.ASCII.GetBytes("/OC /MC0 BDC /S0 sh EMC")),
+        new PdfObjectDefinition(5, "<< /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 100 0] /Domain [0 1] /Extend [true true] /Function 6 0 R >>"),
+        new PdfObjectDefinition(6, "<< /FunctionType 2 /C0 [0] /C1 [1] /Domain [0 1] /N 1 >>"),
+        new PdfObjectDefinition(7, "<< /Type /OCG /Name (Hidden) >>"));
+
     public static byte[] CreateFunctionShadingPdf()
     {
         string content = "q 0 0 100 100 re W n /SH1 sh Q";

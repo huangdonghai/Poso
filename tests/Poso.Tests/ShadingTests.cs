@@ -276,6 +276,27 @@ public class ShadingTests
         Assert.True(strong.R < 120 && strong.G > 150 && strong.B > 180, $"the cyan end should paint cyan, not white (got R{strong.R} G{strong.G} B{strong.B})");
     }
 
+    /// <summary>
+    /// A shading painted inside an optional-content group that /OCProperties /D /OFF disables must not draw.
+    /// Paths honoured the suppressed state but the sh operator did not, so an OFF layer's shading painted
+    /// anyway - and, because the clip was also skipped, it covered the whole page.
+    /// </summary>
+    [Fact]
+    public void ShadingInsideHiddenOptionalContent_DoesNotPaint()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateHiddenOcgShadingPdf());
+        using IGraphicsContext context = Factory.CreateContext(100, 100);
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] pixels = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(pixels);
+
+        (byte B, byte G, byte R) centre = At(pixels, image.Width, 50, 50);
+        Assert.True(centre.R > 250 && centre.G > 250 && centre.B > 250,
+            $"the hidden layer's shading must not paint (got R{centre.R} G{centre.G} B{centre.B})");
+    }
+
     public static IEnumerable<object[]> GraphicsFactories()
     {
         yield return [SkiaGraphicsFactory.Default];

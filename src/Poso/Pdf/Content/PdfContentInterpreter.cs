@@ -1217,7 +1217,14 @@ public sealed class PdfContentInterpreter
 
         if (lexer.Match(token, "sh"u8))
         {
-            PaintShadingResource(operands, resources);
+            // A hidden /OC block suppresses path painting and clipping, but the shading operator used to
+            // paint regardless - and because the clip was skipped it spilled over the whole page. pdf.js
+            // issue11144_reduced.pdf: an OFF layer's radial shading turned the page solid red.
+            if (!_suppressContent)
+            {
+                PaintShadingResource(operands, resources);
+            }
+
             operands.Clear();
             return;
         }
