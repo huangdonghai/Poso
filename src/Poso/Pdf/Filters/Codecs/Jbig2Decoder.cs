@@ -295,6 +295,41 @@ public static class Jbig2Decoder
                     break;
                 }
 
+                case CodedGenericRegion:
+                case IntermediateGenericRegion:
+                {
+                    // §7.4.3 / §7.4.4: same codeword as an immediate generic region, but the decoded bitmap
+                    // is *retained* as this segment's result and referenced by SBREFNUM from a later
+                    // refinement (types 40/42/43) instead of being composited onto the page here.
+                    if (!DecodeGenericRegionCodeword(data, bodyStart, bodyEnd, segmentRows,
+                        out byte[] regionBits, out int regW, out int regH, out _, out _, out int regCombop, out bool bitIsBlack))
+                    {
+                        return null;
+                    }
+                    if (regW <= 0 || regH <= 0)
+                    {
+                        return null;
+                    }
+                    // Reserved combination operator (5..7): the standalone bitmap is still safe to retain,
+                    // but a downstream composite would need to reject it; leave that to the caller.
+
+                    // Normalise the packed bits so 1 = black, matching what Jbig2Refinement.GetRefPixel
+                    // reads from a reference bitmap. Arithmetic already emits 1 = black; MMR emits 0 =
+                    // black (see CompositeRegion's convention), so invert for MMR.
+                    byte[] packed = regionBits;
+                    if (!bitIsBlack)
+                    {
+                        packed = new byte[regionBits.Length];
+                        for (int i = 0; i < regionBits.Length; i++)
+                        {
+                            packed[i] = (byte)~regionBits[i];
+                        }
+                    }
+                    _ = regCombop; // not composited here; retained region ignores this
+                    regionResults[segmentNumber] = (packed, regW, regH);
+                    break;
+                }
+
                 case PatternDictionary:
                 {
                     Jbig2PatternDict? pdict = Jbig2Halftone.DecodeDictionary(data, bodyStart, bodyEnd);
@@ -342,6 +377,16 @@ public static class Jbig2Decoder
                     int grTemplate = segFlags & 1;
                     bool tpgron = (segFlags & 2) != 0;
                     int offset2 = 18;
+
+                    // GRTEMPLATE 1 + TPGRON 1: PDFium (which is the sole oracle for the pdf.js corpus
+                    // files that MuPDF fallbacks on) uses a different arithmetic-context bit layout from
+                    // MuPDF/spec here (see core/fxcodec/jbig2/jbig2_grrd_proc.cpp DecodeTemplate1Unopt).
+                    // Adopting PDFium's layout is a distinct work item; until then this specific
+                    // combination degrades to null so the image is skipped rather than mis-rendered.
+                    if (grTemplate == 1 && tpgron)
+                    {
+                        return null;
+                    }
 
                     sbyte[] grat = new sbyte[4]; // default zeros
                     if (grTemplate == 0)
@@ -621,10 +666,11 @@ public static class Jbig2Decoder
 
         if (length == 0xFFFFFFFF)
         {
-            // §7.2.2/D.3: only immediate generic regions (type 38) may carry an unknown segment length.
-            // Locate the codestream terminator (MMR: 00 00, arithmetic: FF AC) then a 4-byte row count that
-            // supplies the region height (mirrors jbig2.c). Other unknown-length types cannot be bounded here.
-            if (segmentType != ImmediateGenericRegion)
+            // §7.2.2/D.3: generic-region kinds 36 (coded link-on), 37 (intermediate) and 38 (immediate)
+            // may carry an unknown segment length. Locate the codestream terminator (MMR: 00 00,
+            // arithmetic: FF AC) then a 4-byte row count that supplies the region height (mirrors
+            // jbig2.c). Other unknown-length types cannot be bounded here.
+            if (segmentType is not (CodedGenericRegion or IntermediateGenericRegion or ImmediateGenericRegion))
             {
                 return false;
             }

@@ -122,7 +122,14 @@ internal static class Jbig2Refinement
         int template, sbyte[] grat, Jbig2MqDecoder mq, byte[] stats, byte[] image,
         int w, int h, int stride, byte[]? refPacked, int refW, int refH, int dx, int dy)
     {
-        // TPGRON: per-row LTP flag; if typical, pixel value = reference pixel at (x-dx, y-dy)
+        // Port of jbig2_decode_refinement_TPGRON (jbig2dec). Per row:
+        //   LTP ^= decode(startCtx). If LTP is 0, decode every pixel with the full mkctx; if LTP is 1,
+        //   use the reference pixel directly when the 8-neighbourhood is uniform (typical), else fall
+        //   back to decoding that pixel with mkctx.
+        // The start_context slot and mkctx layout follow MuPDF's jbig2dec (spec-conformant). PDFium
+        // uses a different bit layout for template 1 (image bits in the high positions, decoded bVal
+        // in bit 6), and the two disagree for template 1 + TPGRON. Callers gate that combination to
+        // null (see Jbig2Decoder's refinement case) until we adopt PDFium's exact T1 context.
         uint startCtx = template != 0 ? 0x40u : 0x100u;
         int ltp = 0;
         for (int y = 0; y < h; y++)
@@ -133,46 +140,51 @@ internal static class Jbig2Refinement
                 return null;
             }
             ltp ^= flagBit;
-            if (ltp != 0)
+            for (int x = 0; x < w; x++)
             {
-                // Typical: copy reference pixel
-                for (int x = 0; x < w; x++)
+                int bit;
+                int iv = ltp != 0 ? ImplicitValue(refPacked, refW, refH, x - dx, y - dy) : -1;
+                if (iv >= 0)
                 {
-                    int iv = GetRefPixel(refPacked, refW, refH, x - dx, y - dy);
-                    if (iv != 0)
-                    {
-                        image[y * stride + (x >> 3)] |= (byte)(1 << (7 - (x & 7)));
-                    }
-                    else
-                    {
-                        image[y * stride + (x >> 3)] &= (byte)~(1 << (7 - (x & 7)));
-                    }
+                    bit = iv;
                 }
-            }
-            else
-            {
-                // Not typical: decode pixel by pixel with context builder
-                for (int x = 0; x < w; x++)
+                else
                 {
                     uint ctx = BuildTpgronContext(template, grat, image, w, h, stride, refPacked, refW, refH, x, y, dx, dy);
-                    int bit = mq.Decode(ref stats[ctx]);
+                    bit = mq.Decode(ref stats[ctx]);
                     if (bit < 0)
                     {
                         return null;
                     }
-                    // Also encode the implicit value context for this pixel
-                    int iv = GetRefPixel(refPacked, refW, refH, x - dx, y - dy);
-                    int implicitCtx = (template != 0 ? 0x40 : 0x100) + (iv << 1) + (iv != bit ? 0 : 1);
-                    // Actually per jbig2dec: if implicit != decoded, re-encode with implicit context
-                    // For simplicity: just use the decoded bit directly
-                    if (bit != 0)
-                    {
-                        image[y * stride + (x >> 3)] |= (byte)(1 << (7 - (x & 7)));
-                    }
+                }
+                int byteIdx = y * stride + (x >> 3);
+                int mask = 1 << (7 - (x & 7));
+                if (bit != 0)
+                {
+                    image[byteIdx] = (byte)(image[byteIdx] | mask);
+                }
+                else
+                {
+                    image[byteIdx] = (byte)(image[byteIdx] & ~mask);
                 }
             }
         }
         return image;
+    }
+
+    private static int ImplicitValue(byte[]? refPacked, int refW, int refH, int i, int j)
+    {
+        // MuPDF jbig2dec's implicit_value(): returns ref[i,j] iff all 8 neighbours of (i,j) match, else -1.
+        int m = GetRefPixel(refPacked, refW, refH, i, j);
+        if (GetRefPixel(refPacked, refW, refH, i - 1, j - 1) != m) return -1;
+        if (GetRefPixel(refPacked, refW, refH, i,     j - 1) != m) return -1;
+        if (GetRefPixel(refPacked, refW, refH, i + 1, j - 1) != m) return -1;
+        if (GetRefPixel(refPacked, refW, refH, i - 1, j)     != m) return -1;
+        if (GetRefPixel(refPacked, refW, refH, i + 1, j)     != m) return -1;
+        if (GetRefPixel(refPacked, refW, refH, i - 1, j + 1) != m) return -1;
+        if (GetRefPixel(refPacked, refW, refH, i,     j + 1) != m) return -1;
+        if (GetRefPixel(refPacked, refW, refH, i + 1, j + 1) != m) return -1;
+        return m;
     }
 
     private static uint BuildTpgronContext(int template, sbyte[] grat, byte[] image, int w, int h, int stride,

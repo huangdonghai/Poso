@@ -50,12 +50,15 @@ public class Jbig2VectorTests
         // Vectors for which MuPDF (the oracle) cannot produce a trustworthy render: its bundled jbig2dec
         // fails on coded/intermediate generic regions (segment type 36/37), chained refinements and some
         // Huffman+refine streams, falling back to an all-black Pixmap. Matching that artifact would verify
-        // nothing, so these are excluded from pixel comparison and instead required to degrade to null.
-        // Regenerate with _scratch/jbig2_oracle_validity.py.
+        // nothing. For each such vector we instead accept a PDFium-rendered oracle under PdfiumExp/ when
+        // present; only if that too is missing does the decoder have to degrade to null.
+        // Regenerate MuPDF-validity list with _scratch/jbig2_oracle_validity.py; regenerate PDFium
+        // oracles with _scratch/corpus_cmp/dump_pdfium_exp.py.
         var unverified = new HashSet<string>(
             File.Exists(Path.Combine(dir, "Unverified.txt"))
                 ? File.ReadAllLines(Path.Combine(dir, "Unverified.txt")).Select(l => l.Trim()).Where(l => l.Length > 0)
                 : Array.Empty<string>());
+        string pdfiumDir = Path.Combine(dir, "PdfiumExp");
 
         int decoded = 0;
         var failures = new List<string>();
@@ -65,15 +68,18 @@ public class Jbig2VectorTests
         {
             string stem = Path.GetFileNameWithoutExtension(streamPath);
             string expPath = Path.Combine(dir, stem + ".exp");
+            string pdfiumExpPath = Path.Combine(pdfiumDir, stem + ".exp");
+            bool usePdfium = unverified.Contains(stem) && File.Exists(pdfiumExpPath);
+            if (usePdfium) expPath = pdfiumExpPath;
             byte[] stream = File.ReadAllBytes(streamPath);
 
-            if (unverified.Contains(stem))
+            if (unverified.Contains(stem) && !usePdfium)
             {
-                // No valid oracle: the safe contract is graceful degradation, never a mis-render.
+                // No valid oracle anywhere: the safe contract is graceful degradation, never a mis-render.
                 Jbig2Page? degraded = Jbig2Decoder.Decode(stream);
                 if (degraded is not null)
                 {
-                    failures.Add($"{stem}: has no trustworthy MuPDF oracle but decoder returned a page (must degrade to null)");
+                    failures.Add($"{stem}: has no trustworthy oracle but decoder returned a page (must degrade to null)");
                 }
                 continue;
             }

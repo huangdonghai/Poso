@@ -24,6 +24,7 @@
     <Content Include="Samples\Jbig2\*.jbig2" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Samples\Jbig2\*.exp" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Samples\Jbig2\Unverified.txt" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Samples\Jbig2\PdfiumExp\*.exp" CopyToOutputDirectory="PreserveNewest" LinkBase="Samples\Jbig2\PdfiumExp" />
     <Content Include="Samples\Jpeg\*.jpg" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Samples\Jpeg\*.cmyk" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Samples\Jpx\*.jp2" CopyToOutputDirectory="PreserveNewest" />
