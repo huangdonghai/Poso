@@ -78,6 +78,17 @@ public static class Predictors
     private static byte[] ApplyPng(byte[] data, int rowLength, int bpp)
     {
         int stride = rowLength + 1;
+
+        // A real PNG-predicted stream is always a whole number of (filter byte + row) units. When the
+        // length is exactly a whole number of raw rows instead, the producer declared /Predictor but wrote
+        // the samples straight - pdf.js issue4246.pdf's Indexed image and its stencil mask are both exactly
+        // raw. Applying the predictor there read the first sample of each row as a filter type and threw
+        // every row out of phase, so the image decoded to nothing.
+        if (rowLength > 0 && data.Length >= rowLength && data.Length % rowLength == 0 && data.Length % stride != 0)
+        {
+            return data;
+        }
+
         if (data.Length < stride)
         {
             return data;

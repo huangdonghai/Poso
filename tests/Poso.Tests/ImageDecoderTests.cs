@@ -14,6 +14,31 @@ public class ImageDecoderTests
     private static readonly IGraphicsFactory Factory = SkiaGraphicsFactory.Default;
 
     /// <summary>
+    /// A stencil mask finer than the image must keep its own resolution: an 8x8 mask over a 2x2 image still
+    /// halves the painted square. Reading the mask at the image's grid - the old behaviour - lost the split
+    /// and made pdf.js issue4246.pdf's picture vanish or cover its whole block.
+    /// </summary>
+    [Fact]
+    public void FineStencilMask_KeepsItsResolution()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateFineStencilMaskPdf());
+        using IGraphicsContext context = Factory.CreateContext(100, 100);
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        var px = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(px);
+        int left = ((50 * image.Width) + 25) * 4;
+        int right = ((50 * image.Width) + 75) * 4;
+
+        (byte lb, byte lg, byte lr) = (px[left], px[left + 1], px[left + 2]);
+        Assert.True(lr > 200 && lg < 60 && lb < 60, $"the set half of the mask must show the red image (r={lr} g={lg} b={lb})");
+
+        (byte rb, byte rg, byte rr) = (px[right], px[right + 1], px[right + 2]);
+        Assert.True(rr > 240 && rg > 240 && rb > 240, $"the clear half must stay white (r={rr} g={rg} b={rb})");
+    }
+
+    /// <summary>
     /// An Indexed palette whose base is /Lab stores L*, a*, b* per entry, not RGB. Reading the three
     /// bytes as RGB turned pdf.js issue10339_reduced.pdf's blue Lab gradient brown; converting through
     /// Cielab keeps the colour.

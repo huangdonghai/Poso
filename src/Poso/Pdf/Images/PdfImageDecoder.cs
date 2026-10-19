@@ -209,19 +209,36 @@ public static class PdfImageDecoder
 
         // Hard mask (stencil stream) or color-key mask (array)
         byte[]? stencil = null;
+        byte[]? fineStencil = null;
+        int fineStencilWidth = 0, fineStencilHeight = 0;
         float[]? colorKeyMin = null;
         float[]? colorKeyMax = null;
 
         switch (document.Resolve(dictionary.Get("Mask")))
         {
-            case PdfStream maskStream when maskStream.Dictionary.GetNameValue("Subtype") != "Image" &&
-                                              maskStream.Dictionary.GetBooleanValue("ImageMask") != true:
-                // A stream mask is an image mask; handled below via stencil decoding
-                stencil = DecodeStencil(document, factory, maskStream, maskStream.Dictionary, width, height, diagnostics);
-                break;
-
             case PdfStream maskStream:
-                stencil = DecodeStencil(document, factory, maskStream, maskStream.Dictionary, width, height, diagnostics);
+                if (maskStream.Dictionary.GetNameValue("Subtype") != "Image" &&
+                    maskStream.Dictionary.GetBooleanValue("ImageMask") != true)
+                {
+                    break; // not an image mask
+                }
+
+                int maskWidth = (int)(maskStream.Dictionary.GetIntegerValue("Width") ?? width);
+                int maskHeight = (int)(maskStream.Dictionary.GetIntegerValue("Height") ?? height);
+                if (maskWidth > 0 && maskHeight > 0 && (maskWidth > width || maskHeight > height))
+                {
+                    // A mask finer than the image keeps its own resolution: upscale the raster to it and
+                    // apply the stencil 1:1 (both references do). Collapsing pdf.js issue4246.pdf's
+                    // 1000x800 stencil onto its 50x40 image first loses the mask's shape entirely.
+                    fineStencil = DecodeStencil(document, factory, maskStream, maskStream.Dictionary, maskWidth, maskHeight, diagnostics);
+                    fineStencilWidth = maskWidth;
+                    fineStencilHeight = maskHeight;
+                }
+                else
+                {
+                    stencil = MaskCoverage(document, factory, maskStream, width, height, diagnostics);
+                }
+
                 break;
 
             case PdfArray maskArray when maskArray.Count >= 2:
@@ -321,9 +338,11 @@ public static class PdfImageDecoder
                 if (stencil is not null)
                 {
                     int stencilIndex = (y * width) + x;
-                    if (stencilIndex < stencil.Length && stencil[stencilIndex] == 0)
+                    if (stencilIndex < stencil.Length)
                     {
-                        alphaByte = 0;
+                        // The mask may have been scaled onto this grid, so it carries partial coverage
+                        // rather than only 0/255.
+                        alphaByte = (byte)((alphaByte * stencil[stencilIndex] + 127) / 255);
                     }
                 }
 
@@ -342,6 +361,29 @@ public static class PdfImageDecoder
                 output[offset + 2] = Premultiply(r, alphaByte);
                 output[offset + 3] = alphaByte;
             }
+        }
+
+        if (fineStencil is not null)
+        {
+            // Nearest-upscale the premultiplied raster to the mask grid and fold the stencil in 1:1.
+            var merged = new byte[fineStencilWidth * fineStencilHeight * 4];
+            for (int y = 0; y < fineStencilHeight; y++)
+            {
+                int sy = Math.Min((int)((long)y * height / fineStencilHeight), height - 1);
+                for (int x = 0; x < fineStencilWidth; x++)
+                {
+                    int sx = Math.Min((int)((long)x * width / fineStencilWidth), width - 1);
+                    int src = ((sy * width) + sx) * 4;
+                    byte coverage = fineStencil[(y * fineStencilWidth) + x];
+                    int dst = ((y * fineStencilWidth) + x) * 4;
+                    merged[dst] = Premultiply(output[src], coverage);
+                    merged[dst + 1] = Premultiply(output[src + 1], coverage);
+                    merged[dst + 2] = Premultiply(output[src + 2], coverage);
+                    merged[dst + 3] = Premultiply(output[src + 3], coverage);
+                }
+            }
+
+            return factory.CreateImage(fineStencilWidth, fineStencilHeight, PixelFormat.Bgra8888Premul, merged);
         }
 
         return factory.CreateImage(width, height, PixelFormat.Bgra8888Premul, output);
@@ -883,7 +925,7 @@ public static class PdfImageDecoder
         raster.CopyPixels(pixels);
         for (int p = 0, i = 0; i < pixels.Length; i += 4, p++)
         {
-            byte coverage = stencil is not null && stencil[p] == 0 ? (byte)0 : (byte)255;
+            byte coverage = stencil is not null ? stencil[p] : (byte)255;
             if (alpha is not null)
             {
                 coverage = (byte)((coverage * alpha[p] + 127) / 255);
@@ -945,14 +987,33 @@ public static class PdfImageDecoder
             return coverage;
         }
 
+        // A mask of a different size is mapped onto the same unit square; a box average keeps the covered
+        // fraction right. Nearest sampling aliases badly when the mask is much larger than the image: pdf.js
+        // issue4246.pdf's 1000x800 stencil over 50x40 pixels hit 30% of the set bits where the true average
+        // is 15%.
         var scaled = new byte[width * height];
         for (int y = 0; y < height; y++)
         {
-            int sourceY = (int)Math.Min((long)y * maskHeight / height, maskHeight - 1);
+            int sourceY0 = (int)((long)y * maskHeight / height);
+            int sourceY1 = Math.Max(sourceY0 + 1, (int)((long)(y + 1) * maskHeight / height));
+            sourceY1 = Math.Min(sourceY1, maskHeight);
             for (int x = 0; x < width; x++)
             {
-                int sourceX = (int)Math.Min((long)x * maskWidth / width, maskWidth - 1);
-                scaled[(y * width) + x] = coverage[(sourceY * maskWidth) + sourceX];
+                int sourceX0 = (int)((long)x * maskWidth / width);
+                int sourceX1 = Math.Max(sourceX0 + 1, (int)((long)(x + 1) * maskWidth / width));
+                sourceX1 = Math.Min(sourceX1, maskWidth);
+                int sum = 0, count = 0;
+                for (int sy = sourceY0; sy < sourceY1; sy++)
+                {
+                    int row = sy * maskWidth;
+                    for (int sx = sourceX0; sx < sourceX1; sx++)
+                    {
+                        sum += coverage[row + sx];
+                        count++;
+                    }
+                }
+
+                scaled[(y * width) + x] = count > 0 ? (byte)((sum + (count / 2)) / count) : (byte)0;
             }
         }
 
@@ -1053,6 +1114,7 @@ public static class PdfImageDecoder
         byte[] data = stream.Decode(diagnostics);
         int bitsPerComponent = Math.Max(1, (int)(dictionary.GetIntegerValue("BitsPerComponent") ?? 1));
         int rowBytes = (width * bitsPerComponent + 7) / 8;
+        int maxSample = (1 << bitsPerComponent) - 1;
         var stencil = new byte[width * height];
 
         for (int y = 0; y < height; y++)
@@ -1060,8 +1122,10 @@ public static class PdfImageDecoder
             int bitOffset = 0;
             for (int x = 0; x < width; x++)
             {
+                // A set sample paints. MuPDF and PDFium both ignore an ImageMask's /Decode [1 0] here -
+                // pdf.js issue4246.pdf's stencil declares it and both references still paint its set bits.
                 int sample = ReadBits(data, y * rowBytes, ref bitOffset, bitsPerComponent);
-                stencil[(y * width) + x] = (byte)Math.Clamp((int)MathF.Round((float)sample / ((1 << bitsPerComponent) - 1) * 255f), 0, 255);
+                stencil[(y * width) + x] = (byte)Math.Clamp((int)MathF.Round((float)sample / maxSample * 255f), 0, 255);
             }
         }
 

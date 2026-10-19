@@ -1880,10 +1880,29 @@ public static class PdfFixtures
         new PdfObjectDefinition(6, "<< /ca .5 /CA .5 >>"));
 
     /// <summary>
-    /// A 100x100 page filled by a tiling pattern whose cell shows one ZapfDingbats glyph through
-    /// /Differences [1 /a109] - a109 is the spade U+2660. The glyph name must resolve through the Adobe
-    /// Glyph List and the family must map the Dingbats block, or nothing paints (pdf.js issue15716.pdf).
+    /// A 100x100 page drawing a 2x2 red image under an 8x8 stencil mask whose left half is set. The mask is
+    /// finer than the image, so it must keep its own resolution - the left half of the painted square is red
+    /// and the right half stays white. Reading it at the image's 2x2 grid lost that split entirely (pdf.js
+    /// issue4246.pdf: a 1000x800 stencil over a 50x40 image).
     /// </summary>
+    public static byte[] CreateFineStencilMaskPdf()
+    {
+        byte[] image = new byte[2 * 2 * 3];
+        for (int i = 0; i < 4; i++)
+        {
+            image[i * 3] = 255; // red
+        }
+
+        byte[] mask = Enumerable.Repeat((byte)0xF0, 8).ToArray(); // left four columns set
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /XObject << /Im1 5 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes("q 100 0 0 100 0 0 cm /Im1 Do Q")),
+            Stream(5, "/Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Mask 6 0 R", image),
+            Stream(6, "/Type /XObject /Subtype /Image /Width 8 /Height 8 /ImageMask true /BitsPerComponent 1", mask));
+    }
+
     /// <summary>
     /// A 200x50 page drawing "ABC" with a TrueType font whose embedded /FontFile2 is garbage. The back end
     /// must fall back to a system face and still paint the text (pdf.js bug1200096.pdf's subset program does
@@ -1903,6 +1922,11 @@ public static class PdfFixtures
             Stream(8, string.Empty, Encoding.ASCII.GetBytes("BT 10 20 TD /F1 20 Tf (ABC) Tj ET")));
     }
 
+    /// <summary>
+    /// A 100x100 page filled by a tiling pattern whose cell shows one ZapfDingbats glyph through
+    /// /Differences [1 /a109] - a109 is the spade U+2660. The glyph name must resolve through the Adobe
+    /// Glyph List and the family must map the Dingbats block, or nothing paints (pdf.js issue15716.pdf).
+    /// </summary>
     public static byte[] CreateTilingDingbatPdf()
     {
         byte[] cell = Encoding.ASCII.GetBytes("BT /F1 40 Tf 10 20 Td (\u0001) Tj ET");
