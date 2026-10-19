@@ -252,6 +252,30 @@ public class ShadingTests
         Assert.True(GrayAt(pixels, image.Width, 80, 150) > 240, "below the window should stay white");
     }
 
+    /// <summary>
+    /// A DeviceN shading whose tint transform takes more colourants than the base space (five in, CMYK out)
+    /// must feed the tint every colourant - the intermediate colour buffer cannot be capped to the base's
+    /// four slots or the tint reads short, its stack underflows, and the whole wash paints white. This is
+    /// pdf.js postscript_type4_many_outputs.pdf: a cyan-to-white axial ramp that came out entirely white.
+    /// </summary>
+    [Fact]
+    public void DeviceNShading_MoreColorantsThanBase_PaintsTheTint()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateDeviceN5ShadingPdf());
+        using IGraphicsContext context = Factory.CreateContext(100, 100);
+        var features = new List<PdfUnsupportedFeature>();
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White), features.Add);
+
+        Assert.DoesNotContain(features, f => f.Kind == PdfUnsupportedKind.Shading);
+
+        using IImage image = context.Snapshot();
+        byte[] pixels = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(pixels);
+
+        (byte B, byte G, byte R) strong = At(pixels, image.Width, 50, 90); // cyan-heavy end
+        Assert.True(strong.R < 120 && strong.G > 150 && strong.B > 180, $"the cyan end should paint cyan, not white (got R{strong.R} G{strong.G} B{strong.B})");
+    }
+
     public static IEnumerable<object[]> GraphicsFactories()
     {
         yield return [SkiaGraphicsFactory.Default];

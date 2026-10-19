@@ -237,8 +237,10 @@ public sealed class PdfShading
         // stitching function that omits /Range reports one output while its sub-functions emit four, and
         // taking that report at face value truncates a CMYK wash to its first component. Evaluating into
         // a span wider than the function's outputs makes the evaluator read the leftovers still on its
-        // stack as extra components instead.
-        Span<float> color = stackalloc float[Math.Clamp(ColorSlotCount(), 1, 4)];
+        // stack as extra components instead. A DeviceN shading feeds the tint transform one input per
+        // colourant - which can be more than the four a CMYK base needs - so the ceiling is the colourant
+        // count, not four; clipping it to four starves a nine-colourant tint and paints the shading white.
+        Span<float> color = stackalloc float[Math.Clamp(ColorSlotCount(), 1, 32)];
 
         if (Type == 1)
         {

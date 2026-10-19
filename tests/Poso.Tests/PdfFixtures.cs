@@ -1119,6 +1119,29 @@ public static class PdfFixtures
     /// proves both the matrix mapping and the two-input function call; the corpus file that uses nine of
     /// these paints every one of them white.
     /// </summary>
+    /// <summary>
+    /// A 100x100 page painted with an axial shading in a five-colourant <c>DeviceN</c> space. Its PostScript
+    /// function turns the single parameter into five colourant values, and the tint transform maps those to
+    /// DeviceCMYK (cyan = the first colourant, rest zero). Because the tint takes five inputs - more than the
+    /// four a CMYK base emits - a shading pipeline that sizes the intermediate colour to four starves the
+    /// tint and paints the whole wash white (pdf.js postscript_type4_many_outputs.pdf). Must paint cyan.
+    /// </summary>
+    public static byte[] CreateDeviceN5ShadingPdf()
+    {
+        string content = "q 0 0 100 100 re W n /SH1 sh Q";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Shading << /SH1 5 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            new PdfObjectDefinition(5, "<< /ShadingType 2 /ColorSpace 6 0 R /Coords [0 0 100 0] /Domain [0 1] /Function 7 0 R /Extend [true true] >>"),
+            new PdfObjectDefinition(6, "[/DeviceN [/c0 /c1 /c2 /c3 /c4] /DeviceCMYK 8 0 R]"),
+            // axial colour function: 1 input t -> five duplicated colourants.
+            Stream(7, "/FunctionType 4 /Domain [0 1] /Range [0 1 0 1 0 1 0 1 0 1]", Encoding.ASCII.GetBytes("{ dup dup dup dup }")),
+            // tint transform: drop the four trailing colourants, keep the first as cyan, zero the rest.
+            Stream(8, "/FunctionType 4 /Domain [0 1 0 1 0 1 0 1 0 1] /Range [0 1 0 1 0 1 0 1]", Encoding.ASCII.GetBytes("{ pop pop pop pop 0 0 0 }")));
+    }
+
     public static byte[] CreateFunctionShadingPdf()
     {
         string content = "q 0 0 100 100 re W n /SH1 sh Q";
