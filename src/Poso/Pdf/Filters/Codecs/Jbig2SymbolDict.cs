@@ -263,7 +263,6 @@ internal static class Jbig2SymbolDict
         int ej = 0; // index into exported
         bool exFlag = false;
         int emptyRuns = 0;
-
         while (ei < totalSyms && ej < sdNumExSyms)
         {
             code = iaex.Decode(mq, out int exRunLength);
@@ -538,7 +537,9 @@ internal static class Jbig2SymbolDict
         }
         if (ej < sdNumExSyms)
         {
-            return null; // under-exported versus declared count: decode shortfall, degrade
+            // Same clamp as the arithmetic path: PDFium tolerates under-export by truncating SDNUMEXSYMS
+            // to the actual count so downstream text regions see a shorter dictionary rather than failing.
+            System.Array.Resize(ref exported, ej);
         }
         return exported;
     }
