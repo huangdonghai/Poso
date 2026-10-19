@@ -33,6 +33,28 @@ public class OptionalContentTests
         Assert.True(blue, "shown Blue layer should render");
     }
 
+    /// <summary>
+    /// A form XObject's own /OC (an OCMD here) that resolves to an off OCG must keep the form from
+    /// painting. Ignoring the XObject-level /OC buried pdf.js issue12007_reduced.pdf under the two image
+    /// forms whose layers its /OCProperties turns off.
+    /// </summary>
+    [Fact]
+    public void FormWithHiddenOptionalContent_DoesNotPaint()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateFormWithHiddenOptionalContentPdf());
+        using IGraphicsContext context = Factory.CreateContext(100, 100);
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] px = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(px);
+        int offset = ((50 * image.Width) + 50) * image.BytesPerPixel;
+        (byte b, byte g, byte r) = (px[offset], px[offset + 1], px[offset + 2]);
+
+        Assert.True(r > 250 && g > 250 && b > 250,
+            $"the form in an off optional-content group must not paint (got r={r} g={g} b={b})");
+    }
+
     // Renders and reports whether the Red (user ~40,40) and Blue (user ~150,40) samples are painted.
     private static (bool Red, bool Blue) Render(byte[] pdf, System.Action<PdfDocument>? toggle)
     {

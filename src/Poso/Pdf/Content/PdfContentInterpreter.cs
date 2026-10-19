@@ -1725,6 +1725,79 @@ public sealed class PdfContentInterpreter
         return false;
     }
 
+    /// <summary>
+    /// A form XObject may carry its own /OC (an OCG or an OCMD membership dictionary). When that optional
+    /// content is off the form must not draw at all - pdf.js issue12007_reduced.pdf keeps its two big image
+    /// forms under OCGs that its /OCProperties turns off, and drawing them buried the page.
+    /// </summary>
+    private bool FormOptionalContentVisible(PdfDictionary form)
+    {
+        PdfObject? oc = form.Get("OC");
+        return oc is null || OptionalContentVisible(oc);
+    }
+
+    private bool OptionalContentVisible(PdfObject oc)
+    {
+        if (_document.Resolve(oc) is PdfDictionary dictionary && dictionary.GetNameValue("Type") == "OCMD")
+        {
+            var groups = new List<int>();
+            CollectOcgNumbers(dictionary.Get("OCGs"), groups);
+            if (groups.Count == 0)
+            {
+                return true;
+            }
+
+            bool anyOn = false, allOn = true, anyOff = false, allOff = true;
+            foreach (int number in groups)
+            {
+                bool visible = _document.IsOptionalContentGroupVisible(number);
+                anyOn |= visible;
+                allOn &= visible;
+                anyOff |= !visible;
+                allOff &= !visible;
+            }
+
+            return (dictionary.GetNameValue("P") ?? "AnyOn") switch
+            {
+                "AllOn" => allOn,
+                "AnyOff" => anyOff,
+                "AllOff" => allOff,
+                _ => anyOn,
+            };
+        }
+
+        return oc is PdfIndirectRef reference && _document.IsOptionalContentGroupVisible(reference.ObjectNumber);
+    }
+
+    private void CollectOcgNumbers(PdfObject? value, List<int> into)
+    {
+        switch (value)
+        {
+            case PdfIndirectRef reference:
+                if (_document.Resolve(reference) is PdfArray array)
+                {
+                    foreach (PdfObject item in array)
+                    {
+                        CollectOcgNumbers(item, into);
+                    }
+                }
+                else
+                {
+                    into.Add(reference.ObjectNumber);
+                }
+
+                break;
+
+            case PdfArray arrayValue:
+                foreach (PdfObject item in arrayValue)
+                {
+                    CollectOcgNumbers(item, into);
+                }
+
+                break;
+        }
+    }
+
     private int? ResolveOptionalContentObject(PdfObject operand, PdfDictionary? resources)
     {
         PdfObject? value = operand;
@@ -2459,6 +2532,11 @@ public sealed class PdfContentInterpreter
         if (_suppressContent)
         {
             return;
+        }
+
+        if (!FormOptionalContentVisible(form.Dictionary))
+        {
+            return; // the form's own /OC is off
         }
 
         if (!_sharedForms.Enter(form))

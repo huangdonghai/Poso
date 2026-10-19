@@ -1851,6 +1851,21 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// A 100x100 page that draws one form which paints the page red. The form carries its own /OC - an OCMD
+    /// whose single OCG is switched off by /OCProperties /D /OFF - so the form must not paint at all. An
+    /// XObject-level /OC that is ignored buries the page under the form's content: pdf.js
+    /// issue12007_reduced.pdf painted two large image forms that way (76% ink against a blank reference).
+    /// </summary>
+    public static byte[] CreateFormWithHiddenOptionalContentPdf() => Build(1,
+        new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [8 0 R] /D << /OFF [8 0 R] >> >> >>"),
+        new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+        new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /XObject << /Fm1 5 0 R >> >> /Contents 4 0 R >>"),
+        Stream(4, string.Empty, Encoding.ASCII.GetBytes("q /Fm1 Do Q")),
+        Stream(5, "/Type /XObject /Subtype /Form /BBox [0 0 100 100] /OC 7 0 R", Encoding.ASCII.GetBytes("1 0 0 rg 0 0 100 100 re f")),
+        new PdfObjectDefinition(7, "<< /Type /OCMD /OCGs [8 0 R] >>"),
+        new PdfObjectDefinition(8, "<< /Type /OCG /Name (Hidden) >>"));
+
+    /// <summary>
     /// A tiling pattern whose /XStep and /YStep (500) are far larger than the 20x20 cell - pdf.js
     /// tiling-pattern-large-steps.pdf. The cell then paints once at each lattice point with a big gap
     /// between; sizing the raster tile by the step (as the old code did, clamped to a cap) drew nothing.
