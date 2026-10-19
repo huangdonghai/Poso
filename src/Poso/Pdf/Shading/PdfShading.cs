@@ -91,9 +91,20 @@ public sealed class PdfShading
 
         ShadingSpace colorSpace = ResolveColorSpace(document, dictionary.Get("ColorSpace"));
         PdfFunction? function = PdfFunction.Create(document, dictionary.Get("Function"));
+        if (function is null && type is 4 or 5 or 6 or 7)
+        {
+            // Real-world mesh shadings sometimes omit /Function, relying on the sampled components
+            // (mapped through /Decode) as direct colourspace operands. PDFium and MuPDF both render
+            // that as an identity mapping, so synthesise one rather than dropping the whole shading.
+            int decodeCount = dictionary.GetArray("Decode")?.Count ?? 0;
+            int components = decodeCount >= 6
+                ? (decodeCount - 4) / 2
+                : colorSpace.Base switch { ShadingColorSpace.Cmyk => 4, ShadingColorSpace.Rgb => 3, _ => 1 };
+            function = IdentityFunction.Create(components);
+        }
         if (function is null)
         {
-            return null; // every shading type (including mesh) needs a function to map colour
+            return null; // function/axial/radial shadings cannot map colour without a function
         }
 
         if (type is 4 or 6 or 7)

@@ -1597,7 +1597,17 @@ public static class PdfFixtures
     /// edge black and the right edge white - which pins down both the stream's boundary-then-interior point
     /// order and which corners the four colours belong to.
     /// </summary>
-    public static byte[] CreateType7PatchPdf()
+    public static byte[] CreateType7PatchPdf() => CreateType7PatchPdfCore(withFunction: true);
+
+    /// <summary>
+    /// The same Type 7 patch as <see cref="CreateType7PatchPdf"/> but with the <c>/Function</c> entry omitted.
+    /// Real-world mesh shadings (personwithdog.pdf and others in the pdf.js suite) are written this way,
+    /// relying on the sampled components as direct colourspace operands; the rendering must match the
+    /// version that spells out the (identity) function explicitly.
+    /// </summary>
+    public static byte[] CreateType7PatchNoFunctionPdf() => CreateType7PatchPdfCore(withFunction: false);
+
+    private static byte[] CreateType7PatchPdfCore(bool withFunction)
     {
         var bits = new List<int>();
         void Put(int value, int count)
@@ -1647,14 +1657,21 @@ public static class PdfFixtures
             }
         }
 
-        string shading = "/ShadingType 7 /ColorSpace /DeviceGray /BitsPerCoordinate 8 /BitsPerComponent 8 /BitsPerFlag 8 /Decode [0 100 0 100 0 1] /Function 6 0 R";
-        return Build(1,
-            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
-            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
-            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Shading << /S0 5 0 R >> >> /Contents 4 0 R >>"),
-            Stream(4, string.Empty, Encoding.ASCII.GetBytes("q 0 0 100 100 re W n /S0 sh Q")),
-            Stream(5, shading, data),
-            new PdfObjectDefinition(6, "<< /FunctionType 2 /C0 [0] /C1 [1] /Domain [0 1] /N 1 >>"));
+        string shading = "/ShadingType 7 /ColorSpace /DeviceGray /BitsPerCoordinate 8 /BitsPerComponent 8 /BitsPerFlag 8 /Decode [0 100 0 100 0 1]" + (withFunction ? " /Function 6 0 R" : string.Empty);
+        return withFunction
+            ? Build(1,
+                new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+                new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+                new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Shading << /S0 5 0 R >> >> /Contents 4 0 R >>"),
+                Stream(4, string.Empty, Encoding.ASCII.GetBytes("q 0 0 100 100 re W n /S0 sh Q")),
+                Stream(5, shading, data),
+                new PdfObjectDefinition(6, "<< /FunctionType 2 /C0 [0] /C1 [1] /Domain [0 1] /N 1 >>"))
+            : Build(1,
+                new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+                new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+                new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Shading << /S0 5 0 R >> >> /Contents 4 0 R >>"),
+                Stream(4, string.Empty, Encoding.ASCII.GetBytes("q 0 0 100 100 re W n /S0 sh Q")),
+                Stream(5, shading, data));
     }
 
     /// <summary>

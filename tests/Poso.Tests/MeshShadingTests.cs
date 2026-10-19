@@ -50,6 +50,36 @@ public class MeshShadingTests
         Assert.True(r is > 100 and < 160, $"nor at the other end of y (got {r},{g},{b})");
     }
 
+    /// <summary>
+    /// A mesh shading that omits <c>/Function</c> must still paint, mapping each sampled component
+    /// straight through as the colourspace operand (the identity PDFium and MuPDF both apply). Dropping
+    /// the shading instead left whole pages of the pdf.js suite blank; the ramp here must match
+    /// <see cref="Type7Patch_InterpolatesItsCornerColoursAcrossTheSurface"/>, whose function is already identity.
+    /// </summary>
+    [Fact]
+    public void Type7Patch_WithoutFunction_RendersAsIdentity()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateType7PatchNoFunctionPdf());
+        using IGraphicsContext context = Factory.CreateContext(100, 100);
+        var features = new List<PdfUnsupportedFeature>();
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White), features.Add);
+
+        Assert.DoesNotContain(features, f => f.Kind == PdfUnsupportedKind.Shading);
+
+        using IImage image = context.Snapshot();
+        byte[] px = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(px);
+
+        (byte r, byte g, byte b) = Luma(px, image.Width, userX: 5, userY: 50);
+        Assert.True(r < 40 && g < 40 && b < 40, $"the black corner should hold to its edge (got {r},{g},{b})");
+
+        (r, g, b) = Luma(px, image.Width, 95, 50);
+        Assert.True(r > 200 && g > 200 && b > 200, $"the white corner should hold to its edge (got {r},{g},{b})");
+
+        (r, g, b) = Luma(px, image.Width, 50, 50);
+        Assert.True(r is > 100 and < 160 && Math.Abs(r - g) < 6 && Math.Abs(g - b) < 6, $"mid-ramp grey (~126), got {r},{g},{b}");
+    }
+
     private static (byte R, byte G, byte B) Luma(byte[] px, int width, int userX, int userY)
     {
         int deviceRow = 100 - userY;

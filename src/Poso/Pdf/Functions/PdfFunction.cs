@@ -420,3 +420,37 @@ internal sealed class SampledFunction : PdfFunction
         return value;
     }
 }
+
+/// <summary>
+/// A pass-through function (identity) used in place of a missing <c>/Function</c>. Some real-world
+/// mesh shadings omit <c>/Function</c> and rely on the sampled components (already mapped through
+/// <c>/Decode</c>) as direct colourspace operands; PDFium and MuPDF both treat that as identity.
+/// One component per colour input, each with a [0,1] domain and range so <see cref="PdfFunction.Evaluate"/>
+/// clamps to the same bounds the sampled values already sit in.
+/// </summary>
+internal sealed class IdentityFunction : PdfFunction
+{
+    private IdentityFunction(float[] domain, float[] range)
+        : base(domain, range)
+    {
+    }
+
+    public static PdfFunction Create(int components)
+    {
+        components = Math.Max(1, components);
+        var bounds = new float[2 * components];
+        for (int i = 0; i < bounds.Length; i += 2)
+        {
+            bounds[i] = 0f;
+            bounds[i + 1] = 1f;
+        }
+
+        return new IdentityFunction((float[])bounds.Clone(), bounds);
+    }
+
+    public override void EvaluateCore(ReadOnlySpan<float> input, Span<float> output)
+    {
+        int n = Math.Min(input.Length, output.Length);
+        input[..n].CopyTo(output[..n]);
+    }
+}
