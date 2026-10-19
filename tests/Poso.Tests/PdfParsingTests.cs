@@ -1,11 +1,30 @@
 using System.Text;
 using Poso.Pdf;
+using Poso.Pdf.Parsing;
 using Xunit;
 
 namespace Poso.Tests;
 
 public class PdfParsingTests
 {
+    /// <summary>
+    /// A stray ')' has no token case of its own, and the default branch's scan stops immediately on any
+    /// delimiter - so the old lexer returned a zero-length keyword without advancing. Every token loop then
+    /// spun forever; pdf.js issue8061.pdf's binary ToUnicode stream contains ')', and the render hung.
+    /// </summary>
+    [Fact]
+    public void NextToken_StrayCloseParen_AlwaysAdvances()
+    {
+        var lexer = new PdfLexer(Encoding.ASCII.GetBytes(")))x"));
+        int guard = 0;
+        while (!lexer.AtEnd && guard++ < 16)
+        {
+            lexer.NextToken();
+        }
+
+        Assert.True(lexer.AtEnd, "a stray ')' must be consumed, not returned as a zero-length token");
+    }
+
     /// <summary>
     /// A dictionary ends at <c>&gt;&gt;</c> or at a lone <c>&gt;</c>. Matching only the doubled form loses
     /// the object - and the page hanging off it - on files from the PDF Association's difference corpus.

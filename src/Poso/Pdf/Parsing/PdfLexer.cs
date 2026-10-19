@@ -135,6 +135,15 @@ public sealed class PdfLexer
                     _pos++;
                 }
 
+                // A stray delimiter with no case above (a lone ')', typically) would leave the position
+                // unchanged, and every token loop - the ToUnicode/CMap readers especially - would spin
+                // forever on it. pdf.js issue8061.pdf's ToUnicode stream is binary garbage containing ')',
+                // which hung the whole render. Always consume at least one byte.
+                if (_pos == start)
+                {
+                    _pos++;
+                }
+
                 return new PdfToken(PdfTokenKind.Keyword, start, _pos - start);
         }
     }
