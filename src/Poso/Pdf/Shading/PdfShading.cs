@@ -750,9 +750,73 @@ public sealed class PdfShading
                 previousRow = row;
             }
         }
-        else if (type == 4 || type == 6)
+        else if (type == 4)
         {
-            int per = type == 4 ? 16 : 4;
+            // Free-form Gouraud-shaded triangle mesh (PDF 32000-1 12.6.4.2): every vertex carries an edge
+            // flag then its position and colour. Flag 0 starts a new triangle from three fresh vertices;
+            // flags 1 and 2 reuse the previous triangle's shared edge (two or one carried vertices) so the
+            // strip walks the mesh. Mirrors MuPDF's fz_process_shade_type4, including "any other flag means
+            // start a new triangle". The previous (wrong) reader treated type 4 as a 16-point tensor patch.
+            MeshVertex va = default, vb = default, vc = default, vd = default;
+            bool first = true;
+            int step = bitsPerFlag + vertexBits;
+            while (reader.RemainingBits >= step)
+            {
+                int flag = bitsPerFlag > 0 ? reader.ReadBits(bitsPerFlag) : 0;
+                vd = ReadVertex();
+                if (first)
+                {
+                    flag = 0; // the very first vertex must begin a triangle
+                    first = false;
+                }
+
+                switch (flag)
+                {
+                    case 1: // Vb, Vc, Vd
+                        va = vb; vb = vc; vc = vd;
+                        triangles.Add(new MeshTriangle(va, vb, vc));
+                        break;
+                    case 2: // Va, Vc, Vd
+                        vb = vc; vc = vd;
+                        triangles.Add(new MeshTriangle(va, vb, vc));
+                        break;
+                    default: // 0 (and reserved): three new vertices
+                        va = vd;
+                        if (reader.RemainingBits < step)
+                        {
+                            break; // truncated triangle - drop it
+                        }
+
+                        if (bitsPerFlag > 0)
+                        {
+                            reader.ReadBits(bitsPerFlag);
+                        }
+
+                        vb = ReadVertex();
+                        if (reader.RemainingBits < step)
+                        {
+                            break;
+                        }
+
+                        if (bitsPerFlag > 0)
+                        {
+                            reader.ReadBits(bitsPerFlag);
+                        }
+
+                        vc = ReadVertex();
+                        triangles.Add(new MeshTriangle(va, vb, vc));
+                        break;
+                }
+            }
+        }
+        else if (type == 6)
+        {
+            // NOTE: a real Type 6 constant-colour tensor-product patch supplies 12 boundary control points
+            // (the four interior poles are computed) plus four corner colours - see MuPDF's
+            // fz_process_shade_type6. That correct reader is not implemented yet; this keeps the previous
+            // four-point Coons-patch approximation so behaviour is unchanged rather than regressing a type 6
+            // mesh to a blank or scrambled surface.
+            int per = 4;
             var patch = new MeshVertex[per];
             bool started = false;
             while (reader.RemainingBits >= bitsPerFlag + vertexBits)
@@ -781,7 +845,7 @@ public sealed class PdfShading
                     break;
                 }
 
-                EmitPatch(triangles, patch, tensor: type == 4);
+                EmitPatch(triangles, patch, tensor: false);
             }
         }
 

@@ -1698,6 +1698,33 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// A 100x100 page painted with a <c>ShadingType 4</c> free-form Gouraud-shaded triangle mesh: two
+    /// flag-0 triangles tiling the square, black along the left edge and white along the right, so the
+    /// ramp runs left to right. This exercises the flag-per-vertex reader and the triangle strip - the
+    /// previous code wrongly parsed type 4 as a 16-point tensor patch, blanking real files like
+    /// pdf.js issue2948.pdf (a 76% difference against MuPDF) and coons tests.
+    /// </summary>
+    public static byte[] CreateType4TrianglePdf()
+    {
+        // Each vertex is flag(8) + x(8) + y(8) + grey(8); /Decode maps raw 0..255 to 0..100 and grey 0..1.
+        byte[] data =
+        [
+            // triangle 1: (0,0,black) (100,0,white) (100,100,white)
+            0x00, 0x00, 0x00, 0x00,   0x00, 0xFF, 0x00, 0xFF,   0x00, 0xFF, 0xFF, 0xFF,
+            // triangle 2: (0,0,black) (100,100,white) (0,100,black)
+            0x00, 0x00, 0x00, 0x00,   0x00, 0xFF, 0xFF, 0xFF,   0x00, 0x00, 0xFF, 0x00,
+        ];
+        string shading = "/ShadingType 4 /ColorSpace /DeviceGray /BitsPerCoordinate 8 /BitsPerComponent 8 /BitsPerFlag 8 /Decode [0 100 0 100 0 1] /Function 6 0 R";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Shading << /S0 5 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes("q 0 0 100 100 re W n /S0 sh Q")),
+            Stream(5, shading, data),
+            new PdfObjectDefinition(6, "<< /FunctionType 2 /C0 [0] /C1 [1] /Domain [0 1] /N 1 >>"));
+    }
+
+    /// <summary>
     /// A 100x100 page painted with one <c>ShadingType 5</c> lattice-form Gouraud triangle mesh: two rows of
     /// two vertices, so a single quad that becomes a left-to-right black-to-white ramp. The row's first
     /// vertex is (0,0) and last (0,100) at colour 0; the second row is (100,0) and (100,100) at colour 1 -

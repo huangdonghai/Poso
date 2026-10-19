@@ -81,6 +81,35 @@ public class MeshShadingTests
     }
 
     /// <summary>
+    /// A <c>ShadingType 4</c> free-form Gouraud triangle mesh is flag-per-vertex triangles, not a 16-point
+    /// tensor patch. Two flag-0 triangles tile the square black (left) to white (right); this locks the
+    /// triangle-strip reader that previously dropped type 4 entirely (issue2948 painted background).
+    /// </summary>
+    [Fact]
+    public void Type4FreeFormTriangleMesh_PaintsGouraudTriangles()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateType4TrianglePdf());
+        using IGraphicsContext context = Factory.CreateContext(100, 100);
+        var features = new List<PdfUnsupportedFeature>();
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White), features.Add);
+
+        Assert.DoesNotContain(features, f => f.Kind == PdfUnsupportedKind.Shading);
+
+        using IImage image = context.Snapshot();
+        byte[] px = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(px);
+
+        (byte r, byte g, byte b) = Luma(px, image.Width, userX: 6, userY: 50);
+        Assert.True(r < 40 && g < 40 && b < 40, $"left edge should be black (got {r},{g},{b})");
+
+        (r, g, b) = Luma(px, image.Width, 94, 50);
+        Assert.True(r > 215 && g > 215 && b > 215, $"right edge should be white (got {r},{g},{b})");
+
+        (r, g, b) = Luma(px, image.Width, 50, 50);
+        Assert.True(r is > 90 and < 165 && Math.Abs(r - g) < 8 && Math.Abs(g - b) < 8, $"mid-ramp grey, got {r},{g},{b}");
+    }
+
+    /// <summary>
     /// A <c>ShadingType 5</c> lattice-form Gouraud triangle mesh is rows of vertices, not flagged patches.
     /// MuPDF reads a full /VerticesPerRow per row and stitches quads between adjacent rows; a two-by-two
     /// lattice is one quad. Type 5 was previously dropped (only 4/6/7 parsed), so the whole mesh painted
