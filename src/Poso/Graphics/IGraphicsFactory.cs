@@ -28,4 +28,12 @@ public interface IGraphicsFactory
     /// still receives the managed decode as a fallback whenever its own decode fails.
     /// </summary>
     bool HandlesAdobeCmykJpeg => false;
+
+    /// <summary>
+    /// True when the back end draws an image through a mirrored or sheared current matrix the way PDF
+    /// expects. A tiling pattern whose /Matrix rotates or shears places each cell through such a matrix;
+    /// a back end whose image blit does not follow the canvas transform would lose the cells entirely, so
+    /// it keeps the axis-aligned blit instead.
+    /// </summary>
+    bool SupportsTransformedImagePlacement => false;
 }

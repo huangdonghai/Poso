@@ -21,6 +21,9 @@ public sealed class SkiaGraphicsFactory : IGraphicsFactory
 
     public IGraphicsContext CreateContext(int width, int height) => new SkiaGraphicsContext(width, height);
 
+    /// <summary>Skia blits bitmaps through the canvas matrix, so a mirrored or sheared placement lands right.</summary>
+    public bool SupportsTransformedImagePlacement => true;
+
     public IImage? DecodeImage(ReadOnlySpan<byte> data)
     {
         if (data.IsEmpty)

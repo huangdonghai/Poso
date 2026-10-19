@@ -2464,6 +2464,19 @@ public sealed class PdfContentInterpreter
                 return; // guard against pathological tile counts
             }
 
+            // A pattern /Matrix can rotate or shear the lattice. Flattening each cell to a bounding
+            // rectangle drew every cell wrong (pdf.js issue2177.pdf uses [1.4 1 -.5 .7 0 0]), so a sheared
+            // matrix places the cells through the pattern-to-device matrix itself: the tile bitmap follows
+            // the PDF image convention (first row at the cell's top), which is what the back ends expect of
+            // a destination rect given in the y-up pattern space. An axis-aligned matrix keeps the plain
+            // device-space blit - the overwhelmingly common case, and it needs no per-tile matrix change.
+            bool sheared = _factory.SupportsTransformedImagePlacement &&
+                (Math.Abs(dt.M12) > 1e-5f || Math.Abs(dt.M21) > 1e-5f);
+            if (sheared)
+            {
+                _context.SetMatrix(dt);
+            }
+
             for (int i = i0; i <= i1; i++)
             {
                 for (int j = j0; j <= j1; j++)
@@ -2473,6 +2486,16 @@ public sealed class PdfContentInterpreter
                     // small cell placed far apart, and a step-sized rect smears it across the gap.
                     float ox = i * xStep;
                     float oy = j * yStep;
+                    if (sheared)
+                    {
+                        _context.DrawImage(
+                            tile,
+                            new RectF(bx0 + ox, by0 + oy, cellWidth, cellHeight),
+                            new RectF(0f, 0f, tw, th),
+                            1f);
+                        continue;
+                    }
+
                     Vector2 a = Vector2.Transform(new Vector2(bx0 + ox, by1 + oy), dt);
                     Vector2 c = Vector2.Transform(new Vector2(bx1 + ox, by0 + oy), dt);
                     float rx = Math.Min(a.X, c.X);

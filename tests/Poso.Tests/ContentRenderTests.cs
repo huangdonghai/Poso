@@ -395,6 +395,30 @@ public class ContentRenderTests
         Assert.True(ink > 50, $"the glyph procedure must resolve /F1 through the caller's resources, got {ink} dark pixels");
     }
 
+    /// <summary>
+    /// A tiling pattern whose /Matrix shears the lattice must place each cell as the parallelogram it is,
+    /// not as that parallelogram's bounding box: with [1 .5 0 1 0 0] and 10x10 cells 20 apart, the point
+    /// (5,18) lies inside a cell's box but outside the sheared cell, so it has to stay white.
+    /// </summary>
+    [Fact]
+    public void ShearedTilingPattern_KeepsTheShear()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateShearedTilingPatternPdf());
+        using IGraphicsContext context = Factory.CreateContext(100, 100);
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+
+        // Inside the sheared cell: user (5,7) -> device row 93.
+        (byte b, byte g, byte r, _) = PixelAt(pixels, image.Width, 93, 5);
+        Assert.True(r < 60 && g < 60 && b < 60, $"the sheared cell must paint its interior black (r={r} g={g} b={b})");
+
+        // Inside the cell's bounding box but outside the parallelogram: user (5,18) -> device row 82.
+        (byte ob, byte og, byte or, _) = PixelAt(pixels, image.Width, 82, 5);
+        Assert.True(or > 240 && og > 240 && ob > 240, $"the gap beside the sheared cell must stay white (r={or} g={og} b={ob})");
+    }
+
     private static byte[] ReadPixels(IImage image)
     {
         byte[] pixels = new byte[image.Width * image.Height * image.BytesPerPixel];

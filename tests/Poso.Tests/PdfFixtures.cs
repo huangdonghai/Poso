@@ -1909,6 +1909,24 @@ public static class PdfFixtures
         Stream(7, string.Empty, Encoding.ASCII.GetBytes("1 0 0 0 1 1 d1\nBT /F1 0.6 Tf 0 0 Td (X) Tj ET")));
 
     /// <summary>
+    /// A 100x100 page filled with a tiling pattern whose /Matrix shears the lattice ([1 .5 0 1 0 0]) and
+    /// whose 10x10 black cells sit 20 apart. Correct placement paints parallelograms, so the point (5,18)
+    /// - inside the bounding box of a cell but outside the sheared one - must stay white (pdf.js
+    /// issue2177.pdf uses [1.4 1 -.5 .7 0 0]).
+    /// </summary>
+    public static byte[] CreateShearedTilingPatternPdf()
+    {
+        byte[] cell = Encoding.ASCII.GetBytes("0 0 0 rg 0 0 10 10 re f");
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Pattern << /P0 5 0 R >> /ColorSpace << /Cs1 7 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes("/Cs1 cs /P0 scn 0 0 100 100 re f")),
+            Stream(5, "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 20 /YStep 20 /Matrix [1 0.5 0 1 0 0]", cell),
+            new PdfObjectDefinition(7, "[/Pattern /DeviceRGB]"));
+    }
+
+    /// <summary>
     /// A 100x100 page showing one Type3 glyph whose procedure declares d1 (a stencil) and fills itself
     /// WHITE. A d1 glyph is painted with the text's colour and its own colour operators are ignored, so the
     /// square must appear black - pdf.js issue12705.pdf's glyphs are exactly this.
