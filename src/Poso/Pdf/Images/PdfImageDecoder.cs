@@ -77,7 +77,15 @@ public static class PdfImageDecoder
 
         if (hasJpx)
         {
-            IImage? jpx = DecodeJpx(factory, stream, dictionary, width, height, diagnostics);
+            // The PDF /ColorSpace, when present, names the image's colour; a JPX codestream may carry extra
+            // components beyond it (issue19326: a 16-bit gray image with two components). Without an
+            // explicit /ColorSpace the codestream's own space wins (ResolveColorSpace would default to
+            // DeviceGray, which would turn an RGB JPX into a one-channel image).
+            PdfObject? jpxSpaceObject = dictionary.Get("ColorSpace");
+            int spaceComponents = jpxSpaceObject is not null
+                ? ResolveColorSpace(document, jpxSpaceObject)?.Components ?? 0
+                : 0;
+            IImage? jpx = DecodeJpx(factory, stream, dictionary, width, height, spaceComponents, diagnostics);
             if (jpx is null)
             {
                 diagnostics?.Report(PdfUnsupportedKind.ImageCodec, "JPXDecode image could not be decoded");
@@ -497,6 +505,7 @@ public static class PdfImageDecoder
         PdfDictionary dictionary,
         int width,
         int height,
+        int spaceComponents,
         PdfDiagnostics? diagnostics)
     {
         if (dictionary.GetBooleanValue("ImageMask") ?? false)
@@ -528,6 +537,15 @@ public static class PdfImageDecoder
             // than guessed at - rendering CMYK samples as RGB is silently wrong.
             bool hasAlpha = (dictionary.GetIntegerValue("SMaskInData") ?? 0) >= 1;
             int colorChannels = hasAlpha ? components - 1 : components;
+
+            // The colour space in the PDF dictionary decides how many components are colour. When the
+            // codestream carries more (a two-component gray image, pdf.js issue19326.pdf), only the leading
+            // ones are used and the rest are dropped - MuPDF and PDFium read the dictionary's space first.
+            if (!hasAlpha && components > spaceComponents && spaceComponents is 1 or 3)
+            {
+                colorChannels = spaceComponents;
+            }
+
             if (colorChannels is not (1 or 3) || components > 4)
             {
                 diagnostics?.Report(
