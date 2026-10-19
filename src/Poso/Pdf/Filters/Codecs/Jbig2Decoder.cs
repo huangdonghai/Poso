@@ -111,6 +111,10 @@ public static class Jbig2Decoder
         var regionResults = new Dictionary<int, (byte[] Bits, int Width, int Height)>();
         // Huffman code-table registry: maps segment number → custom table (segment type 53)
         var codeTables = new Dictionary<int, Jbig2Huffman.Table>();
+        // Arithmetic coding context registry: maps segment number → retained GB_stats from an SD-DICT that
+        // set SDRETAINS (bit 9 of the SD-DICT flags). Downstream SD-DICTs with SDREUSES (bit 8) start from
+        // the last-referred segment's stats. Mirrors PDFium's m_bContextRetained (JBig2_Context.cpp 768, 812).
+        var statsRegistry = new Dictionary<int, byte[]>();
 
         while (position + 11 <= data.Length)
         {
@@ -184,12 +188,36 @@ public static class Jbig2Decoder
                         symbolRegistry.TryGetValue(referredSegments[i], out referred[i]);
                     }
 
-                    Jbig2Symbol[]? dict = Jbig2SymbolDict.DecodeDictionary(data, bodyStart, bodyEnd, referred, CollectCodeTables(referredSegments, codeTables));
+                    // §7.4.2.1.1 SDREUSES (bit 8) and SDRETAINS (bit 9) — arithmetic coding context sharing.
+                    // PDFium resolves the source of reused stats as "the last referred segment that is
+                    // itself an SD-DICT (type 0)" (JBig2_Context.cpp line 676-678 tracks pLRSeg in the same
+                    // loop that accumulates SDNUMINSYMS).
+                    ushort sdFlags16 = bodyEnd - bodyStart >= 2
+                        ? (ushort)((data[bodyStart] << 8) | data[bodyStart + 1])
+                        : (ushort)0;
+                    byte[]? inStats = null;
+                    if ((sdFlags16 & 0x0100) != 0)
+                    {
+                        for (int i = referredSegments.Length - 1; i >= 0; i--)
+                        {
+                            if (statsRegistry.TryGetValue(referredSegments[i], out var s))
+                            {
+                                inStats = s;
+                                break;
+                            }
+                        }
+                    }
+
+                    Jbig2Symbol[]? dict = Jbig2SymbolDict.DecodeDictionary(data, bodyStart, bodyEnd, referred, CollectCodeTables(referredSegments, codeTables), inStats, out byte[]? outStats);
                     if (dict is null)
                     {
                         return null;
                     }
                     symbolRegistry[segmentNumber] = dict;
+                    if ((sdFlags16 & 0x0200) != 0 && outStats is not null)
+                    {
+                        statsRegistry[segmentNumber] = outStats;
+                    }
                     break;
                 }
 

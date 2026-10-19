@@ -27,9 +27,14 @@ internal static class Jbig2SymbolDict
     /// <summary>
     /// Decodes an arithmetic symbol dictionary segment body (after the segment header).
     /// Returns the exported symbol array, or null if the segment uses unsupported features (Huffman/refinement).
+    /// <paramref name="inStats"/> is the arithmetic context inherited from a previously-retained dictionary
+    /// when SDREUSES (bit 8) is set; <paramref name="outStats"/> receives the final context on exit so the
+    /// caller can register it for later SDREUSES consumers when SDRETAINS (bit 9) is set (mirrors PDFium's
+    /// <c>m_bContextRetained</c> in JBig2_Context.cpp lines 768 and 812).
     /// </summary>
-    public static Jbig2Symbol[]? DecodeDictionary(byte[] data, int bodyStart, int bodyEnd, Jbig2Symbol[]?[] referredDicts, Jbig2Huffman.Table?[] referredTables)
+    public static Jbig2Symbol[]? DecodeDictionary(byte[] data, int bodyStart, int bodyEnd, Jbig2Symbol[]?[] referredDicts, Jbig2Huffman.Table?[] referredTables, byte[]? inStats, out byte[]? outStats)
     {
+        outStats = null;
         if (bodyEnd - bodyStart < 10)
         {
             return null;
@@ -115,9 +120,15 @@ internal static class Jbig2SymbolDict
             sbSymCodeLen++;
         }
 
-        // Allocate generic region stats (shared across all symbols in this dictionary)
+        // Allocate generic region stats (shared across all symbols in this dictionary). If the caller
+        // supplied stats from a previously-retained dictionary (SDREUSES=1), seed from those; PDFium
+        // copies the last-referred segment's stats here (JBig2_Context.cpp line 771).
         int gbStatsSize = sdTemplate == 0 ? 1 << 16 : sdTemplate == 1 ? 1 << 13 : 1 << 10;
         byte[] gbStats = new byte[gbStatsSize];
+        if (inStats is not null && inStats.Length == gbStatsSize)
+        {
+            Array.Copy(inStats, gbStats, gbStatsSize);
+        }
 
         // Refinement stats + decoders (only used when SDREFAGG=1)
         int grStatsSize = sdRTemplate ? 1 << 10 : 1 << 13;
@@ -305,13 +316,15 @@ internal static class Jbig2SymbolDict
             exFlag = !exFlag;
         }
 
-        // A dictionary that exports fewer symbols than it declared has hit a decode shortfall; degrade to
-        // null so the page does not render blank where MuPDF draws glyphs. A declared-zero dictionary is
-        // legitimately empty (ej == 0 == sdNumExSyms) and is retained so dependent text renders blank.
-        if (ej < sdNumExSyms)
+        // PDFium clamps SDNUMEXSYMS to the actual export count when the IAEX run-lengths mark fewer
+        // symbols than declared (JBig2_GeneralDecoder.cpp `if (J < SDNUMEXSYMS) pDict->SDNUMEXSYMS = J;`).
+        // Mirror that so downstream text regions can proceed against the shortened dictionary rather
+        // than bailing the whole decode to null.
+        if (ej < exported.Length)
         {
-            return null;
+            System.Array.Resize(ref exported, ej);
         }
+        outStats = gbStats;
         return exported;
     }
 
