@@ -10,8 +10,9 @@ bitmap-refine-template1
 bitmap-refine-template1-tpgron
 bitmap-refine-tpgron
 bitmap-symbol-context-reuse
-bitmap-symbol-symhuffrefine-textrefine
+bitmap-symbol-symhuffrefineone
 bitmap-symbol-symhuffrefineseveral
+bitmap-symbol-symhuffrefine-textrefine
 bitmap-symbol-texthuffrefine
 bitmap-symbol-texthuffrefineB15
 bitmap-symbol-texthuffrefinecustom
