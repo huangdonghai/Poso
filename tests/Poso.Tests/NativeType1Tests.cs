@@ -246,6 +246,22 @@ public class NativeType1Tests
         Assert.True(ink > 200, $"the word should have drawn ink, got {ink} dark pixels; features {string.Join(",", features.ConvertAll(f => f.Kind.ToString()))}");
     }
 
+    /// <summary>
+    /// lenIV -1 marks charstrings that are not encrypted. Handing that value to Decrypt made it read
+    /// data[-1] and throw IndexOutOfRange, which travelled out of Render and left pdf.js issue7769.pdf's
+    /// whole page unrendered. Decrypt must clamp, and TryCreate must never throw on malformed input.
+    /// </summary>
+    [Fact]
+    public void Type1Decrypt_NegativeOrOversizedDiscard_DoesNotThrow()
+    {
+        byte[] data = [1, 2, 3, 4];
+        Assert.Equal(4, Poso.Pdf.Fonts.Type1Program.Decrypt(data, 55665, -1).Length);
+        Assert.Empty(Poso.Pdf.Fonts.Type1Program.Decrypt(data, 55665, data.Length));
+        Assert.Empty(Poso.Pdf.Fonts.Type1Program.Decrypt(data, 55665, 999));
+        Assert.False(Poso.Pdf.Fonts.Type1Program.TryCreate([], out _));
+        Assert.False(Poso.Pdf.Fonts.Type1Program.TryCreate(new byte[] { 0x25, 0x21 }, out _));
+    }
+
     private static string FontsFile(string name)
     {
         string probe = IOPath.Combine(AppContext.BaseDirectory, "Samples", "Fonts", name);

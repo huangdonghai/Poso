@@ -56,6 +56,22 @@ public sealed class Type1Program : IType1Program
     /// <summary>Parses a binary Type 1 program; returns false for CID-keyed, eexec-less or malformed data.</summary>
     public static bool TryCreate(byte[] data, out Type1Program? program)
     {
+        try
+        {
+            return TryCreateCore(data, out program);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
+        {
+            // A malformed embedded font costs its glyphs, never the page around it: pdf.js issue7769.pdf's
+            // program declares lenIV -1 and the old decryption threw IndexOutOfRange, which travelled all
+            // the way out of Render and left the page unrendered.
+            program = null;
+            return false;
+        }
+    }
+
+    private static bool TryCreateCore(byte[] data, out Type1Program? program)
+    {
         program = null;
         if (data is not { Length: > 16 })
         {
@@ -236,7 +252,7 @@ public sealed class Type1Program : IType1Program
                             subrs.Add([]);
                         }
 
-                        subrs[index] = Decrypt(data, CharStringsKey, lenIV);
+                        subrs[index] = lenIV < 0 ? data : Decrypt(data, CharStringsKey, lenIV);
                     }
 
                     break;
@@ -268,7 +284,7 @@ public sealed class Type1Program : IType1Program
                         int length = s.ReadInt();
                         s.GetToken(); // "RD" / "-|"
                         byte[] data = length > 0 ? s.GetBytes(length) : [];
-                        byte[] encoded = Decrypt(data, CharStringsKey, lenIV);
+                        byte[] encoded = lenIV < 0 ? data : Decrypt(data, CharStringsKey, lenIV);
                         s.GetByte();
                         token = s.GetToken(); // "ND" / "|-"
                         if (token == "noaccess")
@@ -703,6 +719,9 @@ public sealed class Type1Program : IType1Program
     {
         const int c1 = 52845;
         const int c2 = 22719;
+        // lenIV is normally 0..4; a negative value means the data is not encrypted at all, and a value
+        // past the buffer leaves nothing to decode. Clamp rather than index data[-n].
+        discard = Math.Clamp(discard, 0, data.Length);
         if (discard >= data.Length)
         {
             return [];
