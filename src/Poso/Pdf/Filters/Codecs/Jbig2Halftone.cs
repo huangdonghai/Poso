@@ -95,17 +95,39 @@ internal static class Jbig2Halftone
         byte[] data, int bodyStart, int bodyEnd, Jbig2PatternDict? patterns,
         byte[] page, int pageWidth, int pageHeight, int rowBytes)
     {
-        if (patterns is null || page is null || bodyEnd - bodyStart < 38)
+        if (page is null)
+        {
+            return false;
+        }
+        if (!DecodeRegionStandalone(data, bodyStart, bodyEnd, patterns, out byte[]? region, out int regW, out int regH, out int regX, out int regY, out int regOp))
+        {
+            return false;
+        }
+        return Jbig2SymbolDict.CompositeRegionOntoPage(page, pageWidth, rowBytes, region!, regW, regH, regX, regY, regOp);
+    }
+
+    /// <summary>
+    /// Decodes a halftone region into a standalone bitmap without compositing. Used by immediate
+    /// variants (via <see cref="DecodeRegion"/>) and by intermediate halftone regions (segment type 20)
+    /// whose result is retained as a refinement reference. Returns false on unsupported features (MMR)
+    /// or decoding error.
+    /// </summary>
+    public static bool DecodeRegionStandalone(
+        byte[] data, int bodyStart, int bodyEnd, Jbig2PatternDict? patterns,
+        out byte[]? region, out int regW, out int regH, out int regX, out int regY, out int regOp)
+    {
+        region = null; regW = 0; regH = 0; regX = 0; regY = 0; regOp = 0;
+        if (patterns is null || bodyEnd - bodyStart < 38)
         {
             return false;
         }
 
         // region_info (17 bytes) at bodyStart
-        int regW = (int)ReadUInt32(data, bodyStart);
-        int regH = (int)ReadUInt32(data, bodyStart + 4);
-        int regX = (int)ReadUInt32(data, bodyStart + 8);
-        int regY = (int)ReadUInt32(data, bodyStart + 12);
-        int regOp = data[bodyStart + 16] & 0x07;
+        regW = (int)ReadUInt32(data, bodyStart);
+        regH = (int)ReadUInt32(data, bodyStart + 4);
+        regX = (int)ReadUInt32(data, bodyStart + 8);
+        regY = (int)ReadUInt32(data, bodyStart + 12);
+        regOp = data[bodyStart + 16] & 0x07;
         int cursor = bodyStart + 17;
 
         byte flags = data[cursor];
@@ -211,10 +233,10 @@ internal static class Jbig2Halftone
 
         // Build the region image, fill with HDEFPIXEL (jbig2dec/mupdf do a byte-fill of the 0/1 value).
         int regStride = (regW + 7) / 8;
-        byte[] region = new byte[regStride * regH];
+        byte[] RegionOut = new byte[regStride * regH];
         if (hDefPixel)
         {
-            Array.Fill(region, (byte)0x01);
+            Array.Fill(RegionOut, (byte)0x01);
         }
 
         // For each grid cell, read the gray value and compose the corresponding pattern.
@@ -236,12 +258,13 @@ internal static class Jbig2Halftone
                     gray = numPats - 1;
                 }
 
-                ComposeSymbol(region, regW, regH, regStride, patterns.Patterns[gray], (int)x, (int)y, hCombop);
+                ComposeSymbol(RegionOut, regW, regH, regStride, patterns.Patterns[gray], (int)x, (int)y, hCombop);
             }
         }
 
         // Composite the region onto the page with the region's own combination operator.
-        return Jbig2SymbolDict.CompositeRegionOntoPage(page, pageWidth, rowBytes, region, regW, regH, regX, regY, regOp);
+        region = RegionOut;
+        return true;
     }
 
     private static void ComposeSymbol(byte[] image, int imgW, int imgH, int imgStride, Jbig2Symbol sym, int x, int y, int combOp)

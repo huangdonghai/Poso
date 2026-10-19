@@ -23,6 +23,7 @@ public static class Jbig2Decoder
     private const int ImmediateTextRegion = 6;
     private const int ImmediateLosslessTextRegion = 7;
     private const int PatternDictionary = 16;
+    private const int IntermediateHalftoneRegion = 20;
     private const int ImmediateHalftoneRegion = 22;
     private const int ImmediateLosslessHalftoneRegion = 23;
     private const int CodedGenericRegion = 36;
@@ -366,6 +367,31 @@ public static class Jbig2Decoder
                         return null;
                     }
                     patternRegistry[segmentNumber] = pdict;
+                    break;
+                }
+
+                case IntermediateHalftoneRegion:
+                {
+                    // §7.4.5 / §7.4.6: an intermediate halftone region is decoded exactly like the immediate
+                    // variants but its bitmap is retained as this segment's result (not composited onto the
+                    // page) so a downstream generic refinement (type 40/42/43) can reference it via SBREFNUM.
+                    // MuPDF treats this in the same jbig2_halftone_region dispatch; pdf.js's
+                    // bitmap-halftone-refine is PATTERN-DICT -> INTERMEDIATE-HALFTONE -> IMM-GEN-REFINE.
+                    if (referredSegments.Length == 0)
+                    {
+                        return null;
+                    }
+                    if (!patternRegistry.TryGetValue(referredSegments[0], out var hpatsI))
+                    {
+                        return null;
+                    }
+                    if (!Jbig2Halftone.DecodeRegionStandalone(data, bodyStart, bodyEnd, hpatsI,
+                        out byte[]? regionI, out int rwi, out int rhi, out _, out _, out _)
+                        || regionI is null || rwi <= 0 || rhi <= 0)
+                    {
+                        return null;
+                    }
+                    regionResults[segmentNumber] = (regionI, rwi, rhi);
                     break;
                 }
 
