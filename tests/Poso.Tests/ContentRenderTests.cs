@@ -470,6 +470,34 @@ public class ContentRenderTests
         Assert.True(or > 240 && og > 240 && ob < 60, $"the page around the group must stay yellow (r={or} g={og} b={ob})");
     }
 
+    /// <summary>
+    /// A text object in a clipping render mode replaces the clipping path with its glyph outlines - and when
+    /// none of them carry an outline, that path is EMPTY, so nothing after it paints. Treating "no outline"
+    /// as "no clip" let the following full-page fill through (pdf.js recursiveCompositGlyf.pdf renders blank
+    /// in MuPDF and PDFium alike).
+    /// </summary>
+    [Fact]
+    public void EmptyTextClip_PaintsNothing()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateEmptyTextClipPdf());
+        using IGraphicsContext context = Factory.CreateContext(100, 100);
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+
+        int ink = 0;
+        for (int i = 0; i < pixels.Length; i += 4)
+        {
+            if (pixels[i] < 250 || pixels[i + 1] < 250 || pixels[i + 2] < 250)
+            {
+                ink++;
+            }
+        }
+
+        Assert.True(ink == 0, $"an empty text clip must leave the page white, got {ink} dark pixels");
+    }
+
     private static byte[] ReadPixels(IImage image)
     {
         byte[] pixels = new byte[image.Width * image.Height * image.BytesPerPixel];

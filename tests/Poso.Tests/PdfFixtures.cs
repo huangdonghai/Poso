@@ -1996,6 +1996,19 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// A 100x100 page where a text object in render mode 4 (fill and clip) shows a single space - a glyph
+    /// with no outline - and is followed by a full-page red fill. The text object still replaces the
+    /// clipping path, and an empty clip paints nothing, so the page must stay white (the shape of pdf.js
+    /// recursiveCompositGlyf.pdf, where both references render the page blank).
+    /// </summary>
+    public static byte[] CreateEmptyTextClipPdf() => Build(1,
+        new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+        new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+        new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>"),
+        Stream(4, string.Empty, Encoding.ASCII.GetBytes("BT /F1 40 Tf 4 Tr ( ) Tj ET 1 0 0 rg 0 0 100 100 re f")),
+        new PdfObjectDefinition(5, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"));
+
+    /// <summary>
     /// A 100x100 yellow page with a form that declares a transparency group WITHOUT /I (so non-isolated,
     /// the spec default) and knockout, whose content multiplies a cyan rectangle with what is beneath it.
     /// A non-isolated group blends against the page, so the block must come out green - the shape of pdf.js

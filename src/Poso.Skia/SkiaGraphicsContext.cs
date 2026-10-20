@@ -21,6 +21,7 @@ public sealed class SkiaGraphicsContext : IGraphicsContext
     private readonly SKPaint _imagePaint;
     private readonly Stack<Layer> _layers = new();
     private SKPath? _textClip;
+    private bool _textClipRequested;
     private readonly int _width;
     private readonly int _height;
     private bool _snapshotTaken;
@@ -472,6 +473,7 @@ public sealed class SkiaGraphicsContext : IGraphicsContext
     {
         _textClip?.Dispose();
         _textClip = new SKPath { FillType = SKPathFillType.Winding };
+        _textClipRequested = false;
     }
 
     public void AddTextClipRun(IFont font, ReadOnlySpan<GlyphPosition> glyphs, in Matrix3x2 runMatrix)
@@ -480,6 +482,10 @@ public sealed class SkiaGraphicsContext : IGraphicsContext
         {
             return;
         }
+
+        // The text object is in a clipping render mode: it contributes to the clipping path whether or not
+        // any outline of it survives.
+        _textClipRequested = true;
 
         SKMatrix run = SkiaConversions.ToSKMatrix(runMatrix);
         foreach (GlyphPosition glyph in glyphs)
@@ -498,13 +504,17 @@ public sealed class SkiaGraphicsContext : IGraphicsContext
 
     public void CloseTextClip()
     {
-        if (_textClip is { IsEmpty: false } path)
+        // An empty clip paints nothing: a Tr 4-7 text object whose outlines all dropped out (an unmapped
+        // or broken font, as in pdf.js recursiveCompositGlyf.pdf) still replaces the clipping path, and
+        // treating "no path" as "no clip" let the fill that followed cover the whole page.
+        if (_textClipRequested && _textClip is { } path)
         {
             _canvas.ClipPath(path, SKClipOperation.Intersect, antialias: true);
         }
 
         _textClip?.Dispose();
         _textClip = null;
+        _textClipRequested = false;
     }
 
     public void DrawImage(IImage image, in RectF destinationRect, in RectF sourceRect, float alpha)

@@ -297,6 +297,10 @@ public sealed class PeachGraphicsContext : IGraphicsContext
         }
     }
 
+    // A text object in a clipping render mode contributes to the clipping path even when none of its
+    // outlines survive; only an accumulator no clip mode touched leaves the page's clip alone.
+    private bool _textClipRequested;
+
     public void OpenTextClip()
     {
         _textClip?.Dispose();
@@ -304,6 +308,7 @@ public sealed class PeachGraphicsContext : IGraphicsContext
         _textClip.FillMode = PeachCore.FillMode.Nonzero;
         _textClipBounds = default;
         _textClipAny = false;
+        _textClipRequested = false;
     }
 
     public void AddTextClipRun(IFont font, ReadOnlySpan<GlyphPosition> glyphs, in Matrix3x2 runMatrix)
@@ -312,6 +317,8 @@ public sealed class PeachGraphicsContext : IGraphicsContext
         {
             return;
         }
+
+        _textClipRequested = true;
 
         double scale = 1d / peachFont.UnitsPerEm;
         foreach (GlyphPosition glyph in glyphs)
@@ -337,7 +344,7 @@ public sealed class PeachGraphicsContext : IGraphicsContext
         PeachCore.GraphicsPath? path = _textClip;
         _textClip = null;
 
-        if (path is not null && _textClipAny)
+        if (path is not null && (_textClipAny || _textClipRequested))
         {
             // The canvas owns the path from here: it lives and dies with the clip level it was pushed at.
             // BeginDraw puts the canvas in the current CTM, which is what makes the path's user-space
@@ -345,7 +352,10 @@ public sealed class PeachGraphicsContext : IGraphicsContext
             using DrawScope scope = BeginDraw();
             _clipDepth++;
             Target.PushClip(path);
-            _clipBounds = _clipBounds.Intersect(_textClipBounds.TransformAabb(_ctm));
+            // A clip with no surviving outline has nothing in it, so the clip bounds collapse with it.
+            _clipBounds = _textClipAny
+                ? _clipBounds.Intersect(_textClipBounds.TransformAabb(_ctm))
+                : RectF.Empty;
         }
         else
         {
@@ -353,6 +363,7 @@ public sealed class PeachGraphicsContext : IGraphicsContext
         }
 
         _textClipAny = false;
+        _textClipRequested = false;
     }
 
     public void DrawImage(IImage image, in RectF destinationRect, in RectF sourceRect, float alpha)
