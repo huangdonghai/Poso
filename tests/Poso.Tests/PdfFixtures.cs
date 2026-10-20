@@ -490,6 +490,41 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// The same container, with a font that paints an ordinary letter and a <c>seac</c> composite side by
+    /// side: "E" then E-acute, the second being base plus accent and carrying no outline of its own. A back
+    /// end that does not expand composites paints the first and nothing for the second.
+    /// </summary>
+    public static byte[] CreateSeacCffPdf(byte[] fontProgram, string fontName = "SeacTest")
+    {
+        // FirstChar..LastChar must hold one width each: 69 ("E") and 201 (E-acute) with the rest zero.
+        const int FirstChar = 69, LastChar = 201;
+        var widths = new string[LastChar - FirstChar + 1];
+        Array.Fill(widths, "0");
+        widths[0] = "700";
+        widths[128 - FirstChar] = "700";
+
+        // A bare CFF is addressed by glyph name, so the code the content stream shows has to be tied to
+        // "Eacute" through /Differences - the program's built-in encoding says nothing about C1 codes.
+        string font = $"<< /Type /Font /Subtype /Type1 /BaseFont /{fontName} /Flags 4 "
+            + $"/FirstChar {FirstChar} /LastChar {LastChar} /Widths [{string.Join(' ', widths)}] "
+            + "/Encoding << /Type /Encoding /Differences [128 /Eacute] >> "
+            + "/FontDescriptor 6 0 R >>";
+        string descriptor = $"<< /Type /FontDescriptor /FontName /{fontName} /Flags 4 /FontBBox [0 -200 700 900] "
+            + "/Ascent 750 /Descent -250 /ItalicAngle 0 /StemV 80 /FontFile3 7 0 R /Subtype /Type1C >>";
+        // \311 is the octal escape for 0xC9, the code the font maps to E-acute.
+        string content = "BT /F1 40 Tf 10 30 Td (E) Tj ET BT /F1 40 Tf 100 30 Td (\\200) Tj ET";
+
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            new PdfObjectDefinition(5, font),
+            new PdfObjectDefinition(6, descriptor),
+            Stream(7, string.Empty, fontProgram));
+    }
+
+    /// <summary>
     /// A 200x120 page drawing two CID glyphs (codes 1 and 2 under /Identity-H) using a handcrafted
     /// <b>CID-keyed binary Type 1</b> program (Adobe TN 5014) embedded as <c>FontFile</c> behind a
     /// Type0 / CIDFontType0 descendant. Each CID glyph is a filled rectangle, so the whole Type 0 decode

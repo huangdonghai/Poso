@@ -19,12 +19,14 @@ public sealed class PeachFont : IFont
 
     private readonly PeachText.Typeface _typeface;
     private readonly int _unitsPerEm;
+    private readonly Poso.Pdf.Fonts.CffProgram? _cff;
 
-    private PeachFont(PeachText.Typeface typeface, int unitsPerEm, bool usedFallback)
+    private PeachFont(PeachText.Typeface typeface, int unitsPerEm, bool usedFallback, Poso.Pdf.Fonts.CffProgram? cff = null)
     {
         _typeface = typeface;
         _unitsPerEm = unitsPerEm;
         UsedFallback = usedFallback;
+        _cff = cff;
     }
 
     public bool UsedFallback { get; }
@@ -34,17 +36,58 @@ public sealed class PeachFont : IFont
     /// first access and some malformed embedded programs throw (NRE inside its OpenType descriptor);
     /// such a font must fail here, at load, so the caller can fall back instead of crashing mid-render.
     /// </summary>
-    private static PeachFont? From(PeachText.Typeface typeface, bool usedFallback)
+    private static PeachFont? From(PeachText.Typeface typeface, bool usedFallback, Poso.Pdf.Fonts.CffProgram? cff = null)
     {
         try
         {
             int unitsPerEm = typeface.Metrics.UnitsPerEm;
-            return unitsPerEm > 0 ? new PeachFont(typeface, unitsPerEm, usedFallback) : null;
+            return unitsPerEm > 0 ? new PeachFont(typeface, unitsPerEm, usedFallback, cff) : null;
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// The CFF program inside an sfnt container, when there is one. PeachDrawing reads outlines from the
+    /// container but does not expose the charstrings, and a seac composite can only be recognised - and
+    /// its two parts named - from the charstring itself.
+    /// </summary>
+    private static Poso.Pdf.Fonts.CffProgram? CffFrom(byte[] sfnt)
+    {
+        if (sfnt.Length < 12 || System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(sfnt) != 0x4F54544F)
+        {
+            return null;
+        }
+
+        int count = System.Buffers.Binary.BinaryPrimitives.ReadUInt16BigEndian(sfnt.AsSpan(4));
+        if (sfnt.Length < 12 + (count * 16))
+        {
+            return null;
+        }
+
+        for (int i = 0; i < count; i++)
+        {
+            int entry = 12 + (i * 16);
+            if (sfnt[entry] != 'C' || sfnt[entry + 1] != 'F' || sfnt[entry + 2] != 'F' || sfnt[entry + 3] != ' ')
+            {
+                continue;
+            }
+
+            int offset = (int)System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(sfnt.AsSpan(entry + 8));
+            int length = (int)System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(sfnt.AsSpan(entry + 12));
+            if (offset <= 0 || length <= 0 || sfnt.Length < offset + length)
+            {
+                return null;
+            }
+
+            return Poso.Pdf.Fonts.CffProgram.TryCreate(sfnt[offset..(offset + length)], out Poso.Pdf.Fonts.CffProgram? program)
+                ? program
+                : null;
+        }
+
+        return null;
     }
 
     public static PeachFont? Create(ReadOnlySpan<byte> fontData, string baseFontName)
@@ -91,7 +134,7 @@ public sealed class PeachFont : IFont
                     return null;
                 }
 
-                return From(match.Typeface, usedFallback: false);
+                return From(match.Typeface, usedFallback: false, CffFrom(data));
             }
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
@@ -662,6 +705,35 @@ public sealed class PeachFont : IFont
             path.Close();
         }
 
+        return true;
+    }
+
+    /// <summary>
+    /// The parts of a glyph the Type 1 seac form builds, in design units: the base outline and the accent
+    /// outline with the offset the charstring gives it. A seac glyph has no outline of its own - its
+    /// charstring is one five-operand endchar - and PeachDrawing does not expand those, so pdf.js
+    /// endchar.pdf's E-acute (a composite over "E") came back empty and the text read "...PLAN  TAIRE".
+    /// </summary>
+    internal bool TryGetSeacParts(ushort glyphId, out PeachOutlines.GlyphOutline? baseOutline,
+        out PeachOutlines.GlyphOutline? accentOutline, out float accentX, out float accentY)
+    {
+        baseOutline = null;
+        accentOutline = null;
+        accentX = 0f;
+        accentY = 0f;
+        if (_cff is null || !_cff.TryGetSeacGlyph(glyphId, out Poso.Pdf.Fonts.CffProgram.SeacGlyph seac))
+        {
+            return false;
+        }
+
+        if (!TryGetOutline(seac.BaseGlyph, out baseOutline) || baseOutline is null || baseOutline.IsEmpty)
+        {
+            return false;
+        }
+
+        TryGetOutline(seac.AccentGlyph, out accentOutline);
+        accentX = seac.AccentX;
+        accentY = seac.AccentY;
         return true;
     }
 

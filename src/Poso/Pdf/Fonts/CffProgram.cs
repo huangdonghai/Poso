@@ -26,9 +26,13 @@ public sealed class CffProgram : ICffMetrics
     private static readonly float[] DefaultFontMatrix = [0.001f, 0f, 0f, 0f, 0.001f, 0f];
 
     private readonly Dictionary<string, ushort> _nameToGlyph;
+    private readonly CffIndex _charStrings;
+    private readonly byte[] _program;
 
-    private CffProgram(int glyphCount, float[] fontMatrix, float[] fontBBox, string[] strings, int[] charsetSids, int[] codeToGlyph)
+    private CffProgram(byte[] program, CffIndex charStrings, int glyphCount, float[] fontMatrix, float[] fontBBox, string[] strings, int[] charsetSids, int[] codeToGlyph)
     {
+        _program = program;
+        _charStrings = charStrings;
         GlyphCount = glyphCount;
         FontMatrix = fontMatrix;
         FontBBox = fontBBox;
@@ -64,6 +68,161 @@ public sealed class CffProgram : ICffMetrics
 
     /// <summary>Maps a PostScript glyph name to the glyph ID within this program.</summary>
     public bool TryGetGlyphId(string name, out ushort glyphId) => _nameToGlyph.TryGetValue(name, out glyphId);
+
+    /// <summary>
+    /// A glyph built by the Type 1 <c>seac</c> form: a base glyph and an accent glyph placed at an
+    /// offset, both addressed through the standard encoding. A CFF charstring that ends in a five
+    /// operand <c>endchar</c> carries exactly that - it draws no outline of its own - and a font engine
+    /// that does not expand it paints nothing. Also known as a composite or accented glyph.
+    /// </summary>
+    public readonly record struct SeacGlyph(ushort BaseGlyph, ushort AccentGlyph, int AccentX, int AccentY);
+
+    /// <summary>
+    /// Reads the <c>seac</c> form out of the charstring of <paramref name="glyphId"/>. Returns false for
+    /// an ordinary glyph, for a program this reader cannot address, and for a composite whose base or
+    /// accent glyph is not in the program.
+    /// </summary>
+    public bool TryGetSeacGlyph(int glyphId, out SeacGlyph seac)
+    {
+        seac = default;
+        if (glyphId < 0 || glyphId >= _charStrings.Count || !TryReadSeacOperands(_charStrings, glyphId, out int[]? operands) ||
+            operands is not { Length: 5 })
+        {
+            return false;
+        }
+
+        // asb adx ady bchar achar endchar. bchar and achar are standard-encoding codes, so they have to
+        // be turned into glyph ids through the charset rather than used directly.
+        if (!TryGetGlyphIdForStandardCode(operands[3], out ushort baseGlyph) ||
+            !TryGetGlyphIdForStandardCode(operands[4], out ushort accentGlyph))
+        {
+            return false;
+        }
+
+        seac = new SeacGlyph(baseGlyph, accentGlyph, operands[1], operands[2]);
+        return true;
+    }
+
+    /// <summary>
+    /// A standard-encoding code as a glyph id: the code names a standard string, the charset says which
+    /// glyph carries that name.
+    /// </summary>
+    private bool TryGetGlyphIdForStandardCode(int code, out ushort glyphId)
+    {
+        glyphId = 0;
+        string? name = StandardEncodingName(code);
+        return name is not null && TryGetGlyphId(name, out glyphId);
+    }
+
+    private static string? StandardEncodingName(int code) =>
+        code >= 0 && code < PdfEncodings.Standard.Length ? PdfEncodings.Standard[code] : null;
+
+    /// <summary>
+    /// The operands of a trailing <c>endchar</c>, when it is the five-operand <c>seac</c> form. The
+    /// charstring is walked with the Type 2 grammar so that a hintmask's mask bytes are stepped over
+    /// rather than mistaken for numbers.
+    /// </summary>
+    private bool TryReadSeacOperands(CffIndex charStrings, int glyphId, out int[]? operands)
+    {
+        operands = null;
+        byte[] charString = charStrings.ReadItem(_program, glyphId);
+        var stack = new List<float>(8);
+        int[]? lastEndChar = null;
+
+        for (int i = 0; i < charString.Length;)
+        {
+            byte b = charString[i];
+            if (b == 28)
+            {
+                if (i + 2 >= charString.Length)
+                {
+                    return false;
+                }
+
+                stack.Add((short)((charString[i + 1] << 8) | charString[i + 2]));
+                i += 3;
+                continue;
+            }
+
+            if (b == 255)
+            {
+                if (i + 4 >= charString.Length)
+                {
+                    return false;
+                }
+
+                stack.Add((int)(uint)(charString[i + 1] << 24 | charString[i + 2] << 16 | charString[i + 3] << 8 | charString[i + 4]) / 65536f);
+                i += 5;
+                continue;
+            }
+
+            if (b is >= 32 and <= 246)
+            {
+                stack.Add(b - 139);
+                i++;
+                continue;
+            }
+
+            if (b is >= 247 and <= 250)
+            {
+                if (i + 1 >= charString.Length)
+                {
+                    return false;
+                }
+
+                stack.Add(((b - 247) * 256) + charString[i + 1] + 108);
+                i += 2;
+                continue;
+            }
+
+            if (b is >= 251 and <= 254)
+            {
+                if (i + 1 >= charString.Length)
+                {
+                    return false;
+                }
+
+                stack.Add(-((b - 251) * 256) - charString[i + 1] - 108);
+                i += 2;
+                continue;
+            }
+
+            // An operator. hintmask and cntrmask are followed by one bit per hint, so step over the mask.
+            int op = b;
+            i++;
+            if (op == 12)
+            {
+                if (i >= charString.Length)
+                {
+                    return false;
+                }
+
+                i++; // two-byte operator; none of them carries a seac
+            }
+            else if (op is 19 or 20)
+            {
+                i += (stack.Count + 7) / 8;
+            }
+            else if (op == 14)
+            {
+                lastEndChar = new int[stack.Count];
+                for (int k = 0; k < stack.Count; k++)
+                {
+                    lastEndChar[k] = (int)MathF.Round(stack[k]);
+                }
+            }
+
+            stack.Clear();
+        }
+
+        if (lastEndChar is not { Length: 5 })
+        {
+            return false;
+        }
+
+        operands = lastEndChar;
+        return true;
+    }
 
     /// <summary>
     /// Maps a character code through the program's own encoding. Subsetters that rename glyphs
@@ -154,6 +313,8 @@ public sealed class CffProgram : ICffMetrics
         int[] codeToGlyph = ReadEncoding(data, (int)dict.Get(16), charStrings.Count);
 
         program = new CffProgram(
+            data,
+            charStrings,
             charStrings.Count,
             matrix is { Length: >= 4 } ? ExpandMatrix(matrix) : DefaultFontMatrix,
             bbox is { Length: 4 } ? bbox : [0f, 0f, 0f, 0f],

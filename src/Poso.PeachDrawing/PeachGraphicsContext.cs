@@ -325,6 +325,7 @@ public sealed class PeachGraphicsContext : IGraphicsContext
         {
             if (!peachFont.TryGetOutline(glyph.GlyphId, out PeachOutlines.GlyphOutline? outline) || outline is null || outline.IsEmpty)
             {
+                AddSeac(_textClip, peachFont, glyph, scale, runMatrix);
                 continue;
             }
 
@@ -660,6 +661,7 @@ public sealed class PeachGraphicsContext : IGraphicsContext
         {
             if (!font.TryGetOutline(glyph.GlyphId, out PeachOutlines.GlyphOutline? outline) || outline is null || outline.IsEmpty)
             {
+                AddSeac(gp, font, glyph, designToEm);
                 continue;
             }
 
@@ -667,6 +669,48 @@ public sealed class PeachGraphicsContext : IGraphicsContext
         }
 
         return gp;
+    }
+
+    /// <summary>
+    /// A seac composite has no outline of its own, so it is drawn as its base plus its accent, the accent
+    /// shifted by the charstring's own offset. PeachDrawing does not expand these composites itself, which
+    /// left every accented glyph in a Type 1C font blank on this back end.
+    /// </summary>
+    private static void AddSeac(PeachCore.GraphicsPath gp, PeachFont font, in GlyphPosition glyph, double scale)
+    {
+        if (!font.TryGetSeacParts(glyph.GlyphId, out PeachOutlines.GlyphOutline? baseOutline,
+                out PeachOutlines.GlyphOutline? accentOutline, out float accentX, out float accentY) ||
+            baseOutline is null)
+        {
+            return;
+        }
+
+        AddOutline(gp, baseOutline, glyph.X, glyph.Y, scale);
+        if (accentOutline is not null && !accentOutline.IsEmpty)
+        {
+            // The offset is in design units, the same space the outline points are in.
+            float dx = (float)(accentX * scale);
+            float dy = (float)(accentY * scale);
+            AddOutline(gp, accentOutline, glyph.X + dx, glyph.Y + dy, scale);
+        }
+    }
+
+    private static void AddSeac(PeachCore.GraphicsPath gp, PeachFont font, in GlyphPosition glyph, double scale, in Matrix3x2 transform)
+    {
+        if (!font.TryGetSeacParts(glyph.GlyphId, out PeachOutlines.GlyphOutline? baseOutline,
+                out PeachOutlines.GlyphOutline? accentOutline, out float accentX, out float accentY) ||
+            baseOutline is null)
+        {
+            return;
+        }
+
+        AddOutline(gp, baseOutline, glyph.X, glyph.Y, scale, transform);
+        if (accentOutline is not null && !accentOutline.IsEmpty)
+        {
+            float dx = (float)(accentX * scale);
+            float dy = (float)(accentY * scale);
+            AddOutline(gp, accentOutline, glyph.X + dx, glyph.Y + dy, scale, transform);
+        }
     }
 
     private static void AddOutline(
