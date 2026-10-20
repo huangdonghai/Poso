@@ -2070,6 +2070,24 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// A 200x50 page drawing "ABC" with a WinAnsi TrueType font that embeds the given program, so a test can
+    /// hand over a subset with tables removed - pdf.js TrueType_without_cmap.pdf ships one with no /cmap.
+    /// </summary>
+    public static byte[] CreateTextWithFontProgramPdf(byte[] program)
+    {
+        string widths = string.Join(' ', Enumerable.Repeat("500", 95));
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 50] /Resources << /Font << /F1 4 0 R >> >> /Contents 8 0 R >>"),
+            new PdfObjectDefinition(4, "<< /Type /Font /Subtype /TrueType /BaseFont /LiberationSans /Encoding /WinAnsiEncoding /FirstChar 32 /LastChar 126 /Widths 5 0 R /FontDescriptor 6 0 R >>"),
+            new PdfObjectDefinition(5, $"[{widths}]"),
+            new PdfObjectDefinition(6, "<< /Type /FontDescriptor /FontName /LiberationSans /Flags 32 /FontBBox [0 -200 1000 800] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile2 7 0 R >>"),
+            Stream(7, string.Empty, program),
+            Stream(8, string.Empty, Encoding.ASCII.GetBytes("BT 10 20 TD /F1 20 Tf (ABC) Tj ET")));
+    }
+
+    /// <summary>
     /// A 100x100 page where a text object in render mode 4 (fill and clip) shows a single space - a glyph
     /// with no outline - and is followed by a full-page red fill. The text object still replaces the
     /// clipping path, and an empty clip paints nothing, so the page must stay white (the shape of pdf.js

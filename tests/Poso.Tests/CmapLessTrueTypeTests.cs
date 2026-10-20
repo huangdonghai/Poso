@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using Poso.Pdf;
 using Poso.PeachDrawing;
 using Xunit;
 
@@ -129,6 +130,46 @@ public class CmapLessTrueTypeTests
         {
             Assert.Equal(reference.GetAdvanceWidth(gid), width);
         }
+    }
+
+    /// <summary>
+    /// The other side of a missing /cmap: a SIMPLE font is addressed by character, so without a character-map
+    /// the back end loads the face, hands back ids it cannot rasterise, and the page paints nothing - the
+    /// defect in pdf.js TrueType_without_cmap.pdf. The core substitutes a face by the base font name, so text
+    /// stays visible, while the CID case above keeps its embedded program.
+    /// </summary>
+    [Fact]
+    public void SimpleFontWithoutCmap_PaintsWithASubstituteFace()
+    {
+        byte[] program = File.ReadAllBytes(FontFile("liberation-sans-regular.ttf"));
+        byte[] cmapLess = WithoutTables(program, ["cmap"]);
+        Assert.DoesNotContain("cmap", ReadDirectory(cmapLess).Select(e => e.Tag));
+
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateTextWithFontProgramPdf(cmapLess));
+
+        int ink = PaintedPixels(document);
+        Assert.True(ink > 0, "a simple font whose program has no cmap must still paint, through a substitute face");
+    }
+
+    private static int PaintedPixels(PdfDocument document)
+    {
+        Poso.Graphics.IGraphicsFactory factory = Poso.Skia.SkiaGraphicsFactory.Default;
+        using Poso.Graphics.IGraphicsContext context = factory.CreateContext(200, 50);
+        document.Pages[0].Render(factory, context, new PdfRenderOptions(1f, 0f, Poso.Graphics.PosoColor.White));
+        using Poso.Graphics.IImage image = context.Snapshot();
+
+        var pixels = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(pixels);
+        int ink = 0;
+        for (int i = 0; i < pixels.Length; i += 4)
+        {
+            if (pixels[i] < 250 || pixels[i + 1] < 250 || pixels[i + 2] < 250)
+            {
+                ink++;
+            }
+        }
+
+        return ink;
     }
 
     [Fact]

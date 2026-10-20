@@ -20,6 +20,15 @@ public interface IFont : IDisposable
     /// <summary>Unicode code point to glyph ID; returns 0 when not found.</summary>
     ushort GetGlyphId(uint codePoint);
 
+    /// <summary>
+    /// False when the face carries no character-map at all, so code points cannot be looked up and a simple
+    /// font addressed by character cannot be drawn from it - the caller should substitute a face rather
+    /// than paint nothing (pdf.js TrueType_without_cmap.pdf). CID/Identity-H fonts legitimately have no
+    /// cmap and address glyph ids directly, which is why callers decide on this flag rather than on the
+    /// missing table.
+    /// </summary>
+    bool MapsCodePointsToGlyphs => true;
+
     /// <summary>Glyph advance width (in em units).</summary>
     float GetAdvanceWidth(ushort glyphId);
 

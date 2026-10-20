@@ -141,7 +141,20 @@ public abstract class PdfFont
         }
 
         byte[]? data = EmbeddedFontData;
-        return Factory.CreateFont(data is null ? default : (ReadOnlySpan<byte>)data, BaseFontName);
+        IFont? face = Factory.CreateFont(data is null ? default : (ReadOnlySpan<byte>)data, BaseFontName);
+
+        // A simple font addresses its glyphs by character, so a program with no character-map cannot be
+        // drawn at all: the back end loads the face, hands back ids it then cannot rasterise, and the text
+        // paints nothing (pdf.js TrueType_without_cmap.pdf). Substitute a face by the base font name - a
+        // wrong glyph beats an invisible line. CID fonts are excluded: they address glyph ids directly and
+        // legitimately ship without a cmap.
+        if (face is { MapsCodePointsToGlyphs: false } && IsSimpleFont)
+        {
+            face.Dispose();
+            face = Factory.CreateFont(default, BaseFontName);
+        }
+
+        return face;
     }
 
     private byte[]? LoadEmbeddedFontData()

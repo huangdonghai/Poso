@@ -13,15 +13,20 @@ public sealed class SkiaFont : IFont
     // 0 for every code, so the text silently painted nothing.
     private readonly Dictionary<int, ushort>? _extraCmap;
 
+    // Whether the program actually carries a /cmap table: a simple font addressed by character cannot be
+    // drawn from a face without one, so the caller needs to know (pdf.js TrueType_without_cmap.pdf).
+    private readonly bool _hasCmapTable;
+
     // Unit font size (1f): advance widths are returned directly in em units
     private readonly SKFont _font;
 
-    private SkiaFont(SKTypeface typeface, bool usedFallback, Dictionary<int, ushort>? extraCmap = null)
+    private SkiaFont(SKTypeface typeface, bool usedFallback, Dictionary<int, ushort>? extraCmap = null, bool hasCmapTable = true)
     {
         _typeface = typeface;
         _font = new SKFont(typeface, 1f);
         UsedFallback = usedFallback;
         _extraCmap = extraCmap;
+        _hasCmapTable = hasCmapTable;
     }
 
     public static SkiaFont? Create(ReadOnlySpan<byte> fontData, string baseFontName)
@@ -36,7 +41,7 @@ public sealed class SkiaFont : IFont
                 // present but Skia cannot read it, ParseCmap supplies the missing mappings instead.
                 if (embedded.GlyphCount > 0)
                 {
-                    return new SkiaFont(embedded, usedFallback: false, ParseCmap(fontData));
+                    return new SkiaFont(embedded, usedFallback: false, ParseCmap(fontData), hasCmapTable: HasCmapTable(fontData));
                 }
 
                 embedded.Dispose();
@@ -85,6 +90,35 @@ public sealed class SkiaFont : IFont
         }
 
         return glyphId;
+    }
+
+    /// <inheritdoc />
+    public bool MapsCodePointsToGlyphs => _hasCmapTable;
+
+    /// <summary>Whether the program's table directory lists a /cmap table at all.</summary>
+    private static bool HasCmapTable(ReadOnlySpan<byte> font)
+    {
+        if (font.Length < 12)
+        {
+            return false;
+        }
+
+        int numTables = ReadU16(font, 4);
+        if (font.Length < 12 + (numTables * 16))
+        {
+            return false;
+        }
+
+        for (int i = 0; i < numTables; i++)
+        {
+            int record = 12 + (i * 16);
+            if (font[record] == 'c' && font[record + 1] == 'm' && font[record + 2] == 'a' && font[record + 3] == 'p')
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public float GetAdvanceWidth(ushort glyphId)
