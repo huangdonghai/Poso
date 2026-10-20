@@ -1996,6 +1996,24 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// A 100x100 yellow page with a form that declares a transparency group WITHOUT /I (so non-isolated,
+    /// the spec default) and knockout, whose content multiplies a cyan rectangle with what is beneath it.
+    /// A non-isolated group blends against the page, so the block must come out green - the shape of pdf.js
+    /// knockout_blend_multiply.pdf.
+    /// </summary>
+    public static byte[] CreateNonIsolatedBlendGroupPdf()
+    {
+        byte[] formContent = Encoding.ASCII.GetBytes("q /M gs 0 1 1 rg 20 20 60 60 re f Q");
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /XObject << /G1 5 0 R >> /ExtGState << /M 6 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes("1 1 0 rg 0 0 100 100 re f /G1 Do")),
+            Stream(5, "/Type /XObject /Subtype /Form /FormType 1 /BBox [0 0 100 100] /Resources << /ExtGState << /M 6 0 R >> >> /Group << /Type /Group /S /Transparency /CS /DeviceRGB /K true >>", formContent),
+            new PdfObjectDefinition(6, "<< /Type /ExtGState /BM /Multiply >>"));
+    }
+
+    /// <summary>
     /// A 100x100 page whose only mark is an ImageMask XObject drawn while the fill colour is a shading
     /// pattern: the mask is a stencil, so the gradient must show through only where its bits are set (the
     /// top-left quarter here) and the rest stays white - pdf.js issue13372.pdf draws a 646x761 bilevel mask

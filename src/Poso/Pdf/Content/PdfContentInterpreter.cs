@@ -2759,10 +2759,20 @@ public sealed class PdfContentInterpreter
             // mask inside lands at 25%: the group's own pixels carry the mask in force at Do, and the
             // content starts unmasked. A plain form is the opposite - the mask stays in the graphics state
             // and travels into the content, so the form's own /SMask /None can clear it there.
-            bool pushedLayer = IsTransparencyGroup(dictionary);
+            bool transparencyGroup = IsTransparencyGroup(dictionary);
+            byte groupAlpha = (byte)Math.Clamp((int)MathF.Round(_state.FillAlpha * 255f), 0, 255);
+
+            // A non-isolated group (/I false, the spec default) blends its elements against the page
+            // beneath, not against an empty buffer. MuPDF gets there by copying the destination into the
+            // group's buffer; for a group that is fully opaque the same result falls out of rendering the
+            // content inline, with no buffer to seed and no double composite. A group that carries opacity
+            // (or a soft mask) still has to composite as one unit at the boundary, so it keeps the layer -
+            // separating those cases is what pdf.js knockout_blend_multiply.pdf needs: its cyan rect inside a
+            // non-isolated group multiplies with the yellow page and must come out green.
+            bool pushedLayer = transparencyGroup &&
+                (groupAlpha < 255 || _state.SoftMask is not null || GroupIsIsolated(dictionary));
             if (pushedLayer)
             {
-                byte groupAlpha = (byte)Math.Clamp((int)MathF.Round(_state.FillAlpha * 255f), 0, 255);
                 IImage? groupMask = _state.SoftMask is { } mask ? SoftMaskImage(mask, _context.ClipBounds) : null;
                 _context.PushLayer(null, groupAlpha, _state.BlendMode, groupMask);
                 _state.FillAlpha = 1f;
@@ -2816,6 +2826,13 @@ public sealed class PdfContentInterpreter
         PdfDictionary? group = _document.Resolve(dictionary.Get("Group")) as PdfDictionary;
         return group is not null && group.GetNameValue("S") == "Transparency";
     }
+
+    /// <summary>
+    /// True when a form's transparency group is isolated (/I true). The spec default is false, and a
+    /// non-isolated group blends its elements against the page beneath it instead of an empty buffer.
+    /// </summary>
+    private bool GroupIsIsolated(PdfDictionary dictionary) =>
+        (_document.Resolve(dictionary.Get("Group")) as PdfDictionary)?.GetBooleanValue("I") ?? false;
 
     /// <summary>
     /// Renders an ExtGState <c>/SMask</c> group into the coverage image the back ends multiply an

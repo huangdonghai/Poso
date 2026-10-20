@@ -446,6 +446,30 @@ public class ContentRenderTests
         Assert.True(or > 240 && og > 240 && ob > 240, $"the clear mask columns must stay white (r={or} g={og} b={ob})");
     }
 
+    /// <summary>
+    /// A transparency group without /I is non-isolated (the spec default): its elements blend against the
+    /// page beneath, so a Multiply inside the group must mix with the yellow page and come out green rather
+    /// than landing on an empty buffer (pdf.js knockout_blend_multiply.pdf).
+    /// </summary>
+    [Fact]
+    public void NonIsolatedGroup_BlendsWithThePage()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateNonIsolatedBlendGroupPdf());
+        using IGraphicsContext context = Factory.CreateContext(100, 100);
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+
+        // Inside the multiplied block: cyan over yellow under Multiply is green.
+        (byte b, byte g, byte r, _) = PixelAt(pixels, image.Width, 50, 50);
+        Assert.True(g > 200 && r < 60 && b < 60, $"the group must blend with the page (r={r} g={g} b={b})");
+
+        // Outside it the page stays yellow.
+        (byte ob, byte og, byte or, _) = PixelAt(pixels, image.Width, 95, 5);
+        Assert.True(or > 240 && og > 240 && ob < 60, $"the page around the group must stay yellow (r={or} g={og} b={ob})");
+    }
+
     private static byte[] ReadPixels(IImage image)
     {
         byte[] pixels = new byte[image.Width * image.Height * image.BytesPerPixel];
