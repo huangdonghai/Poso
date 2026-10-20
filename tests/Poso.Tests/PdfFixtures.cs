@@ -2070,6 +2070,26 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// A 100x100 page that strokes a square while an ExtGState /SMask paints its luminosity group with
+    /// a named shading through the {@code sh} operator: the mask form carries /Matrix [50 0 0 100 0 0] over
+    /// a unit BBox and its whole content is "/Sh sh", so the black square must fade out towards the right
+    /// (the shape of pdf.js issue18529.pdf, where the mask comes out uniformly white and nothing fades).
+    /// </summary>
+    public static byte[] CreateShadingSoftMaskPdf()
+    {
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /ExtGState << /GS0 4 0 R >> >> /Contents 5 0 R >>"),
+            new PdfObjectDefinition(4, "<< /Type /ExtGState /ca 1 /CA 1 /SMask << /Type /Mask /S /Luminosity /G 6 0 R >> >>"),
+            Stream(5, string.Empty, Encoding.ASCII.GetBytes("1 0 0 -1 0 100 cm 2 w 0 0 0 RG /GS0 gs 5 5 90 90 re S")),
+            Stream(6, "/Type /XObject /Subtype /Form /FormType 1 /BBox [-0.05 0 1.05 1] /Matrix [50 0 0 100 0 0] /Group << /Type /Group /S /Transparency /CS /DeviceGray >> /Resources << /Shading << /Sh 7 0 R >> >>",
+                Encoding.ASCII.GetBytes("/Sh sh")),
+            new PdfObjectDefinition(7, "<< /ShadingType 2 /ColorSpace [/DeviceGray] /Coords [0 0 1 0] /Function 8 0 R /Extend [true true] >>"),
+            new PdfObjectDefinition(8, "<< /FunctionType 2 /Domain [0 1] /C0 [1] /C1 [0] /N 1 >>"));
+    }
+
+    /// <summary>
     /// A 200x50 page drawing "ABC" with a WinAnsi TrueType font that embeds the given program, so a test can
     /// hand over a subset with tables removed - pdf.js TrueType_without_cmap.pdf ships one with no /cmap.
     /// </summary>

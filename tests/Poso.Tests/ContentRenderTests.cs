@@ -522,6 +522,30 @@ public class ContentRenderTests
         Assert.True(or > 240 && og > 240 && ob > 240, $"the invisible glyph must not paint (r={or} g={og} b={ob})");
     }
 
+    /// <summary>
+    /// An ExtGState /SMask whose luminosity group paints a named shading with the {@code sh} operator must
+    /// really fade the element - for a stroked path as much as a filled one. pdf.js issue18529.pdf strokes a
+    /// square under exactly such a mask and comes out with no fade at all, uniformly full colour.
+    /// </summary>
+    [Fact]
+    public void ShadingSoftMask_FadesTheElement()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateShadingSoftMaskPdf());
+        using IGraphicsContext context = Factory.CreateContext(100, 100);
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+
+        // The top border sits at user y 95 -> device row 5. At x 10 the mask is still bright (the element
+        // stays dark); at x 90 the mask has run out (Extend keeps it black) and the stroke must be gone.
+        (byte lb, byte lg, byte lr, _) = PixelAt(pixels, image.Width, 5, 10);
+        (byte ob, byte og, byte or_, _) = PixelAt(pixels, image.Width, 5, 90);
+
+        Assert.True(lr < 80, $"under the bright end of the mask the stroke must stay dark (r={lr})");
+        Assert.True(or_ > 200, $"past the mask's span the stroke must be erased (left r={lr}, right r={or_})");
+    }
+
     private static byte[] ReadPixels(IImage image)
     {
         byte[] pixels = new byte[image.Width * image.Height * image.BytesPerPixel];
