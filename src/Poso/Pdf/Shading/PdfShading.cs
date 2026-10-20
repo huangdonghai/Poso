@@ -165,13 +165,9 @@ public sealed class PdfShading
                     matrixArray.GetNumber(5)?.AsFloat() ?? 0f);
             }
 
-            if (dictionary.GetArray("BBox") is { Count: >= 4 } boundsArray)
+            if (dictionary.GetArray("BBox") is { Count: >= 4 })
             {
-                functionShading._hasBounds = true;
-                functionShading._boundLeft = MathF.Min(boundsArray.GetNumber(0)?.AsFloat() ?? 0f, boundsArray.GetNumber(2)?.AsFloat() ?? 0f);
-                functionShading._boundBottom = MathF.Min(boundsArray.GetNumber(1)?.AsFloat() ?? 0f, boundsArray.GetNumber(3)?.AsFloat() ?? 0f);
-                functionShading._boundRight = MathF.Max(boundsArray.GetNumber(0)?.AsFloat() ?? 0f, boundsArray.GetNumber(2)?.AsFloat() ?? 0f);
-                functionShading._boundTop = MathF.Max(boundsArray.GetNumber(1)?.AsFloat() ?? 0f, boundsArray.GetNumber(3)?.AsFloat() ?? 0f);
+                functionShading.ReadBounds(dictionary);
             }
 
             return functionShading;
@@ -199,6 +195,11 @@ public sealed class PdfShading
 
         var shading = new PdfShading(type, function, domain, colorSpace, coords, radial);
 
+        // /BBox limits the painted region for axial and radial shadings too - it lives in the same space as
+        // /Coords. Reading it only for type 1 left pdf.js issue8092.pdf painting its gradient across the
+        // whole page instead of stopping at the declared box.
+        shading.ReadBounds(dictionary);
+
         PdfArray? extend = dictionary.GetArray("Extend");
         if (extend is not null)
         {
@@ -207,6 +208,21 @@ public sealed class PdfShading
         }
 
         return shading;
+    }
+
+    /// <summary>Reads /BBox - the region the shading paints - normalising the corner order.</summary>
+    private void ReadBounds(PdfDictionary dictionary)
+    {
+        if (dictionary.GetArray("BBox") is not { Count: >= 4 } boundsArray)
+        {
+            return;
+        }
+
+        _hasBounds = true;
+        _boundLeft = MathF.Min(boundsArray.GetNumber(0)?.AsFloat() ?? 0f, boundsArray.GetNumber(2)?.AsFloat() ?? 0f);
+        _boundBottom = MathF.Min(boundsArray.GetNumber(1)?.AsFloat() ?? 0f, boundsArray.GetNumber(3)?.AsFloat() ?? 0f);
+        _boundRight = MathF.Max(boundsArray.GetNumber(0)?.AsFloat() ?? 0f, boundsArray.GetNumber(2)?.AsFloat() ?? 0f);
+        _boundTop = MathF.Max(boundsArray.GetNumber(1)?.AsFloat() ?? 0f, boundsArray.GetNumber(3)?.AsFloat() ?? 0f);
     }
 
     /// <summary>
