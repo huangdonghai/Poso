@@ -3073,12 +3073,31 @@ public sealed class PdfContentInterpreter
             bool masked = CarriesOwnMask(image) ? false : BeginMaskedElement();
             try
             {
-                // Image XObjects are painted into the unit square in user space
-                _context.DrawImage(
-                    decoded,
-                    new RectF(0f, 0f, 1f, 1f),
-                    new RectF(0f, 0f, decoded.Width, decoded.Height),
-                    _state.FillAlpha);
+                // A bilevel image shown larger than its samples is a copy, not a resample - see below.
+                IImage? points = ExpandBilevelToDevice(image, decoded, out RectF pointsRegion);
+                if (points is not null)
+                {
+                    try
+                    {
+                        _context.Save();
+                        _context.SetMatrix(Matrix3x2.Identity);
+                        _context.DrawDeviceRaster(points, pointsRegion, _state.FillAlpha);
+                        _context.Restore();
+                    }
+                    finally
+                    {
+                        points.Dispose();
+                    }
+                }
+                else
+                {
+                    // Image XObjects are painted into the unit square in user space
+                    _context.DrawImage(
+                        decoded,
+                        new RectF(0f, 0f, 1f, 1f),
+                        new RectF(0f, 0f, decoded.Width, decoded.Height),
+                        _state.FillAlpha);
+                }
             }
             finally
             {
@@ -3092,6 +3111,77 @@ public sealed class PdfContentInterpreter
         {
             decoded.Dispose();
         }
+    }
+
+    /// <summary>
+    /// Expands a bilevel image onto the device grid with point (nearest-neighbour) sampling so a magnified
+    /// scan reaches the back end as a one-to-one copy. Filtering a magnified 1-bit bitmap turns every glyph
+    /// edge grey - pdf.js jbig2_symbol_offset.pdf shows a 132x14 bitmap over 1000x106 device pixels, and
+    /// every stroke came out smeared (1.49% of the page wrong) where MuPDF and PDFium keep it hard - and
+    /// the back ends cannot all be told to sample with point accuracy: PeachDrawing exposes no such knob,
+    /// so changing one back end alone would drive Skia and Peach apart. Doing the copy here keeps them
+    /// identical, and the same reason rules out any placement that is not axis aligned: a rotated or sheared
+    /// image never lands on whole pixels, so a resample is the honest answer there. Returns null for those,
+    /// for a visible area too large to hold, and for anything that is not bilevel, leaving the ordinary
+    /// image path in charge (which keeps filtering, what a minified photograph needs).
+    /// </summary>
+    private IImage? ExpandBilevelToDevice(PdfStream image, IImage decoded, out RectF region)
+    {
+        region = RectF.Empty;
+        if ((image.Dictionary.GetIntegerValue("BitsPerComponent") ?? 8) != 1 || decoded.BytesPerPixel != 4)
+        {
+            return null;
+        }
+
+        Matrix3x2 ctm = _state.Ctm;
+        if (ctm.M12 != 0f || ctm.M21 != 0f || ctm.M11 == 0f || ctm.M22 == 0f)
+        {
+            return null;
+        }
+
+        RectF placed = BoundingBoxOf(new RectF(0f, 0f, 1f, 1f), ctm);
+        if (placed.IsEmpty)
+        {
+            return null;
+        }
+
+        // Rounded outward to whole pixels, then cut to what is actually visible: the region is the only
+        // thing that needs memory, and a page-sized scan at scale 2 is a few megabytes.
+        float left = MathF.Floor(placed.Left);
+        float top = MathF.Floor(placed.Top);
+        RectF whole = RectF.FromLbrb(left, MathF.Floor(placed.Bottom), MathF.Ceiling(placed.Right), MathF.Ceiling(placed.Top));
+        RectF visible = whole.Intersect(_context.ClipBounds);
+        int columns = (int)visible.Width;
+        int rows = (int)visible.Height;
+        if (columns < 1 || rows < 1 || (long)columns * rows > 4_000_000L)
+        {
+            return null;
+        }
+
+        byte[] source = new byte[decoded.Width * decoded.Height * 4];
+        decoded.CopyPixels(source);
+        byte[] pixels = new byte[columns * rows * 4];
+
+        for (int row = 0; row < rows; row++)
+        {
+            // v = 1 is the image's first sample row, so the row index runs down from it.
+            float v = (visible.Top + row + 0.5f - ctm.M32) / ctm.M22;
+            int sourceRow = (int)Math.Clamp((long)Math.Floor((1f - v) * decoded.Height), 0, decoded.Height - 1L);
+            for (int column = 0; column < columns; column++)
+            {
+                float u = (visible.Left + column + 0.5f - ctm.M31) / ctm.M11;
+                int sourceColumn = (int)Math.Clamp((long)Math.Floor(u * decoded.Width), 0, decoded.Width - 1L);
+                int from = (sourceRow * decoded.Width + sourceColumn) * 4;
+                int to = (row * columns + column) * 4;
+                pixels[to] = source[from];
+                pixels[to + 1] = source[from + 1];
+                pixels[to + 2] = source[from + 2];
+                pixels[to + 3] = source[from + 3];
+            }
+        }
+
+        region = visible;
+        return _factory.CreateImage(columns, rows, decoded.Format, pixels);
     }
 
     /// <summary>

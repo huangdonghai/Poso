@@ -39,6 +39,68 @@ public class ImageDecoderTests
     }
 
     /// <summary>
+    /// A magnified image is a copy, not a resample. The interpreter paints an image XObject into the unit
+    /// square and lets the CTM do the scaling, so the sampling choice cannot be made by comparing the two
+    /// rectangles: measured that way a 132x14 scanned line shown over 1000x106 pixels looks like the
+    /// smallest blit in the document, and filtering it smeared the outline of every glyph
+    /// (pdf.js jbig2_symbol_offset.pdf) where MuPDF and PDFium keep it hard.
+    /// </summary>
+    [Fact]
+    public void MagnifiedOneBitImage_KeepsHardEdges()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateMagnifiedOneBitImagePdf());
+        using IGraphicsContext context = Factory.CreateContext(100, 100);
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        var px = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(px);
+
+        int black = ((60 * image.Width) + 10) * 4;
+        int white = ((60 * image.Width) + 90) * 4;
+        Assert.True(px[black] < 8 && px[black + 1] < 8 && px[black + 2] < 8, $"the black column must be black (r={px[black + 2]})");
+        Assert.True(px[white] > 247 && px[white + 1] > 247 && px[white + 2] > 247, $"the white column must be white (r={px[white + 2]})");
+
+        var midTones = new List<string>();
+        for (int y = 30; y < 70; y++)
+        {
+            for (int x = 0; x < image.Width; x++)
+            {
+                int i = ((y * image.Width) + x) * 4;
+                for (int c = 0; c < 3; c++)
+                {
+                    if (px[i + c] > 16 && px[i + c] < 239)
+                    {
+                        midTones.Add($"({x},{y})={px[i + c]}");
+                    }
+                }
+            }
+        }
+
+        Assert.True(midTones.Count == 0, $"a magnified bilevel image must not blend: {string.Join(' ', midTones.Take(8))}");
+    }
+
+    /// <summary>
+    /// The other side of the same rule: an image really scaled below its samples is a minification, and
+    /// averaging is what keeps an 8x8 checkerboard landing on two pixels from collapsing into pure squares.
+    /// </summary>
+    [Fact]
+    public void MinifiedImage_IsStillAveraged()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateMinifiedCheckerboardPdf());
+        using IGraphicsContext context = Factory.CreateContext(100, 100);
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        var px = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(px);
+
+        int middle = ((50 * image.Width) + 50) * 4;
+        Assert.True(px[middle] > 40 && px[middle] < 215,
+            $"a checkerboard shrunk to two pixels must average, not alias (value={px[middle]})");
+    }
+
+    /// <summary>
     /// An Indexed palette whose base is /Lab stores L*, a*, b* per entry, not RGB. Reading the three
     /// bytes as RGB turned pdf.js issue10339_reduced.pdf's blue Lab gradient brown; converting through
     /// Cielab keeps the colour.
