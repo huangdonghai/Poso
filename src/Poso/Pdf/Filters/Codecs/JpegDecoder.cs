@@ -398,9 +398,14 @@ public static class JpegDecoder
             return null;
         }
 
-        if (ss != 0 || se != 63 || ah != 0 || al != 0)
+        // Ss, Se, Ah and Al describe a progressive scan's spectral band and successive approximation, and
+        // this decoder only reads a whole block at a time from a sequential scan. A sequential scan is
+        // supposed to declare 0..63, but encoders write 0 in Se too - pdf.js issue12841_reduced.pdf does,
+        // and every lenient decoder reads its block anyway. Only a non-zero Ss or a non-zero Ah/Al says the
+        // data really needs the progressive path, which is already refused at the SOF marker.
+        if (ss != 0 || ah != 0 || al != 0)
         {
-            return null; // spectral selection / successive approximation / multi-scan not supported
+            return null;
         }
 
         // Validate Huffman tables are present for every component used.
