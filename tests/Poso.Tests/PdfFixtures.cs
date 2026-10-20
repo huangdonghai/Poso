@@ -2163,47 +2163,6 @@ public static class PdfFixtures
     }
 
     /// <summary>
-    /// A 100x100 page that magnifies a 4x2 one-bit image over a 100x50 band: two black columns and two
-    /// white ones. Showing a bilevel bitmap larger than its samples is a copy, not a resample - filtering
-    /// it blends the boundary into grey, which is how a scanned text line came out smeared while MuPDF and
-    /// PDFium keep the glyph edges hard.
-    /// </summary>
-    public static byte[] CreateMagnifiedOneBitImagePdf()
-    {
-        byte[] samples = [0x30, 0x30];
-        return Build(1,
-            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
-            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
-            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /XObject << /Im1 5 0 R >> >> /Contents 4 0 R >>"),
-            Stream(4, string.Empty, Encoding.ASCII.GetBytes("q 100 0 0 50 0 25 cm /Im1 Do Q")),
-            Stream(5, $"/Type /XObject /Subtype /Image /Width 4 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 1 /Length {samples.Length}", samples));
-    }
-
-    /// <summary>
-    /// An 8x8 RGB checkerboard shown at 2x2 device pixels - a real minification, where averaging is what
-    /// keeps a photograph scaled down from collapsing into scattered pure samples.
-    /// </summary>
-    public static byte[] CreateMinifiedCheckerboardPdf()
-    {
-        byte[] pixels = new byte[8 * 8 * 3];
-        for (int y = 0; y < 8; y++)
-        {
-            for (int x = 0; x < 8; x++)
-            {
-                int i = (y * 8 + x) * 3;
-                pixels[i] = pixels[i + 1] = pixels[i + 2] = (x + y) % 2 == 0 ? (byte)0 : (byte)255;
-            }
-        }
-
-        return Build(1,
-            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
-            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
-            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /XObject << /Im1 5 0 R >> >> /Contents 4 0 R >>"),
-            Stream(4, string.Empty, Encoding.ASCII.GetBytes("q 2 0 0 2 49 49 cm /Im1 Do Q")),
-            Stream(5, $"/Type /XObject /Subtype /Image /Width 8 /Height 8 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length {pixels.Length}", pixels));
-    }
-
-    /// <summary>
     /// A 200x50 page drawing "ABC" with a WinAnsi TrueType font that embeds the given program, so a test can
     /// hand over a subset with tables removed - pdf.js TrueType_without_cmap.pdf ships one with no /cmap.
     /// </summary>
