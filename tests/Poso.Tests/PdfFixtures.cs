@@ -1379,6 +1379,28 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// An annotation whose appearance fills itself through a PatternType 2 shading. The appearance's
+    /// coordinate system is its own - BBox [0 0 100 50] placed at Rect [400 25 500 75] on a 600-wide
+    /// page - and a shading pattern's /Matrix is measured from the content stream's default space, so
+    /// the placement has to be in force while the pattern is resolved. Without it the axis stays at the
+    /// page origin, the whole visible rectangle lands past its end, and the stamp reads one flat colour.
+    /// pdf.js issue7821.pdf is this shape.
+    /// </summary>
+    public static byte[] CreateAppearanceShadingPatternPdf() => Build(1,
+        new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+        new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+        new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 100] /Annots [6 0 R] "
+            + "/Resources << >> >>"),
+        Stream(5, "/Type /XObject /Subtype /Form /FormType 1 /BBox [0 0 100 50] "
+            + "/Resources << /Pattern << /P0 7 0 R >> >>",
+            Encoding.ASCII.GetBytes("/Pattern cs /P0 scn 0 0 100 50 re f")),
+        new PdfObjectDefinition(6, "<< /Type /Annot /Subtype /Square /Rect [400 25 500 75] "
+            + "/AP << /N 5 0 R >> >>"),
+        new PdfObjectDefinition(7, "<< /Type /Pattern /PatternType 2 /Shading 8 0 R /Matrix [1 0 0 1 0 0] >>"),
+        new PdfObjectDefinition(8, "<< /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 100 0] "
+            + "/Extend [true true] /Function << /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [0 0 1] /N 1 >> >>"));
+
+    /// <summary>
     /// A page that paints green, draws a form whose entire content is <c>1 0 0 1 0 0 cm q </c> - an
     /// unbalanced save, which real producers do emit - and then paints red over the left half. Both
     /// colours have to survive: the interpreter's own q/Q pairing sits under the page's transparency

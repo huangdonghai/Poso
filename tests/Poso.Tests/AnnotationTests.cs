@@ -81,6 +81,31 @@ public class AnnotationTests
         Assert.True(g > 200 && r < 90 && b < 90, $"the /Off appearance should paint green (r={r} g={g} b={b})");
     }
 
+    /// <summary>
+    /// A shading pattern inside an annotation appearance is placed in the appearance's own space, not
+    /// the page's. The appearance's BBox-to-Rect placement is what puts the pattern's axis where the
+    /// stamp is; without it the axis stays at the page origin and the whole stamp lands past its end,
+    /// so it reads a single flat colour. pdf.js issue7821.pdf is a stamp built this way, and losing the
+    /// placement took 38.7% of its pixels away from PDFium.
+    /// </summary>
+    [Fact]
+    public void AppearanceWithShadingPattern_KeepsItsGradientAcrossTheRect()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateAppearanceShadingPatternPdf());
+        using IGraphicsContext context = Factory.CreateContext(600, 100);
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] pixels = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(pixels);
+
+        // Rect [400 25 500 75] -> device rows 25..75, columns 400..500; the axis runs red -> blue across it.
+        (byte r0, byte g0, byte b0) = Sample(pixels, image.Width, 50, 405);
+        (byte r1, byte g1, byte b1) = Sample(pixels, image.Width, 50, 495);
+        Assert.True(r0 > 200 && b0 < 60, $"the axis start should stay red (r={r0} g={g0} b={b0})");
+        Assert.True(b1 > 200 && r1 < 60, $"the axis end should be blue (r={r1} g={g1} b={b1})");
+    }
+
     private static (byte R, byte G, byte B) Sample(byte[] pixels, int width, int y, int x)
     {
         int offset = ((y * width) + x) * 4;

@@ -428,14 +428,29 @@ public sealed class PdfContentInterpreter
             float sy = rect.Height / bbox.Height;
             Matrix3x2 toRect = new(sx, 0f, 0f, sy, rect.X - bbox.X * sx, rect.Y - bbox.Y * sy);
             Matrix3x2 ctm = toRect * _pageBaseMatrix;
+
+            // An appearance is a form, so its own coordinate system is the stream entry space - which is
+            // where a shading pattern's /Matrix is measured from (8.7.3.1 places it in the default space of
+            // the content stream). Leaving the page's entry matrix here drops the BBox-to-Rect placement:
+            // pdf.js issue7821.pdf fills its stamp through a PatternType 2 whose axis then lands entirely
+            // past the visible box, so the whole stamp came out one flat colour - the gradient's far stop.
+            Matrix3x2 outerEntry = _streamEntryMatrix;
+            _streamEntryMatrix = ctm;
             _state.Ctm = ctm;
             _context.SetMatrix(ctm);
             _state.FillAlpha *= opacity;
             _state.StrokeAlpha *= opacity;
             _context.ClipRect(bbox);
 
-            PdfDictionary? resources = _document.Resolve(appearance.Dictionary.Get("Resources")) as PdfDictionary;
-            ExecuteContent(appearance.Decode(_diag), resources);
+            try
+            {
+                PdfDictionary? resources = _document.Resolve(appearance.Dictionary.Get("Resources")) as PdfDictionary;
+                ExecuteContent(appearance.Decode(_diag), resources);
+            }
+            finally
+            {
+                _streamEntryMatrix = outerEntry;
+            }
         }
         finally
         {
