@@ -2361,6 +2361,9 @@ public sealed class PdfContentInterpreter
         PaintShading(shading, matrix, _streamEntryMatrix);
     }
 
+    /// <summary>Device pixels a shading raster may span on one side before it is split.</summary>
+    private const int ShadingTile = 1024;
+
     private void PaintShading(Shading.PdfShading shading, in Matrix3x2 shadingToUser, in Matrix3x2 userToDevice)
     {
         RectF clip = _context.ClipBounds;
@@ -2370,22 +2373,37 @@ public sealed class PdfContentInterpreter
         }
 
         Matrix3x2 shadingToDevice = shadingToUser * userToDevice;
-        IImage? image = shading.Rasterize(_factory, clip, shadingToDevice);
-        if (image is null)
-        {
-            return;
-        }
 
-        try
+        // A shading is rasterized one image per painted area, and the rasterizer refuses anything taller or
+        // wider than 8192 pixels - it would rather lose the shading than allocate it. A page-wide gradient
+        // on a large device surface reaches that: pdf.js issue14165.pdf is 1190.52 points across, so at 7x
+        // its 8334-pixel width went over and the striped gradient vanished from the page entirely while
+        // PDFium still drew it. Tiling the area keeps every raster small and the picture identical, because
+        // each tile samples the same shading-to-device transform and lands on its own device pixels.
+        for (float y = clip.Top; y < clip.Bottom; y += ShadingTile)
         {
-            _context.Save();
-            _context.SetMatrix(Matrix3x2.Identity);
-            _context.DrawDeviceRaster(image, clip, 1f);
-            _context.Restore();
-        }
-        finally
-        {
-            image.Dispose();
+            float tileHeight = Math.Min(ShadingTile, clip.Bottom - y);
+            for (float x = clip.Left; x < clip.Right; x += ShadingTile)
+            {
+                var tile = new RectF(x, y, Math.Min(ShadingTile, clip.Right - x), tileHeight);
+                IImage? image = shading.Rasterize(_factory, tile, shadingToDevice);
+                if (image is null)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    _context.Save();
+                    _context.SetMatrix(Matrix3x2.Identity);
+                    _context.DrawDeviceRaster(image, tile, 1f);
+                    _context.Restore();
+                }
+                finally
+                {
+                    image.Dispose();
+                }
+            }
         }
     }
 

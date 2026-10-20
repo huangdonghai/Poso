@@ -887,6 +887,21 @@ public static class PdfFixtures
             new PdfObjectDefinition(5, $"<< /Type /XObject /Subtype /Image /Width {width} /Height {height} /BitsPerComponent 8 /Filter /JPXDecode{alpha}{matteEntry} /Length {jpx.Length} >>", jpx));
     }
 
+    /// <summary>
+    /// A 1200x2 page painted by one <c>sh</c> axial shading that runs red to blue across its whole width.
+    /// At 7x that device surface is 8400 pixels across, past the size at which the rasterizer gives up on a
+    /// single image, so the shading has to be laid down in pieces - pdf.js issue14165.pdf is the same shape
+    /// and lost its gradient entirely at that zoom.
+    /// </summary>
+    public static byte[] CreateWideAxialShadingPdf() => Build(1,
+        new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+        new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+        new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 1200 2] "
+            + "/Resources << /Shading << /S1 5 0 R >> >> /Contents 4 0 R >>"),
+        Stream(4, string.Empty, Encoding.ASCII.GetBytes("q /S1 sh Q")),
+        new PdfObjectDefinition(5, "<< /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 1 1200 1] "
+            + "/Extend [true true] /Function << /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [0 0 1] /N 1 >> >>"));
+
     /// <summary>A document whose content stream is Flate compressed.</summary>
     public static byte[] CreateFlatePdf() => Build(1,
         new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),

@@ -34,6 +34,29 @@ public class ShadingTests
         Assert.True(middle > left && middle < right, $"Centre should be between the ends (left={left} mid={middle} right={right})");
     }
 
+    /// <summary>
+    /// A shading wider than the rasterizer will allocate in one image still paints. The raster is refused
+    /// above 8192 pixels a side, so a 1200-point page at 7x (8400 pixels) used to come out blank - the whole
+    /// gradient, not one band of it. pdf.js issue14165.pdf is 1190.52 points across and lost its stripes
+    /// this way at 7x and above, while PDFium kept drawing them.
+    /// </summary>
+    [Fact]
+    public void ShadingWiderThanTheRasterLimit_StillPaints()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateWideAxialShadingPdf());
+        using IGraphicsContext context = Factory.CreateContext(8400, 14);
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(7f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] pixels = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(pixels);
+
+        (byte b0, byte g0, byte r0) = At(pixels, image.Width, 7, 200);
+        (byte b1, byte g1, byte r1) = At(pixels, image.Width, 7, 8200);
+        Assert.True(r0 > 200 && b0 < 60, $"the axis start should be red (got R{r0} G{g0} B{b0})");
+        Assert.True(b1 > 200 && r1 < 60, $"the axis end should be blue (got R{r1} G{g1} B{b1})");
+    }
+
     [Fact]
     public void RadialShading_DarkensTowardCentre()
     {
