@@ -1966,7 +1966,7 @@ public sealed class PdfContentInterpreter
     private int? ResolveOptionalContentObject(PdfObject operand, PdfDictionary? resources)
     {
         PdfObject? value = operand;
-        if (operand is PdfName name && resources?.GetDictionary("Properties")?.Get(name.Value) is { } entry)
+        if (operand is PdfName name && (_document.Resolve(resources?.Get("Properties")) as PdfDictionary)?.Get(name.Value) is { } entry)
         {
             value = entry;
         }
@@ -2312,7 +2312,7 @@ public sealed class PdfContentInterpreter
         // The sh operator paints a named shading from Resources/Shading (mesh shadings are used this way).
         PdfObject? operand = operands.Count > 0 ? operands.Peek() : null;
         Shading.PdfShading? shading = null;
-        if (operand is PdfName name && resources?.GetDictionary("Shading")?.Get(name.Value) is { } entry)
+        if (operand is PdfName name && (_document.Resolve(resources?.Get("Shading")) as PdfDictionary)?.Get(name.Value) is { } entry)
         {
             shading = Shading.PdfShading.Create(_document, entry);
         }
@@ -3369,14 +3369,18 @@ public sealed class PdfContentInterpreter
 
     // ---- Helpers ----
 
-    private static PdfObject? ResolveResource(PdfDictionary? resources, string category, PdfName? name)
+    private PdfObject? ResolveResource(PdfDictionary? resources, string category, PdfName? name)
     {
         if (name is null || resources is null)
         {
             return null;
         }
 
-        return resources.GetDictionary(category)?.Get(name.Value);
+        // The category dictionary may itself sit behind an indirect reference (ISO 32000-1 7.3.1 lets any
+        // resource be direct or indirect): pdf.js issue18529.pdf writes /ExtGState 18 0 R, and a lookup
+        // accepting only an inline dictionary dropped every gs operator in the file - with the /SMask going
+        // unnoticed and its element painted at full strength instead of faded.
+        return (_document.Resolve(resources.Get(category)) as PdfDictionary)?.Get(name.Value);
     }
 
     private static float PopNumber(Stack<PdfObject> operands) =>

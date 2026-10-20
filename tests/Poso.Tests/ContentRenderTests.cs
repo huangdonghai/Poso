@@ -546,6 +546,62 @@ public class ContentRenderTests
         Assert.True(or_ > 200, $"past the mask's span the stroke must be erased (left r={lr}, right r={or_})");
     }
 
+    /// <summary>
+    /// Resource category dictionaries are allowed to sit behind indirect references, and operators that read
+    /// them have to resolve them: here /ExtGState does, so the gs really installs the luminosity mask, and
+    /// /Shading does, so the {@code sh} inside that mask's group really paints the fade.
+    /// </summary>
+    [Fact]
+    public void IndirectResourceCategories_StillFeedTheOperators()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateIndirectResourceCategoriesPdf());
+        using IGraphicsContext context = Factory.CreateContext(100, 100);
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+
+        // The mask is the shading stretched over x 0..50, white at its left end and black at its right, so
+        // along the top border (device row 5) the stroke has to be nearly black at x 10, half gone at x 25
+        // and entirely gone by x 90.
+        (byte lb, byte lg, byte lr, _) = PixelAt(pixels, image.Width, 5, 10);
+        (byte mb, byte mg, byte mr, _) = PixelAt(pixels, image.Width, 5, 25);
+        (byte ob, byte og, byte or_, _) = PixelAt(pixels, image.Width, 5, 90);
+
+        Assert.True(lr < 80 && lg < 80 && lb < 80, $"the stroke must survive under the bright mask (r={lr} g={lg} b={lb})");
+        Assert.True(mr > lr + 40 && or_ > mr + 40, $"the mask must fade the stroke across its span (x10 r={lr}, x25 r={mr}, x90 r={or_})");
+        Assert.True(or_ > 200, $"past the dark end of the mask the stroke must be erased (right r={or_})");
+    }
+
+    /// <summary>
+    /// The same shape as <see cref="ShadingSoftMask_FadesTheElement"/> with every number lifted out of
+    /// pdf.js issue18529.pdf: a 65x50 page whose /CS is the array form, a stroke of width 5 over a rect at
+    /// 10 10 45 30, and a mask form whose /Matrix [45 0 0 30 10 10] lands the shading exactly on the stroke
+    /// while its /BBox reaches past the unit square on both axes.
+    /// </summary>
+    [Theory]
+    [InlineData(1f)]
+    [InlineData(2f)]
+    public void ShadingSoftMask_ReplicaOfIssue18529_FadesTheStroke(float scale)
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateShadingSoftMaskStrokeReplicaPdf());
+        using IGraphicsContext context = Factory.CreateContext((int)(65 * scale), (int)(50 * scale));
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(scale, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+
+        // The top border of the stroked rect sits at page y 37.5..42.5 -> the row at page y 40; the mask is
+        // the shading stretched over x 10..55, white at its left end and black at its right. The stroke is
+        // red, so the green channel says whether it survived: low where painted, high where erased.
+        int row = (int)Math.Round((50 - 40f) * scale);
+        (byte _, byte lg, byte _, _) = PixelAt(pixels, image.Width, row, (int)(12 * scale));
+        (byte _, byte rg, byte _, _) = PixelAt(pixels, image.Width, row, (int)(52 * scale));
+
+        Assert.True(lg < 80, $"near the bright end of the mask the red stroke must survive (scale={scale} g={lg})");
+        Assert.True(rg > 200, $"near the dark end the stroke must be erased (scale={scale} left g={lg}, right g={rg})");
+    }
+
     private static byte[] ReadPixels(IImage image)
     {
         byte[] pixels = new byte[image.Width * image.Height * image.BytesPerPixel];

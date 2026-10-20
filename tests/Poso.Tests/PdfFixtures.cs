@@ -2090,6 +2090,54 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// The same soft-masked stroke as <see cref="CreateShadingSoftMaskPdf"/> with both resource category
+    /// dictionaries moved behind indirect references - /ExtGState 9 0 R and /Shading 11 0 R - which
+    /// ISO 32000-1 7.3.1 allows for any resource and pdf.js issue18529.pdf does exactly. A lookup that only
+    /// accepts the inline form finds neither the gs (so no soft mask, the stroke stays full strength) nor
+    /// the shading (so the mask paints nothing and the stroke disappears entirely).
+    /// </summary>
+    public static byte[] CreateIndirectResourceCategoriesPdf()
+    {
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources 9 0 R /Contents 5 0 R >>"),
+            new PdfObjectDefinition(4, "<< /Type /ExtGState /ca 1 /CA 1 /SMask << /Type /Mask /S /Luminosity /G 6 0 R >> >>"),
+            Stream(5, string.Empty, Encoding.ASCII.GetBytes("2 w 0 0 0 RG /GS0 gs 5 90 90 5 re S")),
+            Stream(6, "/Type /XObject /Subtype /Form /FormType 1 /BBox [-0.05 0 1.05 1] /Matrix [50 0 0 100 0 0] " +
+                "/Group << /Type /Group /S /Transparency /CS /DeviceGray >> /Resources << /Shading 11 0 R >>",
+                Encoding.ASCII.GetBytes("/Sh sh")),
+            new PdfObjectDefinition(7, "<< /ShadingType 2 /ColorSpace [/DeviceGray] /Coords [0 0 1 0] /Function 8 0 R /Extend [true true] >>"),
+            new PdfObjectDefinition(8, "<< /FunctionType 2 /Domain [0 1] /C0 [1] /C1 [0] /N 1 >>"),
+            new PdfObjectDefinition(9, "<< /ExtGState 10 0 R >>"),
+            new PdfObjectDefinition(10, "<< /GS0 4 0 R >>"),
+            new PdfObjectDefinition(11, "<< /Sh 7 0 R >>"));
+    }
+
+    /// <summary>
+    /// issue18529.pdf reproduced number for number: a 65x50 page that strokes a 45x30 rectangle under a
+    /// luminosity /SMask whose group is a form with /Matrix [45 0 0 30 10 10], a BBox reaching past the unit
+    /// square on both axes, a /Group whose CS is the array form, and content that is only "/Sh sh" over an
+    /// extended DeviceGray axial shading. The stroke has to fade out left to right.
+    /// </summary>
+    public static byte[] CreateShadingSoftMaskStrokeReplicaPdf()
+    {
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 65 50] /Resources << /ExtGState << /Gs0 4 0 R >> >> /Contents 5 0 R /Group << /Type /Group /S /Transparency /CS [/DeviceRGB] >> >>"),
+            new PdfObjectDefinition(4, "<< /Type /ExtGState /ca 1 /CA 1 /SMask << /Type /Mask /S /Luminosity /G 6 0 R >> >>"),
+            Stream(5, string.Empty, Encoding.ASCII.GetBytes("1 0 0 -1 0 50 cm\n5 w\n1 0 0 RG\n1 1 1 rg\n/Gs0 gs\n10 10 45 30 re\nS")),
+            Stream(6, "/Type /XObject /Subtype /Form /Length 8 /Matrix [45 0 0 30 10 10] " +
+                "/BBox [-.05555556 -.08333333 1.0555556 1.0833334] " +
+                "/Group << /Type /Group /S /Transparency /CS [/DeviceGray] >> " +
+                "/Resources << /Shading << /Sh 7 0 R >> >>",
+                Encoding.ASCII.GetBytes("/Sh sh")),
+            new PdfObjectDefinition(7, "<< /ShadingType 2 /ColorSpace [/DeviceGray] /AntiAlias true /Function 8 0 R /Coords [0 0 1 0] /Extend [true true] >>"),
+            new PdfObjectDefinition(8, "<< /FunctionType 2 /Range [0 1] /C0 [1] /C1 [0] /Domain [0 1] /N 1 >>"));
+    }
+
+    /// <summary>
     /// A 200x50 page drawing "ABC" with a WinAnsi TrueType font that embeds the given program, so a test can
     /// hand over a subset with tables removed - pdf.js TrueType_without_cmap.pdf ships one with no /cmap.
     /// </summary>
