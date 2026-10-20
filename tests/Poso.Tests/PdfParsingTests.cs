@@ -73,6 +73,22 @@ public class PdfParsingTests
     }
 
     /// <summary>
+    /// An entry that names the wrong object is not trusted. The page it describes parses - as a different
+    /// object - so the reader cannot tell from the entry alone; the object names itself, and the table is
+    /// rebuilt from the file when they disagree. pdf.js issue7229.pdf loses a whole page without that:
+    /// its first subsection starts at object 1 where the file's objects start at 0.
+    /// </summary>
+    [Fact]
+    public void Open_ShiftedXrefEntry_RebuildsTheTableAndKeepsThePage()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateShiftedXrefPdf());
+
+        Assert.Equal(2, document.Pages.Count);
+        Assert.Equal(200f, document.Pages[0].Width);
+        Assert.Equal(100f, document.Pages[0].Height);
+    }
+
+    /// <summary>
     /// A /Kids chain that closes on itself costs the branch that closes it and nothing else: MuPDF's
     /// reader shows every page it reached before the cycle, and walking the cycle regardless cannot even
     /// be reported - a stack overflow ends the process.

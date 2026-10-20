@@ -247,6 +247,17 @@ public sealed class PdfXref
                     return null;
                 }
 
+                // A subsection may declare more entries than it lists. pdf.js issue7229.pdf is one: its
+                // first table says "1 7" and then writes six entries before /trailer, because the repaired
+                // objects were appended instead of the table being rewritten. Reading the trailer as an
+                // offset fails the whole section, which loses every object it covers - for that file the
+                // page 3 0 R itself. Stopping here keeps the entries that are there, and the caller's loop
+                // then finds the trailer where it stands.
+                if (lexer.PeekKind() == PdfTokenKind.Keyword)
+                {
+                    break;
+                }
+
                 var offsetToken = lexer.NextToken();
                 var generationToken = lexer.NextToken();
                 var typeToken = lexer.NextToken();
@@ -438,6 +449,13 @@ public sealed class PdfXref
             }
         }
     }
+
+    /// <summary>
+    /// Rebuilds the table from the file's own <c>N G obj</c> headers. Exposed for the object reader, which
+    /// reaches for it when an entry does not describe the object it claims - a table can be shifted, and
+    /// then every lookup parses the wrong object rather than failing outright.
+    /// </summary>
+    internal void Repair(byte[] data) => RebuildByScanning(data);
 
     private void RebuildByScanning(byte[] data)
     {

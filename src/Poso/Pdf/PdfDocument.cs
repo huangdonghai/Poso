@@ -640,16 +640,19 @@ public sealed class PdfDocument : IDisposable
 
             if (entry is not null)
             {
-                switch (entry.Value.Type)
-                {
-                    case PdfXrefEntryType.InFile:
-                        var parser = new PdfParser(_buffer, (int)entry.Value.Offset) { Resolver = Resolve, Encryption = _encryption };
-                        result = parser.TryParseIndirectObject()?.Object;
-                        break;
+                result = ReadAt(xref, entry.Value, objectNumber, out bool shifted);
 
-                    case PdfXrefEntryType.InObjectStream:
-                        result = xref.GetObjectStreamObject(entry.Value.StreamObjectNumber, objectNumber, Resolve);
-                        break;
+                // A table can be shifted: pdf.js issue7229.pdf's first subsection declares that it starts
+                // at object 1 where the file's objects start at 0, so every entry lands one object high and
+                // 3 0 R reads the body stored as "2 0 obj". No reader can tell that from the entry alone,
+                // but the object it parsed names itself, and the scan below is what the other readers fall
+                // back to. Once only - a rebuilt table that still disagrees means the file is beyond repair,
+                // not that the rebuild should run again.
+                if (shifted && !xref.WasRebuilt)
+                {
+                    xref.Repair(_buffer);
+                    PdfXrefEntry? repaired = xref.GetEntry(objectNumber, generation);
+                    result = repaired is null ? null : ReadAt(xref, repaired.Value, objectNumber, out _);
                 }
             }
 
@@ -659,6 +662,35 @@ public sealed class PdfDocument : IDisposable
             }
 
             return result;
+        }
+    }
+
+    /// <summary>
+    /// Reads one object through its cross-reference entry. <paramref name="shifted"/> reports that the
+    /// object at the entry's offset names a different object number, which is what a shifted table looks
+    /// like from here - the parse itself succeeded, just not for the object that was asked for.
+    /// </summary>
+    private PdfObject? ReadAt(PdfXref xref, PdfXrefEntry entry, int objectNumber, out bool shifted)
+    {
+        shifted = false;
+        switch (entry.Type)
+        {
+            case PdfXrefEntryType.InFile:
+                var parser = new PdfParser(_buffer, (int)entry.Offset) { Resolver = Resolve, Encryption = _encryption };
+                var parsed = parser.TryParseIndirectObject();
+                if (parsed is { } indirect && indirect.Reference.ObjectNumber != objectNumber)
+                {
+                    shifted = true;
+                    return null;
+                }
+
+                return parsed?.Object;
+
+            case PdfXrefEntryType.InObjectStream:
+                return xref.GetObjectStreamObject(entry.StreamObjectNumber, objectNumber, Resolve);
+
+            default:
+                return null;
         }
     }
 

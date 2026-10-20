@@ -290,6 +290,34 @@ public static class PdfFixtures
         Stream(6, string.Empty, Encoding.ASCII.GetBytes("0 0 1 rg 10 10 50 50 re f")));
 
     /// <summary>
+    /// The table names the wrong object for a page: object 3's entry carries object 2's offset, so reading
+    /// <c>3 0 R</c> parses the node stored as <c>2 0 obj</c>. pdf.js issue7229.pdf has exactly this shape -
+    /// its first subsection declares that it starts at object 1 where the file's objects start at 0, which
+    /// shifts every entry one object - and the page it loses is gone from the document entirely. An entry
+    /// can only be caught by the object naming itself, and the repair is the scan.
+    /// </summary>
+    public static byte[] CreateShiftedXrefPdf()
+    {
+        byte[] wellFormed = CreateSimplePdf();
+        string text = Encoding.ASCII.GetString(wellFormed);
+        // "startxref\n" also contains "xref\n", so anchor on the line break in front of it.
+        int table = text.LastIndexOf("\nxref\n", StringComparison.Ordinal);
+        if (table < 0)
+        {
+            throw new InvalidOperationException("the fixture drifted");
+        }
+
+        string[] lines = text[(table + 1)..].Split('\n');
+        if (!lines[5].EndsWith(" n ", StringComparison.Ordinal) || !lines[4].EndsWith(" n ", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("the fixture drifted");
+        }
+
+        lines[5] = lines[4]; // object 3 borrows object 2's offset
+        return Encoding.ASCII.GetBytes(text[..(table + 1)] + string.Join('\n', lines));
+    }
+
+    /// <summary>
     /// A drawing test page (200x100): a filled rectangle, a stroked line and text using a
     /// simple Type1 font with WinAnsiEncoding.
     /// </summary>
