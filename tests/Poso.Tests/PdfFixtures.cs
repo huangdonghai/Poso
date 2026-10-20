@@ -1680,6 +1680,29 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// The same two layers, written the way pdf.js issue269_2.pdf writes them: the /OFF list is an indirect
+    /// reference to its own array, and the marked content names a membership dictionary instead of a layer.
+    /// Both have to be looked through - reading /OFF as a literal array leaves it empty and every layer on,
+    /// and looking a membership dictionary up as if it were a layer answers that it is not in /OFF, so the
+    /// off layer paints over the on one.
+    /// </summary>
+    public static byte[] CreateOcgIndirectOffPdf()
+    {
+        string content = "/OC /P0 BDC\n1 0 0 rg 10 10 60 60 re f\nEMC\n/OC /P1 BDC\n0 0 1 rg 120 10 60 60 re f\nEMC";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R "
+                + "/OCProperties << /OCGs [6 0 R 7 0 R] /D << /OFF 8 0 R >> >> >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] "
+                + "/Resources << /Properties << /P0 6 0 R /P1 9 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            new PdfObjectDefinition(6, "<< /Type /OCG /Name (Red) >>"),
+            new PdfObjectDefinition(7, "<< /Type /OCG /Name (Blue) >>"),
+            new PdfObjectDefinition(8, "[7 0 R]"),
+            new PdfObjectDefinition(9, "<< /Type /OCMD /OCGs [7 0 R] >>"));
+    }
+
+    /// <summary>
     /// A page filling a rectangle with a /Lab color space color (L=60, a=60, b=-60; D65 white point),
     /// exercising the CIELAB -> sRGB conversion.
     /// </summary>

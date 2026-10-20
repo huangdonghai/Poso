@@ -55,6 +55,20 @@ public class OptionalContentTests
             $"the form in an off optional-content group must not paint (got r={r} g={g} b={b})");
     }
 
+    /// <summary>
+    /// A /OFF list behind an indirect reference, and marked content that names a membership dictionary
+    /// rather than a layer. pdf.js issue269_2.pdf is written that way, and both readings cost it the whole
+    /// page: the list came back empty, so every layer was on, and the off layer's 0.2 gray cover painted
+    /// over the photograph that is on (27.8% of the page against PDFium).
+    /// </summary>
+    [Fact]
+    public void IndirectOffListAndMembershipDictionary_HideTheLayer()
+    {
+        (bool red, bool blue) = Render(PdfFixtures.CreateOcgIndirectOffPdf(), toggle: null);
+        Assert.True(red, "the ON layer should render");
+        Assert.False(blue, "the OFF layer, named through a membership dictionary, should be hidden");
+    }
+
     // Renders and reports whether the Red (user ~40,40) and Blue (user ~150,40) samples are painted.
     private static (bool Red, bool Blue) Render(byte[] pdf, System.Action<PdfDocument>? toggle)
     {

@@ -1895,8 +1895,8 @@ public sealed class PdfContentInterpreter
     {
         foreach (PdfObject operand in operands.ToArray())
         {
-            int? objectNumber = ResolveOptionalContentObject(operand, resources);
-            if (objectNumber is { } number && !_document.IsOptionalContentGroupVisible(number))
+            PdfObject? oc = ResolveOptionalContent(operand, resources);
+            if (oc is not null && !OptionalContentVisible(oc))
             {
                 return true;
             }
@@ -1918,8 +1918,25 @@ public sealed class PdfContentInterpreter
 
     private bool OptionalContentVisible(PdfObject oc)
     {
-        if (_document.Resolve(oc) is PdfDictionary dictionary && dictionary.GetNameValue("Type") == "OCMD")
+        // A marked-content property is often an inline dictionary that has nothing to do with layers at
+        // all - "/Span << /ActualText (...) >> BDC" and the artifact properties are everywhere - so only a
+        // membership dictionary is evaluated. Anything else carries no layer that could be off.
+        if (_document.Resolve(oc) is PdfDictionary dictionary)
         {
+            switch (dictionary.GetNameValue("Type"))
+            {
+                case "OCG":
+                    // A direct OCG dictionary carries no object number to look up, so nothing can have
+                    // turned it off; an indirect one is the layer itself.
+                    return oc is not PdfIndirectRef group || _document.IsOptionalContentGroupVisible(group.ObjectNumber);
+                case "OCMD":
+                    break;
+                default:
+                    // A marked-content property is often an inline dictionary with nothing to do with
+                    // layers - "/Span << /ActualText (...) >> BDC" is everywhere - so it is not hidden.
+                    return true;
+            }
+
             var groups = new List<int>();
             CollectOcgNumbers(dictionary.Get("OCGs"), groups);
             if (groups.Count == 0)
@@ -1978,7 +1995,14 @@ public sealed class PdfContentInterpreter
         }
     }
 
-    private int? ResolveOptionalContentObject(PdfObject operand, PdfDictionary? resources)
+    /// <summary>
+    /// The OCG or membership dictionary a marked-content <c>/OC</c> operand names: the operand itself, or,
+    /// when it is a name, the entry in the resource dictionary's /Properties. A membership dictionary has
+    /// to be evaluated rather than looked up as a group - pdf.js issue269_2.pdf wraps every layer in an
+    /// /OCMD, and asking whether "object 106 is in /OFF" answered yes for all of them, so the layers that
+    /// are off painted over the photograph that is on.
+    /// </summary>
+    private PdfObject? ResolveOptionalContent(PdfObject operand, PdfDictionary? resources)
     {
         PdfObject? value = operand;
         if (operand is PdfName name && (_document.Resolve(resources?.Get("Properties")) as PdfDictionary)?.Get(name.Value) is { } entry)
@@ -1986,32 +2010,7 @@ public sealed class PdfContentInterpreter
             value = entry;
         }
 
-        if (value is PdfIndirectRef reference)
-        {
-            if (_document.Resolve(value) is PdfDictionary dictionary)
-            {
-                if (dictionary.GetNameValue("Type") is "OCG" or "OCMD")
-                {
-                    return reference.ObjectNumber;
-                }
-
-                if (dictionary.Get("OC") is PdfIndirectRef inner)
-                {
-                    return inner.ObjectNumber;
-                }
-
-                return null;
-            }
-
-            return reference.ObjectNumber;
-        }
-
-        if (value is PdfDictionary direct && direct.Get("OC") is PdfIndirectRef directRef)
-        {
-            return directRef.ObjectNumber;
-        }
-
-        return null;
+        return value is PdfIndirectRef or PdfDictionary ? value : null;
     }
 
     // ---- Color spaces ----

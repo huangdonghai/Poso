@@ -231,13 +231,17 @@ public sealed class PdfDocument : IDisposable
             return;
         }
 
-        if (defaults.GetArray("ON") is { } on)
+        // /ON and /OFF are arrays of references, and they may themselves be indirect - pdf.js
+        // issue269_2.pdf writes "/OFF 60 0 R" with the list in a separate object. Reading the value as an
+        // array without resolving it leaves both lists empty, which makes every group visible: that file's
+        // "Cover Black Squares" layer, which is off, painted its 0.2 gray over the photograph.
+        if (Resolve(defaults.Get("ON")) is PdfArray on)
         {
             _ocgOnExplicit = true;
             CollectObjectNumbers(on, _ocgOn);
         }
 
-        if (defaults.GetArray("OFF") is { } off)
+        if (Resolve(defaults.Get("OFF")) is PdfArray off)
         {
             CollectObjectNumbers(off, _ocgOff);
         }
