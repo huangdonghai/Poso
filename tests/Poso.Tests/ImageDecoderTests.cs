@@ -60,6 +60,30 @@ public class ImageDecoderTests
     }
 
     /// <summary>
+    /// CIELab in PDF is measured against the D50 illuminant, sRGB against D65, so the two whites have to be
+    /// brought together before the primaries are applied. Multiplying XYZ by the file's white point and then
+    /// using the plain D65 matrix made the declared white itself come out yellow - pdf.js
+    /// issue10339_reduced.pdf lost 68.6% of its pixels that way, a pale blue turning to (21,120,147) where
+    /// MuPDF and PDFium both paint (0,121,169).
+    /// </summary>
+    [Fact]
+    public void IndexedLabPalette_RendersItsOwnWhiteAsWhite()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateIndexedLabWhitePointPdf());
+        using IGraphicsContext context = Factory.CreateContext(100, 100);
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        var pixels = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(pixels);
+        int offset = ((10 * image.Width) + 10) * image.BytesPerPixel;
+        (byte b, byte g, byte r) = (pixels[offset], pixels[offset + 1], pixels[offset + 2]);
+
+        Assert.True(r > 200 && g > 200 && b > 200, $"L*=100, a=0, b=0 must be bright (r={r} g={g} b={b})");
+        Assert.True(Math.Abs(r - b) <= 6, $"the palette's own white must not take a colour cast (r={r} g={g} b={b})");
+    }
+
+    /// <summary>
     /// The single white-space after an inline image's ID is a separator, not data; the data here itself
     /// contains the byte pair "EI" (not preceded by white space, so not the terminator). Treating the
     /// separator as data shifted the samples one byte and decoded the wrong colour.

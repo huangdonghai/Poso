@@ -2330,6 +2330,20 @@ public static class PdfFixtures
         new PdfObjectDefinition(5, "<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /BitsPerComponent 8 /ColorSpace [/Indexed [/Lab <</WhitePoint[0.9505 1 1.089]/Range[-128 127 -128 127]>>] 1 <FF808080D0BC>] /Length 4 >>", new byte[] { 1, 1, 1, 1 }));
 
     /// <summary>
+    /// The Lab palette of <see cref="CreateIndexedLabImagePdf"/> shown with both of its entries: index 0 is
+    /// L*=100, a=0, b=0 - the reference white itself - declared against the D50 illuminant PDF defines
+    /// CIELab on. A conversion that treats that white as if it were the output's own paints it yellow.
+    /// </summary>
+    public static byte[] CreateIndexedLabWhitePointPdf() => Build(1,
+        new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+        new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+        new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /XObject << /Im1 5 0 R >> >> /Contents 4 0 R >>"),
+        Stream(4, string.Empty, Encoding.ASCII.GetBytes("q 100 0 0 100 0 0 cm /Im1 Do Q")),
+        new PdfObjectDefinition(5, "<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /BitsPerComponent 8 "
+            + "/ColorSpace [/Indexed [/Lab <</WhitePoint[0.9642 1 0.8249]/Range[-128 127 -128 127]>>] 1 <FF808080D0BC>] "
+            + "/Length 4 >>", new byte[] { 0, 0, 0, 1 }));
+
+    /// <summary>
     /// A 100x100 page that draws one form which paints the page red. The form carries its own /OC - an OCMD
     /// whose single OCG is switched off by /OCProperties /D /OFF - so the form must not paint at all. An
     /// XObject-level /OC that is ignored buries the page under the form's content: pdf.js
