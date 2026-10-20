@@ -498,6 +498,30 @@ public class ContentRenderTests
         Assert.True(ink == 0, $"an empty text clip must leave the page white, got {ink} dark pixels");
     }
 
+    /// <summary>
+    /// A Type3 glyph paints by running its procedure, so a text rendering mode of 3 (invisible) or 7 has to
+    /// stop that run - the advance still applies, nothing is drawn (ISO 32000-2 9.3.6). pdf.js
+    /// issue5421.pdf's "3 Tr" line rendered because the procedure executed whatever the mode said.
+    /// </summary>
+    [Fact]
+    public void Type3Glyph_RespectsInvisibleRenderMode()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateType3InvisibleTextPdf());
+        using IGraphicsContext context = Factory.CreateContext(100, 100);
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+
+        // The Tr 0 copy at user (10,10) covers x 10..58, y 10..58; sample its middle (device row 70).
+        (byte b, byte g, byte r, _) = PixelAt(pixels, image.Width, 70, 30);
+        Assert.True(r < 80 && g < 80 && b < 80, $"the Tr 0 glyph must paint (r={r} g={g} b={b})");
+
+        // The Tr 3 copy at user (60,60) would cover x 60..100, y 60..100; sample it (device row 20, col 80).
+        (byte ob, byte og, byte or, _) = PixelAt(pixels, image.Width, 20, 80);
+        Assert.True(or > 240 && og > 240 && ob > 240, $"the invisible glyph must not paint (r={or} g={og} b={ob})");
+    }
+
     private static byte[] ReadPixels(IImage image)
     {
         byte[] pixels = new byte[image.Width * image.Height * image.BytesPerPixel];

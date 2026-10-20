@@ -1849,6 +1849,23 @@ public static class PdfFixtures
             new PdfObjectDefinition(8, "[/Pattern /DeviceRGB]"));
 
     /// <summary>
+    /// A 100x100 page with the same Type3 glyph shown twice: once under Tr 0 (fill) and once under Tr 3
+    /// (invisible). A Type3 glyph paints by running its own content stream, so the render mode has to gate
+    /// that run - pdf.js issue5421.pdf showed its "3 Tr" line because the procedure executed anyway.
+    /// </summary>
+    public static byte[] CreateType3InvisibleTextPdf()
+    {
+        byte[] glyph = Encoding.ASCII.GetBytes("800 0 0 0 800 800 d0\n0 0 0 rg\n0 0 m 800 0 l 800 800 l 0 800 l h f");
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes("BT 0 Tr /F1 60 Tf 10 10 Td (A) Tj ET BT 3 Tr /F1 60 Tf 60 60 Td (A) Tj ET")),
+            new PdfObjectDefinition(5, "<< /Type /Font /Subtype /Type3 /FontMatrix [.001 0 0 .001 0 0] /FirstChar 65 /LastChar 65 /Widths [800] /Encoding << /Type /Encoding /Differences [65 /A] >> /CharProcs << /A 6 0 R >> >>"),
+            Stream(6, string.Empty, glyph));
+    }
+
+    /// <summary>
     /// A 100x100 page with one ShadingType 5 lattice whose vertices are 32 bits per coordinate
     /// (pdf.js personwithdog.pdf declares BitsPerCoordinate 32). Reading a 32-bit coordinate through the
     /// int-returning bit reader overflows to a negative value, the mesh lands off-page and the page stays

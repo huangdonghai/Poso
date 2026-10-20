@@ -1501,8 +1501,20 @@ public sealed class PdfContentInterpreter
 
             if (font is Type3PdfFont type3Font)
             {
-                // Type3 glyphs are drawn immediately at the current text matrix
-                widthEm = ExecuteType3Glyph(type3Font, code, tsMatrix * _textMatrix);
+                // A Type3 glyph paints by running its own content stream, so the text rendering mode has to
+                // be honoured here: with a mode of 3 or 7 the text shall not be rendered at all
+                // (ISO 32000-2 9.3.6), and the advance comes from /Widths instead. Running the procedure
+                // whatever the mode made pdf.js issue5421.pdf's "3 Tr" line show up on a page both
+                // references leave blank.
+                if (_state.RenderMode is TextRenderMode.Invisible or TextRenderMode.Clip)
+                {
+                    widthEm = type3Font.GetWidthEm(code);
+                }
+                else
+                {
+                    // Type3 glyphs are drawn immediately at the current text matrix
+                    widthEm = ExecuteType3Glyph(type3Font, code, tsMatrix * _textMatrix);
+                }
             }
             else
             {
