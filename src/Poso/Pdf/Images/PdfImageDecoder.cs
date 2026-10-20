@@ -85,7 +85,7 @@ public static class PdfImageDecoder
             int spaceComponents = jpxSpaceObject is not null
                 ? ResolveColorSpace(document, jpxSpaceObject)?.Components ?? 0
                 : 0;
-            IImage? jpx = DecodeJpx(factory, stream, dictionary, width, height, spaceComponents, diagnostics);
+            IImage? jpx = DecodeJpx(document, factory, stream, dictionary, width, height, spaceComponents, diagnostics);
             if (jpx is null)
             {
                 diagnostics?.Report(PdfUnsupportedKind.ImageCodec, "JPXDecode image could not be decoded");
@@ -542,6 +542,7 @@ public static class PdfImageDecoder
     /// components, so what is left is gray or RGB samples.
     /// </summary>
     private static IImage? DecodeJpx(
+        PdfDocument document,
         IGraphicsFactory factory,
         PdfStream stream,
         PdfDictionary dictionary,
@@ -576,8 +577,12 @@ public static class PdfImageDecoder
 
             // /SMaskInData (PDF 32000-1:2008 11.4.4) is the only explicit statement that the image carries
             // alpha in its own channels; without it, four components are CMYK, which is reported rather
-            // than guessed at - rendering CMYK samples as RGB is silently wrong.
-            bool hasAlpha = (dictionary.GetIntegerValue("SMaskInData") ?? 0) >= 1;
+            // than guessed at - rendering CMYK samples as RGB is silently wrong. A value of 2 adds that
+            // the colour samples are premultiplied by that alpha, which a surface that multiplies again
+            // would darken twice.
+            int smaskInData = (int)(dictionary.GetIntegerValue("SMaskInData") ?? 0);
+            bool hasAlpha = smaskInData >= 1;
+            bool premultiplied = smaskInData == 2;
             int colorChannels = hasAlpha ? components - 1 : components;
 
             // The colour space in the PDF dictionary decides how many components are colour. When the
@@ -604,6 +609,7 @@ public static class PdfImageDecoder
             int greenDepth = colorChannels == 3 ? image.GetBitDepth(1) : redDepth;
             int blueDepth = colorChannels == 3 ? image.GetBitDepth(2) : redDepth;
             int alphaDepth = alpha.Length > 0 ? image.GetBitDepth(components - 1) : 8;
+            byte[] matte = premultiplied ? MatteSamples(document, dictionary, colorChannels) : [];
 
             var pixels = new byte[width * height * 4];
             int samples = Math.Min(red.Length, green.Length);
@@ -614,6 +620,11 @@ public static class PdfImageDecoder
                 byte g = ToByte(green[i], greenDepth);
                 byte b = ToByte(blue[i], blueDepth);
                 byte a = i < alpha.Length ? ToByte(alpha[i], alphaDepth) : (byte)0xFF;
+
+                if (premultiplied)
+                {
+                    (r, g, b) = UndoPreblend(r, g, b, a, matte);
+                }
 
                 // BGRA, premultiplied: the surfaces are opaque unless the codestream said otherwise.
                 int offset = i * 4;
@@ -639,6 +650,59 @@ public static class PdfImageDecoder
         int max = (1 << bitDepth) - 1;
         return (byte)(((sample * 255) + (max / 2)) / max);
     }
+
+    /// <summary>
+    /// Reverses the premultiplication a /SMaskInData 2 codestream stores, un-compositing the /Matte colour
+    /// as it goes: C = (C_stored - M) / alpha + M is 8.9.5.4's matte arithmetic, and pdf.js applies exactly
+    /// that before it hands the samples on. A sample the mask makes invisible carries no colour, and a
+    /// premultiplied surface cannot represent one, so it stays black.
+    /// </summary>
+    private static (byte R, byte G, byte B) UndoPreblend(byte r, byte g, byte b, byte a, byte[] matte)
+    {
+        if (a == 0)
+        {
+            return (0, 0, 0);
+        }
+
+        float k = 255f / a;
+        return (
+            Clamped(((r - matte[0]) * k) + matte[0]),
+            Clamped(((g - matte[1]) * k) + matte[1]),
+            Clamped(((b - matte[2]) * k) + matte[2]));
+    }
+
+    /// <summary>
+    /// /Matte as 0..255 samples in the image's own colour space, black when the file carries none. One
+    /// component is a gray image's matte; a matte that does not describe this image's colours is ignored
+    /// rather than guessed at.
+    /// </summary>
+    private static byte[] MatteSamples(PdfDocument document, PdfDictionary dictionary, int colorChannels)
+    {
+        if (document.Resolve(dictionary.Get("Matte")) is not PdfArray matte)
+        {
+            return [0, 0, 0];
+        }
+
+        if (colorChannels == 1 && matte.Count >= 1)
+        {
+            byte gray = ToByte(document.GetArrayNumber(matte, 0)?.AsFloat() ?? 0f);
+            return [gray, gray, gray];
+        }
+
+        if (colorChannels == 3 && matte.Count >= 3)
+        {
+            return
+            [
+                ToByte(document.GetArrayNumber(matte, 0)?.AsFloat() ?? 0f),
+                ToByte(document.GetArrayNumber(matte, 1)?.AsFloat() ?? 0f),
+                ToByte(document.GetArrayNumber(matte, 2)?.AsFloat() ?? 0f),
+            ];
+        }
+
+        return [0, 0, 0];
+    }
+
+    private static byte Clamped(float value) => (byte)Math.Clamp((int)MathF.Round(value), 0, 255);
 
     /// <summary>True when the image has no /Decode, or one that maps every component onto itself.</summary>
     private static bool IsIdentityDecode(PdfDictionary dictionary)

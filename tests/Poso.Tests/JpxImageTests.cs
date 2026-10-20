@@ -51,6 +51,55 @@ public class JpxImageTests
         Assert.True(Luma(pixels, 8, 6, 4) > 231, "right half should be white");
     }
 
+    /// <summary>
+    /// /SMaskInData 2 says the codestream's colour samples are already premultiplied by its alpha, and
+    /// /Matte names the colour they were composited against, so both have to be taken out before the
+    /// surface multiplies again: C = (C_stored - M) / alpha + M. pdf.js jpx_smaskindata.pdf is four such
+    /// images and is the corpus's reference for them; these are its first two, 2x1 RGBA codestreams.
+    /// The first stores (128,255,128) at alpha 128 over a [0 1 0] matte - white at half strength, which
+    /// a second premultiplication darkens to (64,128,64) on black. The second has no matte: its red
+    /// sample stores 128 at alpha 128, so it is red at half strength (128,0,0) rather than a quarter.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void JpxPremultipliedAlpha_UndoesThePreblendBeforeCompositing(bool peach)
+    {
+        IGraphicsFactory factory = peach ? Peach : Skia;
+
+        using (PdfDocument document = PdfDocument.FromArray(
+                   PdfFixtures.CreateJpxImagePdf(Convert.FromBase64String(PremultipliedWithMatteJpx), 2, 1, smaskInData: 2, matte: "0 1 0")))
+        using (IGraphicsContext context = factory.CreateContext(2, 1))
+        {
+            document.Pages[0].Render(factory, context, new PdfRenderOptions(1f, 0f, PosoColor.Black));
+            using IImage image = context.Snapshot();
+            byte[] pixels = new byte[image.Width * image.Height * image.BytesPerPixel];
+            image.CopyPixels(pixels);
+
+            AssertColor(pixels, 2, 0, 0, r: 128, g: 128, b: 128, "white after the matte is removed");
+            AssertColor(pixels, 2, 1, 0, r: 0, g: 0, b: 0, "an alpha-0 sample stays transparent");
+        }
+
+        using (PdfDocument document = PdfDocument.FromArray(
+                   PdfFixtures.CreateJpxImagePdf(Convert.FromBase64String(PremultipliedJpx), 2, 1, smaskInData: 2)))
+        using (IGraphicsContext context = factory.CreateContext(2, 1))
+        {
+            document.Pages[0].Render(factory, context, new PdfRenderOptions(1f, 0f, PosoColor.Black));
+            using IImage image = context.Snapshot();
+            byte[] pixels = new byte[image.Width * image.Height * image.BytesPerPixel];
+            image.CopyPixels(pixels);
+
+            AssertColor(pixels, 2, 0, 0, r: 128, g: 0, b: 0, "red at half strength");
+            AssertColor(pixels, 2, 1, 0, r: 0, g: 0, b: 200, "the opaque sample keeps its colour");
+        }
+    }
+
+    private const string PremultipliedWithMatteJpx =
+        "AAAADGpQICANCocKAAAAFGZ0eXBqcDIgAAAAAGpwMiAAAABPanAyaAAAABZpaGRyAAAAAQAAAAIABAcHAAAAAAAPY29scgEAAAAAABAAAAAiY2RlZgAEAAAAAAABAAEAAAACAAIAAAADAAMAAQAAAAAAnWpwMmP/T/9RADIAAAAAAAIAAAABAAAAAAAAAAAAAAACAAAAAQAAAAAAAAAAAAQHAQEHAQEHAQEHAQH/UgAMAAAAAQAABAQAAf9cAARAQP9kACUAAUNyZWF0ZWQgYnkgT3BlbkpQRUcgdmVyc2lvbiAyLjUuNP+QAAoAAAAAACIAAf+T34AQDF/PtAgBr9+AEAxf34AQDF//2Q==";
+
+    private const string PremultipliedJpx =
+        "AAAADGpQICANCocKAAAAFGZ0eXBqcDIgAAAAAGpwMiAAAABPanAyaAAAABZpaGRyAAAAAQAAAAIABAcHAAAAAAAPY29scgEAAAAAABAAAAAiY2RlZgAEAAAAAAABAAEAAAACAAIAAAADAAMAAQAAAAAAnmpwMmP/T/9RADIAAAAAAAIAAAABAAAAAAAAAAAAAAACAAAAAQAAAAAAAAAAAAQHAQEHAQEHAQEHAQH/UgAMAAAAAQAABAQAAf9cAARAQP9kACUAAUNyZWF0ZWQgYnkgT3BlbkpQRUcgdmVyc2lvbiAyLjUuNP+QAAoAAAAAACMAAf+T34AQDF/fgBAJP9+AGAWxf8+0CAsX/9k=";
+
     [Fact]
     public void CorruptJpx_ReportsUnsupportedInsteadOfThrowing()
     {

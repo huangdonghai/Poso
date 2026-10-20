@@ -873,16 +873,18 @@ public static class PdfFixtures
     /// written: for JPXDecode the colour space comes from the codestream itself (PDF 32000-1:2008 11.4.4),
     /// which is how the book covers that used to render blank declare their images.
     /// </summary>
-    public static byte[] CreateJpxImagePdf(byte[] jpx, int width, int height)
+    public static byte[] CreateJpxImagePdf(byte[] jpx, int width, int height, int smaskInData = 0, string? matte = null)
     {
         string content = $"q {width} 0 0 {height} 0 0 cm /Im1 Do Q";
+        string alpha = smaskInData > 0 ? $" /ColorSpace /DeviceRGB /SMaskInData {smaskInData}" : string.Empty;
+        string matteEntry = matte is not null ? $" /Matte [{matte}]" : string.Empty;
 
         return Build(1,
             new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
             new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
             new PdfObjectDefinition(3, $"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] /Resources << /XObject << /Im1 5 0 R >> >> /Contents 4 0 R >>"),
             Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
-            new PdfObjectDefinition(5, $"<< /Type /XObject /Subtype /Image /Width {width} /Height {height} /BitsPerComponent 8 /Filter /JPXDecode /Length {jpx.Length} >>", jpx));
+            new PdfObjectDefinition(5, $"<< /Type /XObject /Subtype /Image /Width {width} /Height {height} /BitsPerComponent 8 /Filter /JPXDecode{alpha}{matteEntry} /Length {jpx.Length} >>", jpx));
     }
 
     /// <summary>A document whose content stream is Flate compressed.</summary>
