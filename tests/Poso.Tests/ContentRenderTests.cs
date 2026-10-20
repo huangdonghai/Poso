@@ -419,6 +419,33 @@ public class ContentRenderTests
         Assert.True(or > 240 && og > 240 && ob > 240, $"the gap beside the sheared cell must stay white (r={or} g={og} b={ob})");
     }
 
+    /// <summary>
+    /// An ImageMask XObject drawn while the fill is a shading pattern must let the pattern show through the
+    /// stencil only where the mask is set (ISO 32000-1 8.9.6.3); folding the pattern into a flat stencil
+    /// colour painted the whole block, as pdf.js issue13372.pdf showed.
+    /// </summary>
+    [Fact]
+    public void ImageMaskXObject_PaintsPatternThroughTheStencil()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateImageMaskWithShadingPatternPdf());
+        using IGraphicsContext context = Factory.CreateContext(100, 100);
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+
+        // Inside the stencil (user 25,75 -> device row 25): the gradient there is red-heavy.
+        (byte b, byte g, byte r, _) = PixelAt(pixels, image.Width, 25, 25);
+        Assert.True(r > 150 && r > b, $"the pattern must paint through the set mask (r={r} g={g} b={b})");
+
+        // Below the stencil (user 25,25 -> device row 75) and beside it (user 75,75 -> device col 75).
+        (byte lb, byte lg, byte lr, _) = PixelAt(pixels, image.Width, 75, 25);
+        Assert.True(lr > 240 && lg > 240 && lb > 240, $"the clear mask rows must stay white (r={lr} g={lg} b={lb})");
+
+        (byte ob, byte og, byte or, _) = PixelAt(pixels, image.Width, 25, 75);
+        Assert.True(or > 240 && og > 240 && ob > 240, $"the clear mask columns must stay white (r={or} g={og} b={ob})");
+    }
+
     private static byte[] ReadPixels(IImage image)
     {
         byte[] pixels = new byte[image.Width * image.Height * image.BytesPerPixel];

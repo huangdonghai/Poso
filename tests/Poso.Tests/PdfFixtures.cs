@@ -1996,6 +1996,29 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// A 100x100 page whose only mark is an ImageMask XObject drawn while the fill colour is a shading
+    /// pattern: the mask is a stencil, so the gradient must show through only where its bits are set (the
+    /// top-left quarter here) and the rest stays white - pdf.js issue13372.pdf draws a 646x761 bilevel mask
+    /// over an axial shading pattern.
+    /// </summary>
+    public static byte[] CreateImageMaskWithShadingPatternPdf()
+    {
+        // An ImageMask without /Decode paints where its bits are CLEAR (ISO 32000-1 8.9.6.2), so 0x30 keeps
+        // the first two columns of the top two rows painting and 0xFF leaves the bottom rows empty.
+        byte[] maskData = [0x30, 0x30, 0xFF, 0xFF];
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Pattern << /P0 7 0 R >> /ColorSpace << /Cs1 10 0 R >> /XObject << /Im1 6 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes("/Cs1 cs /P0 scn q 100 0 0 100 0 0 cm /Im1 Do Q")),
+            Stream(6, "/Type /XObject /Subtype /Image /ImageMask true /Width 4 /Height 4 /BitsPerComponent 1", maskData),
+            new PdfObjectDefinition(7, "<< /Type /Pattern /PatternType 2 /Shading 8 0 R >>"),
+            new PdfObjectDefinition(8, "<< /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 100 0] /Function 9 0 R /Extend [true true] >>"),
+            new PdfObjectDefinition(9, "<< /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [0 0 1] /N 1 >>"),
+            new PdfObjectDefinition(10, "[/Pattern /DeviceRGB]"));
+    }
+
+    /// <summary>
     /// A 100x100 page filled by a tiling pattern whose cell shows one ZapfDingbats glyph through
     /// /Differences [1 /a109] - a109 is the spade U+2660. The glyph name must resolve through the Adobe
     /// Glyph List and the family must map the Dingbats block, or nothing paints (pdf.js issue15716.pdf).

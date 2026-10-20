@@ -3030,6 +3030,15 @@ public sealed class PdfContentInterpreter
             return;
         }
 
+        // An image mask is a stencil: what paints through it is the current fill, and a fill that is a
+        // pattern cannot be folded into the raster as a flat colour.
+        if ((image.Dictionary.GetBooleanValue("ImageMask") ?? false) &&
+            (_fillShading is not null || _fillTiling is not null))
+        {
+            DrawImageMaskThroughPattern(image);
+            return;
+        }
+
         IImage? decoded = PdfImageDecoder.Decode(_document, _factory, image, image.Dictionary, _state.FillColor, _diag);
         if (decoded is null)
         {
@@ -3059,6 +3068,91 @@ public sealed class PdfContentInterpreter
         finally
         {
             decoded.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// An ImageMask XObject shown while the fill colour is a pattern. The mask selects where the pattern
+    /// paints (ISO 32000-1 8.9.6.3), so the stencil is resampled onto the device grid as a layer mask and
+    /// the pattern is painted through it. pdf.js issue13372.pdf sets a shading pattern and then draws a
+    /// 646x761 bilevel mask; folding the pattern into the stencil colour painted the whole block instead.
+    /// </summary>
+    private void DrawImageMaskThroughPattern(PdfStream image)
+    {
+        using IImage? decoded = PdfImageDecoder.Decode(_document, _factory, image, image.Dictionary, PosoColor.White, _diag);
+        if (decoded is null)
+        {
+            return;
+        }
+
+        var maskPixels = new byte[decoded.Width * decoded.Height * 4];
+        decoded.CopyPixels(maskPixels);
+
+        RectF region = _context.ClipBounds;
+        if (region.IsEmpty || !Matrix3x2.Invert(_state.Ctm, out Matrix3x2 deviceToUser))
+        {
+            return;
+        }
+
+        int originX = (int)MathF.Floor(region.X);
+        int originY = (int)MathF.Floor(region.Y);
+        int width = Math.Clamp((int)MathF.Ceiling(region.Right) - originX, 1, 4096);
+        int height = Math.Clamp((int)MathF.Ceiling(region.Bottom) - originY, 1, 4096);
+
+        // The image occupies the unit square of the space at the Do operator, so each device pixel maps
+        // back into it through the CTM; the first sample row sits at v = 1.
+        var coverage = new byte[width * height * 4];
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                Vector2 u = Vector2.Transform(new Vector2(originX + x + 0.5f, originY + y + 0.5f), deviceToUser);
+                byte value = 0;
+                if (u.X >= 0f && u.X < 1f && u.Y >= 0f && u.Y < 1f)
+                {
+                    int sx = Math.Clamp((int)(u.X * decoded.Width), 0, decoded.Width - 1);
+                    int sy = Math.Clamp((int)((1f - u.Y) * decoded.Height), 0, decoded.Height - 1);
+                    value = maskPixels[((sy * decoded.Width) + sx) * 4 + 3];
+                }
+
+                int o = ((y * width) + x) * 4;
+                coverage[o] = value;
+                coverage[o + 1] = value;
+                coverage[o + 2] = value;
+                coverage[o + 3] = 255;
+            }
+        }
+
+        using IImage stencil = _factory.CreateImage(width, height, PixelFormat.Bgra8888Premul, coverage);
+
+        var square = new PathBuilder();
+        square.MoveTo(0f, 0f);
+        square.LineTo(1f, 0f);
+        square.LineTo(1f, 1f);
+        square.LineTo(0f, 1f);
+        square.Close();
+        IPath unit = square.Build();
+
+        _context.PushLayer(null, 255, _state.BlendMode, stencil);
+        try
+        {
+            _context.Save();
+            _context.SetMatrix(_state.Ctm);
+            _context.ClipPath(unit, false);
+            if (_fillShading is { } shading)
+            {
+                PaintShading(shading, _fillShadingMatrix, _streamEntryMatrix);
+            }
+            else if (_fillTiling is { } tiling)
+            {
+                PaintTiling(unit, tiling, _fillTilingMatrix, false, stroke: false);
+            }
+
+            _context.Restore();
+        }
+        finally
+        {
+            _context.PopLayer();
         }
     }
 
