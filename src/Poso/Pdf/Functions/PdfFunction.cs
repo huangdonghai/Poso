@@ -28,24 +28,32 @@ public abstract class PdfFunction
     /// <summary>Clamps inputs to the domain, evaluates, and clamps outputs to the range.</summary>
     public void Evaluate(ReadOnlySpan<float> input, Span<float> output)
     {
-        // The scratch buffers are sized by /Domain and /Range read from the file, so only small ones
-        // may go on the stack; a corrupt function dictionary declaring a million outputs would overflow it.
-        Span<float> clamped = input.Length <= 64 ? stackalloc float[input.Length] : new float[input.Length];
-        for (int i = 0; i < input.Length; i++)
+        // Work in the function's OWN width, not the caller's buffer: a PostScript calculator leaves its
+        // operands on the stack, so handing EvaluateCore a wider span than /Range describes makes it lift
+        // one of those leftovers as an output and shifts every channel after it (pdf.js issue17065.pdf's
+        // DeviceN tint transform turned a green-cyan gradient muddy). The scratch buffers are sized by
+        // /Domain and /Range read from the file, so only small ones may go on the stack; a corrupt
+        // function dictionary declaring a million outputs would overflow it.
+        int inputs = InputCount > 0 ? Math.Min(input.Length, InputCount) : input.Length;
+        int outputs = OutputCount > 0 ? Math.Min(output.Length, OutputCount) : output.Length;
+
+        Span<float> clamped = inputs <= 64 ? stackalloc float[inputs] : new float[inputs];
+        for (int i = 0; i < inputs; i++)
         {
             clamped[i] = i * 2 + 1 < Domain.Length
                 ? Math.Clamp(input[i], Domain[i * 2], Domain[(i * 2) + 1])
                 : input[i];
         }
 
-        Span<float> raw = output.Length <= 64 ? stackalloc float[output.Length] : new float[output.Length];
+        Span<float> raw = outputs <= 64 ? stackalloc float[outputs] : new float[outputs];
         EvaluateCore(clamped, raw);
 
         for (int i = 0; i < output.Length; i++)
         {
+            float value = i < outputs ? raw[i] : 0f;
             output[i] = i * 2 + 1 < Range.Length
-                ? Math.Clamp(raw[i], Range[i * 2], Range[(i * 2) + 1])
-                : raw[i];
+                ? Math.Clamp(value, Range[i * 2], Range[(i * 2) + 1])
+                : value;
         }
     }
 

@@ -1821,6 +1821,18 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// A page with nothing on it plus an indirect Type 4 function whose program leaves its inputs on the
+    /// stack (the shape a DeviceN tint transform is written in). Object 5 is the function: evaluating it
+    /// must yield the same channels whatever width the caller's buffer happens to have.
+    /// </summary>
+    public static byte[] CreateLeftoverStackFunctionPdf() => Build(1,
+        new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+        new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+        new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << >> /Contents 4 0 R >>"),
+        Stream(4, string.Empty, Encoding.ASCII.GetBytes("q Q")),
+        Stream(5, "/FunctionType 4 /Domain [0 1 0 1 0 1] /Range [0 1 0 1 0 1]", Encoding.ASCII.GetBytes("{ exch 0.5 mul dup dup }")));
+
+    /// <summary>
     /// A 100x100 page filled edge to edge with a shading pattern whose axial shading declares a smaller
     /// <c>/BBox</c> [20 20 80 80]. The shading must stop at its box - the corners stay the page's white.
     /// (pdf.js issue8092.pdf paints a whole page with a pattern whose shading is boxed.)

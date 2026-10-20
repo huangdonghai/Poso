@@ -241,6 +241,30 @@ public class MeshShadingTests
         Assert.True(Math.Abs(r - g) < 12 && Math.Abs(r - b) < 12, $"a neutral grey must stay neutral (r={r} g={g} b={b})");
     }
 
+    /// <summary>
+    /// A function's width is set by its own /Domain and /Range, not by the caller's buffer. A PostScript
+    /// calculator that leaves its inputs on the stack - how DeviceN tint transforms are written - handed the
+    /// extra leftover to a wider buffer and shifted every channel after it (pdf.js issue17065.pdf).
+    /// </summary>
+    [Fact]
+    public void Type4Function_OutputWidthComesFromRangeNotTheBuffer()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateLeftoverStackFunctionPdf());
+        Poso.Pdf.Functions.PdfFunction? function =
+            Poso.Pdf.Functions.PdfFunction.Create(document, document.Resolve(new Poso.Pdf.Objects.PdfIndirectRef(5, 0)));
+        Assert.NotNull(function);
+
+        float[] input = [0.2f, 0.4f, 0.6f];
+        var three = new float[3];
+        var four = new float[4];
+        function!.Evaluate(input, three);
+        function.Evaluate(input, four);
+
+        Assert.Equal(three[0], four[0], 3);
+        Assert.Equal(three[1], four[1], 3);
+        Assert.Equal(three[2], four[2], 3);
+    }
+
     private static (byte R, byte G, byte B) Luma(byte[] px, int width, int userX, int userY)
     {
         int deviceRow = 100 - userY;
