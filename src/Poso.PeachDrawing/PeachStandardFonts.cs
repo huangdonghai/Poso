@@ -24,7 +24,11 @@ internal static class PeachStandardFonts
 
         if (ContainsAny(name, "zapfdingbats", "dingbat"))
         {
-            return "Wingdings";
+            // Glyphs are addressed by Unicode - the Adobe Glyph List turns a109 into U+2660 and friends -
+            // so the family has to cover the Dingbats block. Wingdings keeps its shapes in the private use
+            // area and has no glyph for U+2660/U+2701, which left pdf.js issue15716.pdf blank on this
+            // back end while Skia, which maps the same names to the same code points, drew them.
+            return "Segoe UI Symbol";
         }
 
         if (ContainsAny(name, "courier"))

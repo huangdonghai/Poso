@@ -60,13 +60,16 @@ public class TilingPatternTests
     /// ZapfDingbats addresses its shapes through glyph names such as a109 (spade U+2660) in /Differences.
     /// The Adobe Glyph List must resolve the name and the family must map the Dingbats block; resolving to
     /// Wingdings (whose shapes sit in the private use area) left the cell, and pdf.js issue15716.pdf, blank.
+    /// Both back ends have to answer the same way: the Skia mapping was fixed on its own and its test only
+    /// exercised Skia, so the PeachDrawing mapping kept pointing at Wingdings and painted nothing.
     /// </summary>
-    [Fact]
-    public void TilingPatternCell_WithZapfDingbats_RendersGlyph()
+    [Theory]
+    [MemberData(nameof(ShadingTests.GraphicsFactories), MemberType = typeof(ShadingTests))]
+    public void TilingPatternCell_WithZapfDingbats_RendersGlyph(IGraphicsFactory factory)
     {
         using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateTilingDingbatPdf());
-        using IGraphicsContext context = Factory.CreateContext(100, 100);
-        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+        using IGraphicsContext context = factory.CreateContext(100, 100);
+        document.Pages[0].Render(factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
         using IImage image = context.Snapshot();
         byte[] px = new byte[image.Width * image.Height * image.BytesPerPixel];
         image.CopyPixels(px);
