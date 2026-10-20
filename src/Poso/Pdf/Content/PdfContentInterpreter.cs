@@ -549,7 +549,7 @@ public sealed class PdfContentInterpreter
         _context.StrokePath(shape, _state.Stroke with { Width = width, DashArray = null }, stroke.WithAlpha(alpha));
     }
 
-    private static RectF ParseRectangle(PdfArray? array)
+    private RectF ParseRectangle(PdfArray? array)
     {
         if (array is not { Count: >= 4 })
         {
@@ -557,10 +557,10 @@ public sealed class PdfContentInterpreter
         }
 
         return RectF.FromLbrb(
-            array.GetNumber(0)?.AsFloat() ?? 0f,
-            array.GetNumber(1)?.AsFloat() ?? 0f,
-            array.GetNumber(2)?.AsFloat() ?? 0f,
-            array.GetNumber(3)?.AsFloat() ?? 0f);
+            _document.GetArrayNumber(array, 0)?.AsFloat() ?? 0f,
+            _document.GetArrayNumber(array, 1)?.AsFloat() ?? 0f,
+            _document.GetArrayNumber(array, 2)?.AsFloat() ?? 0f,
+            _document.GetArrayNumber(array, 3)?.AsFloat() ?? 0f);
     }
 
     private static List<RectF> ParseQuadPoints(PdfArray? array)
@@ -2386,10 +2386,10 @@ public sealed class PdfContentInterpreter
         float bx0 = 0f, by0 = 0f, bx1 = 100f, by1 = 100f;
         if (dict.GetArray("BBox") is { Count: >= 4 } bbox)
         {
-            bx0 = bbox.GetNumber(0)?.AsFloat() ?? 0f;
-            by0 = bbox.GetNumber(1)?.AsFloat() ?? 0f;
-            bx1 = bbox.GetNumber(2)?.AsFloat() ?? 0f;
-            by1 = bbox.GetNumber(3)?.AsFloat() ?? 0f;
+            bx0 = _document.GetArrayNumber(bbox, 0)?.AsFloat() ?? 0f;
+            by0 = _document.GetArrayNumber(bbox, 1)?.AsFloat() ?? 0f;
+            bx1 = _document.GetArrayNumber(bbox, 2)?.AsFloat() ?? 0f;
+            by1 = _document.GetArrayNumber(bbox, 3)?.AsFloat() ?? 0f;
         }
 
         float cellWidth = bx1 - bx0;
@@ -2725,14 +2725,9 @@ public sealed class PdfContentInterpreter
                 _context.ConcatMatrix(matrix);
             }
 
-            if (dictionary.GetArray("BBox") is { Count: >= 4 } bbox)
+            if (FormBox(form) is { } box)
             {
-                RectF rect = RectF.FromLbrb(
-                    bbox.GetNumber(0)?.AsFloat() ?? 0f,
-                    bbox.GetNumber(1)?.AsFloat() ?? 0f,
-                    bbox.GetNumber(2)?.AsFloat() ?? 0f,
-                    bbox.GetNumber(3)?.AsFloat() ?? 0f);
-                _context.ClipRect(rect);
+                _context.ClipRect(box);
             }
 
             PdfDictionary? formResources = _document.Resolve(dictionary.Get("Resources")) as PdfDictionary;
@@ -2989,25 +2984,25 @@ public sealed class PdfContentInterpreter
     }
 
     /// <summary>A form XObject's own <c>/Matrix</c>, which maps its content space into its parent's.</summary>
-    private static Matrix3x2 FormMatrix(PdfStream form) =>
+    private Matrix3x2 FormMatrix(PdfStream form) =>
         form.Dictionary.GetArray("Matrix") is { Count: >= 6 } matrixArray
             ? new Matrix3x2(
-                matrixArray.GetNumber(0)?.AsFloat() ?? 0f,
-                matrixArray.GetNumber(1)?.AsFloat() ?? 0f,
-                matrixArray.GetNumber(2)?.AsFloat() ?? 0f,
-                matrixArray.GetNumber(3)?.AsFloat() ?? 0f,
-                matrixArray.GetNumber(4)?.AsFloat() ?? 0f,
-                matrixArray.GetNumber(5)?.AsFloat() ?? 0f)
+                _document.GetArrayNumber(matrixArray, 0)?.AsFloat() ?? 0f,
+                _document.GetArrayNumber(matrixArray, 1)?.AsFloat() ?? 0f,
+                _document.GetArrayNumber(matrixArray, 2)?.AsFloat() ?? 0f,
+                _document.GetArrayNumber(matrixArray, 3)?.AsFloat() ?? 0f,
+                _document.GetArrayNumber(matrixArray, 4)?.AsFloat() ?? 0f,
+                _document.GetArrayNumber(matrixArray, 5)?.AsFloat() ?? 0f)
             : Matrix3x2.Identity;
 
     /// <summary>A form XObject's own <c>/BBox</c>, or null when it declares none.</summary>
-    private static RectF? FormBox(PdfStream form) =>
+    private RectF? FormBox(PdfStream form) =>
         form.Dictionary.GetArray("BBox") is { Count: >= 4 } bbox
             ? RectF.FromLbrb(
-                bbox.GetNumber(0)?.AsFloat() ?? 0f,
-                bbox.GetNumber(1)?.AsFloat() ?? 0f,
-                bbox.GetNumber(2)?.AsFloat() ?? 0f,
-                bbox.GetNumber(3)?.AsFloat() ?? 0f)
+                _document.GetArrayNumber(bbox, 0)?.AsFloat() ?? 0f,
+                _document.GetArrayNumber(bbox, 1)?.AsFloat() ?? 0f,
+                _document.GetArrayNumber(bbox, 2)?.AsFloat() ?? 0f,
+                _document.GetArrayNumber(bbox, 3)?.AsFloat() ?? 0f)
             : null;
 
     /// <summary>The axis-aligned box that encloses a rectangle after a transform has been applied to it.</summary>

@@ -199,8 +199,9 @@ public sealed class PdfPage
     }
 
     /// <summary>
-    /// One of the page's boxes. A box may be written as an indirect reference, which the inheritable
-    /// attribute map holds unresolved, so it is resolved here rather than read as a type test.
+    /// One of the page's boxes. A box may be written as an indirect reference, and its elements may be
+    /// indirect too (/MediaBox [4 0 R 5 0 R 6 0 R 7 0 R]), so both levels are resolved here rather than
+    /// read as a type test.
     /// </summary>
     private RectF? ParseBox(string key)
     {
@@ -211,11 +212,11 @@ public sealed class PdfPage
 
         return _document.Resolve(value) switch
         {
-            PdfArray array when array.Count >= 4 && array[0] is PdfNumber => RectF.FromLbrb(
-                array.GetNumber(0)?.AsFloat() ?? 0,
-                array.GetNumber(1)?.AsFloat() ?? 0,
-                array.GetNumber(2)?.AsFloat() ?? 0,
-                array.GetNumber(3)?.AsFloat() ?? 0),
+            PdfArray array when array.Count >= 4 && _document.GetArrayNumber(array, 0) is not null => RectF.FromLbrb(
+                _document.GetArrayNumber(array, 0)?.AsFloat() ?? 0,
+                _document.GetArrayNumber(array, 1)?.AsFloat() ?? 0,
+                _document.GetArrayNumber(array, 2)?.AsFloat() ?? 0,
+                _document.GetArrayNumber(array, 3)?.AsFloat() ?? 0),
             _ => null,
         };
     }

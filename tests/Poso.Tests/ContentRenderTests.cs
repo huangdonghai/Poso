@@ -732,6 +732,32 @@ public class ContentRenderTests
     }
 
     /// <summary>
+    /// A form's /BBox may hold indirect numbers, and the clip it describes has to be the real one. Read
+    /// as a type test the box collapses to zero height, and the two back ends then disagree about what an
+    /// empty clip means: pdf.js franz_2.pdf is a gray rectangle drawn by a nested form, which Skia kept
+    /// (it drops an empty clip) while Peach kept the zero-area clip and painted a white page.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(ShadingTests.GraphicsFactories), MemberType = typeof(ShadingTests))]
+    public void IndirectFormBBox_StillClipsToTheForm(IGraphicsFactory factory)
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateIndirectFormBBoxPdf());
+        using IGraphicsContext context = factory.CreateContext(200, 50);
+        document.Pages[0].Render(factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+
+        // The nested form's 0.5 gray rectangle covers the whole 200x50 page.
+        foreach ((int x, int y) in new[] { (10, 10), (100, 25), (190, 40) })
+        {
+            (byte b, byte g, byte r, _) = PixelAt(pixels, image.Width, y, x);
+            Assert.True(r is > 100 and < 170 && Math.Abs(r - g) < 8 && Math.Abs(g - b) < 8,
+                $"the form's gray should cover ({x},{y}): r={r} g={g} b={b}");
+        }
+    }
+
+    /// <summary>
     /// A dash array has to come in pairs. Given three entries, Skia's dash path effect throws and the
     /// whole page is lost; the pattern is dropped and the line strokes solid instead.
     /// </summary>

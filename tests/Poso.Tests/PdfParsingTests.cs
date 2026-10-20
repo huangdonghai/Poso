@@ -56,6 +56,23 @@ public class PdfParsingTests
     }
 
     /// <summary>
+    /// A box whose elements are indirect is resolved element by element. Without that the array does not
+    /// read as four numbers at all and the page quietly falls back to Letter, which is what pdf.js
+    /// issue7872.pdf hit: its 250x50 page came out 612x792 and every pixel landed in the wrong place.
+    /// </summary>
+    [Fact]
+    public void Open_PageWithIndirectMediaBoxElements_UsesTheBox()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateIndirectMediaBoxPdf());
+        PdfPage page = document.Pages[0];
+
+        Assert.Equal(250f, page.MediaBox.Width);
+        Assert.Equal(50f, page.MediaBox.Height);
+        Assert.Equal(250f, page.Width);
+        Assert.Equal(50f, page.Height);
+    }
+
+    /// <summary>
     /// A /Kids chain that closes on itself costs the branch that closes it and nothing else: MuPDF's
     /// reader shows every page it reached before the cycle, and walking the cycle regardless cannot even
     /// be reported - a stack overflow ends the process.

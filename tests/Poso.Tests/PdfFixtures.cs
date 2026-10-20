@@ -112,6 +112,41 @@ public static class PdfFixtures
             + "/Contents 4 0 R /Resources << >> >>"),
         Stream(4, string.Empty, Encoding.ASCII.GetBytes("0 0 0 rg 0 0 2 2 re f")));
 
+    /// <summary>
+    /// A 250x50 page whose /MediaBox elements are indirect objects (<c>[4 0 R 5 0 R 6 0 R 7 0 R]</c>, the
+    /// shape pdf.js issue7872.pdf has). The box is legal, but reading an element as a number without
+    /// resolving it leaves the page with no usable box at all and it falls back to Letter.
+    /// </summary>
+    public static byte[] CreateIndirectMediaBoxPdf() => Build(1,
+        new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+        new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+        new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [4 0 R 5 0 R 6 0 R 7 0 R] "
+            + "/Contents 8 0 R /Resources << >> >>"),
+        new PdfObjectDefinition(4, "0"),
+        new PdfObjectDefinition(5, "0"),
+        new PdfObjectDefinition(6, "250"),
+        new PdfObjectDefinition(7, "50"),
+        Stream(8, string.Empty, Encoding.ASCII.GetBytes("0 0 0 rg 0 0 250 50 re f")));
+
+    /// <summary>
+    /// The same defect one level down, on a form XObject (pdf.js franz_2.pdf): the outer form's
+    /// <c>/BBox</c> is <c>[0 0 200 7 0 R]</c>, and the nested form it draws fills the page with gray.
+    /// Unresolved, the box collapses to zero height, and what survives then depends on what a back end
+    /// does with an empty clip - Skia drops it and keeps the gray by accident, Peach keeps the zero-area
+    /// clip and loses the page.
+    /// </summary>
+    public static byte[] CreateIndirectFormBBoxPdf() => Build(1,
+        new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+        new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+        new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 50] /Contents 6 0 R "
+            + "/Resources << /XObject << /Im17 4 0 R >> >> >>"),
+        Stream(4, "/Type /XObject /Subtype /Form /FormType 1 /BBox [0 0 200 7 0 R] "
+            + "/Resources << /XObject << /Fm1 5 0 R >> >>", Encoding.ASCII.GetBytes("q /Fm1 Do Q")),
+        Stream(5, "/Type /XObject /Subtype /Form /FormType 1 /BBox [0 0 521 7 0 R]",
+            Encoding.ASCII.GetBytes("0.5 0.5 0.5 rg 0 87.96 521 -87.96 re f")),
+        Stream(6, string.Empty, Encoding.ASCII.GetBytes("1 0 0 1 0 0 cm /Im17 Do")),
+        new PdfObjectDefinition(7, "50"));
+
     /// <summary>A minimal CID-keyed CFF program (Top DICT has ROS, no FDArray - the reader only needs the ROS,
     /// charset and CharStrings). Its charset is deliberately NON-identity (GID 1..4 -> CID 300,100,250,7)
     /// so a test can prove the CID->GID map is read from the charset rather than assumed to be identity.

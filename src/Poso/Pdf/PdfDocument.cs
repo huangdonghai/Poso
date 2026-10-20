@@ -604,6 +604,14 @@ public sealed class PdfDocument : IDisposable
         }
     }
 
+    /// <summary>
+    /// One element of a numeric array, resolving an indirect reference. Box and matrix arrays are allowed
+    /// to hold indirect numbers — <c>/MediaBox [4 0 R 5 0 R 6 0 R 7 0 R]</c> and <c>/BBox [0 0 200 8 0 R]</c>
+    /// both occur in the wild — so testing the element as a number on its own silently reads zero.
+    /// </summary>
+    public PdfNumber? GetArrayNumber(PdfArray array, int index) =>
+        Resolve(index >= 0 && index < array.Count ? array[index] : null) as PdfNumber;
+
     /// <summary>Gets an indirect object by object number and generation (cached, thread-safe).</summary>
     public PdfObject? GetObject(int objectNumber, int generation = 0)
     {
