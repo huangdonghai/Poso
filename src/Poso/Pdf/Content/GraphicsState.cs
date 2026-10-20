@@ -61,6 +61,14 @@ internal sealed class GraphicsState
     /// <summary>Text knockout (ExtGState /TK).</summary>
     public bool TextKnockout { get; set; }
 
+    /// <summary>
+    /// True while the content is being drawn into a transparency group whose /K (knockout) flag is set.
+    /// Such a group clears its earlier contents wherever a new element paints, so a nested group cannot
+    /// blend with what is already on the surface: it has to be composited as if the backdrop beneath it
+    /// were transparent (PDF 32000-1 11.3.3.3).
+    /// </summary>
+    public bool GroupIsKnockout { get; set; }
+
     public GraphicsState Clone() => new()
     {
         Ctm = Ctm,
@@ -82,6 +90,7 @@ internal sealed class GraphicsState
         SoftMaskCtm = SoftMaskCtm,
         AlphaIsolate = AlphaIsolate,
         TextKnockout = TextKnockout,
+        GroupIsKnockout = GroupIsKnockout,
     };
 }
 

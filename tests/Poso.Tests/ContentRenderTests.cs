@@ -471,6 +471,38 @@ public class ContentRenderTests
     }
 
     /// <summary>
+    /// A knockout group (/K true) clears its own earlier contents from beneath each element it receives, so
+    /// a nested group has an emptied backdrop to blend with - not the blue that was already painted. Poso
+    /// rendered a nested non-isolated group inline whenever it was fully opaque, which handed the nested
+    /// Multiply straight to the blue and printed black wherever pdf.js knockout_inner_backdrop.pdf wants red
+    /// or green.
+    /// </summary>
+    [Fact]
+    public void KnockoutGroup_NestedBlendDoesNotSeeTheClearedBackdrop()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateKnockoutGroupWithNestedBlendPdf());
+        using IGraphicsContext context = Factory.CreateContext(200, 200);
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+
+        // Red only (Multiply against nothing keeps the source), green only, and their overlap.
+        (byte rb, byte rg, byte rr, _) = PixelAt(pixels, image.Width, 170, 30);
+        Assert.True(rr > 200 && rg < 60 && rb < 60, $"the red rect must stay red (r={rr} g={rg} b={rb})");
+
+        (byte gb, byte gg, byte gr, _) = PixelAt(pixels, image.Width, 35, 165);
+        Assert.True(gg > 200 && gr < 60 && gb < 60, $"the green rect must stay green (r={gr} g={gg} b={gb})");
+
+        (byte ib, byte ig, byte ir, _) = PixelAt(pixels, image.Width, 100, 100);
+        Assert.True(ir < 60 && ig < 60 && ib < 60, $"red multiplied by green must be black (r={ir} g={ig} b={ib})");
+
+        // The blue the knockout group painted first still stands where the nested group never reached.
+        (byte bb, byte bg, byte br, _) = PixelAt(pixels, image.Width, 195, 5);
+        Assert.True(bb > 200 && br < 60 && bg < 60, $"the knockout group's own fill must survive (r={br} g={bg} b={bb})");
+    }
+
+    /// <summary>
     /// A text object in a clipping render mode replaces the clipping path with its glyph outlines - and when
     /// none of them carry an outline, that path is EMPTY, so nothing after it paints. Treating "no outline"
     /// as "no clip" let the following full-page fill through (pdf.js recursiveCompositGlyf.pdf renders blank

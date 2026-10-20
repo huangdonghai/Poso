@@ -2138,6 +2138,31 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// pdf.js knockout_inner_backdrop.pdf: an isolated knockout group (/K true) that fills itself blue and
+    /// then draws a nested NON-isolated group (/K false /I false) whose two opaque rects multiply with each
+    /// other. A knockout group clears what it already holds beneath each new element, so those rects must
+    /// blend with an emptied backdrop - red stays red, green stays green, and only their overlap goes black.
+    /// Blending them with the blue instead turns the whole nested group black.
+    /// </summary>
+    public static byte[] CreateKnockoutGroupWithNestedBlendPdf()
+    {
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /XObject << /OuterGroup 5 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes("q\n/OuterGroup Do\nQ")),
+            Stream(5, "/Type /XObject /Subtype /Form /FormType 1 /BBox [0 0 200 200] " +
+                "/Group << /Type /Group /S /Transparency /K true /I true >> " +
+                "/Resources << /XObject << /InnerGroup 6 0 R >> >>",
+                Encoding.ASCII.GetBytes("0 0 1 rg\n0 0 200 200 re f\n/InnerGroup Do")),
+            Stream(6, "/Type /XObject /Subtype /Form /FormType 1 /BBox [0 0 200 200] " +
+                "/Group << /Type /Group /S /Transparency /K false /I false >> " +
+                "/Resources << /ExtGState << /GSM 7 0 R >> >>",
+                Encoding.ASCII.GetBytes("/GSM gs\n1 0 0 rg\n20 20 130 130 re f\n0 1 0 rg\n50 50 130 130 re f")),
+            new PdfObjectDefinition(7, "<< /Type /ExtGState /BM /Multiply >>"));
+    }
+
+    /// <summary>
     /// A 200x50 page drawing "ABC" with a WinAnsi TrueType font that embeds the given program, so a test can
     /// hand over a subset with tables removed - pdf.js TrueType_without_cmap.pdf ships one with no /cmap.
     /// </summary>

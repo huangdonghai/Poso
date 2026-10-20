@@ -2757,8 +2757,14 @@ public sealed class PdfContentInterpreter
             // (or a soft mask) still has to composite as one unit at the boundary, so it keeps the layer -
             // separating those cases is what pdf.js knockout_blend_multiply.pdf needs: its cyan rect inside a
             // non-isolated group multiplies with the yellow page and must come out green.
+            //
+            // The enclosing group being a knockout group (/K true) forces the layer as well: a knockout
+            // group clears what it already holds wherever the next element paints, so the nested group must
+            // blend with an emptied backdrop instead of with the blue beneath it - which is what the inline
+            // path would hand it (pdf.js knockout_inner_backdrop.pdf: its red and green rects inside a
+            // nested non-isolated group multiply with the enclosing blue and come out black instead).
             bool pushedLayer = transparencyGroup &&
-                (groupAlpha < 255 || _state.SoftMask is not null || GroupIsIsolated(dictionary));
+                (groupAlpha < 255 || _state.SoftMask is not null || GroupIsIsolated(dictionary) || _state.GroupIsKnockout);
             if (pushedLayer)
             {
                 IImage? groupMask = _state.SoftMask is { } mask ? SoftMaskImage(mask, _context.ClipBounds) : null;
@@ -2766,6 +2772,11 @@ public sealed class PdfContentInterpreter
                 _state.FillAlpha = 1f;
                 _state.StrokeAlpha = 1f;
                 _state.SoftMask = null;
+            }
+
+            if (transparencyGroup)
+            {
+                _state.GroupIsKnockout = GroupIsKnockout(dictionary);
             }
 
             Matrix3x2 outerStreamEntry = _streamEntryMatrix;
@@ -2821,6 +2832,13 @@ public sealed class PdfContentInterpreter
     /// </summary>
     private bool GroupIsIsolated(PdfDictionary dictionary) =>
         (_document.Resolve(dictionary.Get("Group")) as PdfDictionary)?.GetBooleanValue("I") ?? false;
+
+    /// <summary>
+    /// True when a form's transparency group knocks out (/K true): each element removes the group's
+    /// earlier contents from beneath it. The spec default is false.
+    /// </summary>
+    private bool GroupIsKnockout(PdfDictionary dictionary) =>
+        (_document.Resolve(dictionary.Get("Group")) as PdfDictionary)?.GetBooleanValue("K") ?? false;
 
     /// <summary>
     /// Renders an ExtGState <c>/SMask</c> group into the coverage image the back ends multiply an
