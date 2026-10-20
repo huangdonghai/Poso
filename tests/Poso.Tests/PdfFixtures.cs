@@ -1866,6 +1866,50 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// A linearized-shape document: the /xref section is an empty placeholder and the trailer points at a
+    /// catalog that lives INSIDE an object stream. Reading it needs both fallbacks the corpus files proved
+    /// necessary - rebuild the object table by scanning, then expand the object streams the scan found -
+    /// because the compressed catalog has no entry anywhere (pdf.js empty_protected.pdf and its family).
+    /// </summary>
+    public static byte[] CreateCompressedCatalogAfterRebuildPdf()
+    {
+        // The object stream holds objects 2 (catalog) and 3 (page tree): "num offset" pairs, then the
+        // objects at those offsets relative to /First.
+        byte[] header = Encoding.ASCII.GetBytes("2 0 3 33 ");
+        byte[] catalog = Encoding.ASCII.GetBytes("<< /Type /Catalog /Pages 3 0 R >>");
+        byte[] pages = Encoding.ASCII.GetBytes("<< /Type /Pages /Kids [4 0 R] /Count 1 >>");
+        byte[] streamBody = [.. header, .. catalog, .. pages];
+        int first = header.Length;
+
+        string pageObj = "<< /Type /Page /Parent 3 0 R /MediaBox [0 0 100 100] /Contents 5 0 R /Resources << >> >>";
+        byte[] contentBytes = Encoding.ASCII.GetBytes("1 0 0 rg 10 10 80 80 re f");
+        string contentObj = $"<< /Length {contentBytes.Length} >>";
+
+        var builder = new StringBuilder();
+        builder.Append("%PDF-1.7\n");
+        builder.Append("1 0 obj << /Type /ObjStm /N 2 /First ").Append(first)
+               .Append(" /Length ").Append(streamBody.Length).Append(" >>\nstream\n");
+        string tailAfterStream = "\nendstream\nendobj\n"
+            + "4 0 obj " + pageObj + " endobj\n"
+            + "5 0 obj " + contentObj + "\nstream\n";
+        string afterContent = "\nendstream\nendobj\n"
+            + "xref\n0 0\ntrailer << /Size 6 /Root 2 0 R >>\nstartxref\n0\n%%EOF\n";
+
+        byte[] prefix = Encoding.ASCII.GetBytes(builder.ToString());
+        byte[] middle = Encoding.ASCII.GetBytes(tailAfterStream);
+        byte[] suffix = Encoding.ASCII.GetBytes(afterContent);
+
+        byte[] all = new byte[prefix.Length + streamBody.Length + middle.Length + contentBytes.Length + suffix.Length];
+        int at = 0;
+        prefix.CopyTo(all, at); at += prefix.Length;
+        streamBody.CopyTo(all, at); at += streamBody.Length;
+        middle.CopyTo(all, at); at += middle.Length;
+        contentBytes.CopyTo(all, at); at += contentBytes.Length;
+        suffix.CopyTo(all, at);
+        return all;
+    }
+
+    /// <summary>
     /// A 100x100 page with one ShadingType 5 lattice whose vertices are 32 bits per coordinate
     /// (pdf.js personwithdog.pdf declares BitsPerCoordinate 32). Reading a 32-bit coordinate through the
     /// int-returning bit reader overflows to a negative value, the mesh lands off-page and the page stays

@@ -178,6 +178,17 @@ public sealed class PdfXref
         }
 
         Trailer = trailerWithRoot;
+
+        // A chain that names a /Root but registered not a single object is not usable. Linearized files
+        // open with a placeholder "xref / 0 / %%EOF" section whose table is empty while the real objects
+        // sit further in: pdf.js empty_protected.pdf, issue17069.pdf, secHandler.pdf and friends resolved
+        // every object to null, so the document looked like it had no catalog at all. Falling back to
+        // rebuild by scanning recovers the table.
+        if (_entries.Count == 0)
+        {
+            return false;
+        }
+
         return true;
     }
 
@@ -363,6 +374,71 @@ public sealed class PdfXref
         return value;
     }
 
+    private void ExpandObjectStreams(byte[] data)
+    {
+        List<(int ObjectNumber, int Offset)> fileEntries = new();
+        foreach (KeyValuePair<long, PdfXrefEntry> pair in _entries)
+        {
+            if (pair.Value.Type == PdfXrefEntryType.InFile)
+            {
+                fileEntries.Add(((int)(pair.Key >> 32), (int)pair.Value.Offset));
+            }
+        }
+
+        foreach ((int containerNumber, int offset) in fileEntries)
+        {
+            PdfStream? stream;
+            try
+            {
+                var parser = new PdfParser(data, offset) { Encryption = _encryption, DecryptStrings = false };
+                stream = parser.TryParseIndirectObject()?.Object is PdfStream candidate &&
+                    candidate.Dictionary.GetNameValue("Type") == "ObjStm"
+                    ? candidate
+                    : null;
+            }
+            catch (PdfException)
+            {
+                continue;
+            }
+
+            if (stream is null)
+            {
+                continue;
+            }
+
+            byte[] decoded;
+            try
+            {
+                decoded = stream.Decode();
+            }
+            catch (PdfException)
+            {
+                continue;
+            }
+
+            long count = (stream.Dictionary.Get("N") as PdfNumber)?.AsLong() ?? 0;
+            int first = (int)((stream.Dictionary.Get("First") as PdfNumber)?.AsLong() ?? 0);
+            if (count <= 0 || count > 100000 || first <= 0 || first > decoded.Length)
+            {
+                continue;
+            }
+
+            var lexer = new PdfLexer(decoded, 0, first);
+            for (long i = 0; i < count; i++)
+            {
+                PdfToken numberToken = lexer.NextToken();
+                PdfToken offsetToken = lexer.NextToken();
+                if (numberToken.Kind != PdfTokenKind.Integer || offsetToken.Kind != PdfTokenKind.Integer)
+                {
+                    break;
+                }
+
+                AddEntryOverwrite((int)numberToken.IntegerValue, 0,
+                    new PdfXrefEntry(PdfXrefEntryType.InObjectStream, 0, containerNumber, (int)i, 0));
+            }
+        }
+    }
+
     private void RebuildByScanning(byte[] data)
     {
         WasRebuilt = true;
@@ -433,6 +509,12 @@ public sealed class PdfXref
 
             position = objIndex + ObjKeyword.Length;
         }
+
+        // 2.5) Expand the object streams the scan turned up. Their contents are only reachable through the
+        // container, so a rebuilt table that skips them leaves a catalog whose /Pages is compressed
+        // unresolvable - which is exactly where pdf.js empty_protected.pdf and the rest of the linearized
+        // family stopped (MuPDF repairs object streams the same way).
+        ExpandObjectStreams(data);
 
         // 3) Assemble the trailer.
         if (trailer is null || trailer.Get("Root") is null)

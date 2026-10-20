@@ -206,4 +206,20 @@ public class PdfParsingTests
 
         return -1;
     }
+
+    /// <summary>
+    /// A document whose /xref section is an empty placeholder and whose catalog sits inside an object stream
+    /// still has to open: the object table is rebuilt by scanning and the object streams that scan finds are
+    /// expanded, so the compressed /Root resolves (pdf.js empty_protected.pdf and its family).
+    /// </summary>
+    [Fact]
+    public void CompressedCatalogIsRecoveredAfterRebuildingTheXref()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateCompressedCatalogAfterRebuildPdf());
+
+        Assert.Equal(1, document.PageCount);
+        PdfPage page = document.Pages[0];
+        Assert.Equal(100f, page.Width);
+        Assert.Equal(100f, page.Height);
+    }
 }
