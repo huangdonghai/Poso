@@ -15,6 +15,14 @@ internal enum ShadingColorSpace
     Gray,
     Rgb,
     Cmyk,
+
+    /// <summary>
+    /// CIE-based spaces (ISO 32000-1 8.6.5.3/8.6.5.4): the values are not sRGB until the white point,
+    /// gamma and matrix have been applied. Reading a linear CalRGB wash (Gamma [1 1 1]) as encoded sRGB
+    /// darkens it badly - pdf.js issue17065.pdf.
+    /// </summary>
+    CalGray,
+    CalRgb,
 }
 
 /// <summary>
@@ -23,7 +31,11 @@ internal enum ShadingColorSpace
 /// defined in a two-component DeviceN space - Cyan and Yellow, say - whose output only becomes a colour
 /// after that transform; reading the tints as base components instead turns a green wash near black.
 /// </summary>
-internal readonly record struct ShadingSpace(ShadingColorSpace Base, PdfFunction? Tint, int TintComponents);
+internal readonly record struct ShadingSpace(
+    ShadingColorSpace Base,
+    PdfFunction? Tint,
+    int TintComponents,
+    Poso.Pdf.Colors.CalColor? Cal = null);
 
 /// <summary>
 /// PDF shading dictionary (ISO 32000-1 12.5). <see cref="Type2"/> axial and <see cref="Type3"/>
@@ -99,7 +111,12 @@ public sealed class PdfShading
             int decodeCount = dictionary.GetArray("Decode")?.Count ?? 0;
             int components = decodeCount >= 6
                 ? (decodeCount - 4) / 2
-                : colorSpace.Base switch { ShadingColorSpace.Cmyk => 4, ShadingColorSpace.Rgb => 3, _ => 1 };
+                : colorSpace.Base switch
+                {
+                    ShadingColorSpace.Cmyk => 4,
+                    ShadingColorSpace.Rgb or ShadingColorSpace.CalRgb => 3,
+                    _ => 1,
+                };
             function = IdentityFunction.Create(components);
         }
         if (function is null)
@@ -324,8 +341,8 @@ public sealed class PdfShading
             _colorSpace.TintComponents :
             _colorSpace.Base switch
             {
-                ShadingColorSpace.Gray => 1,
-                ShadingColorSpace.Rgb => 3,
+                ShadingColorSpace.Gray or ShadingColorSpace.CalGray => 1,
+                ShadingColorSpace.Rgb or ShadingColorSpace.CalRgb => 3,
                 _ => 4,
             };
 
@@ -481,6 +498,24 @@ public sealed class PdfShading
                 g = converted.G;
                 b = converted.B;
                 break;
+            case ShadingColorSpace.CalGray when colorSpace.Cal is { } calGray:
+                {
+                    Poso.Pdf.Colors.PosoColorF gray = calGray.ToRgb(v[..1]);
+                    r = ToByte(gray.R);
+                    g = ToByte(gray.G);
+                    b = ToByte(gray.B);
+                    break;
+                }
+
+            case ShadingColorSpace.CalRgb when colorSpace.Cal is { } calRgb:
+                {
+                    Poso.Pdf.Colors.PosoColorF rgb = calRgb.ToRgb(v[..3]);
+                    r = ToByte(rgb.R);
+                    g = ToByte(rgb.G);
+                    b = ToByte(rgb.B);
+                    break;
+                }
+
             default: // RGB
                 r = ToByte(v[0]);
                 g = ToByte(v[1]);
@@ -500,17 +535,18 @@ public sealed class PdfShading
         {
             // [space, tint transform]: the function emits one component per separation name and only the
             // transform maps them onto the base space, which is itself a name or an ICCBased array.
-            ShadingColorSpace baseSpace = BaseSpaceOf(document.Resolve(array[2]));
+            (ShadingColorSpace baseSpace, Poso.Pdf.Colors.CalColor? baseCal) = BaseSpaceOf(document.Resolve(array[2]));
             int tints = family.Value == "Separation"
                 ? 1
                 : Math.Max(1, (document.Resolve(array[1]) as PdfArray)?.Count ?? 1);
-            return new ShadingSpace(baseSpace, PdfFunction.Create(document, array[3]), tints);
+            return new ShadingSpace(baseSpace, PdfFunction.Create(document, array[3]), tints, baseCal);
         }
 
-        return new ShadingSpace(BaseSpaceOf(resolved), null, 0);
+        (ShadingColorSpace plainBase, Poso.Pdf.Colors.CalColor? plainCal) = BaseSpaceOf(resolved);
+        return new ShadingSpace(plainBase, null, 0, plainCal);
     }
 
-    private static ShadingColorSpace BaseSpaceOf(PdfObject? colorSpaceObject)
+    private static (ShadingColorSpace Base, Poso.Pdf.Colors.CalColor? Cal) BaseSpaceOf(PdfObject? colorSpaceObject)
     {
         string? name = colorSpaceObject switch
         {
@@ -519,13 +555,20 @@ public sealed class PdfShading
             _ => null,
         };
 
-        return name switch
+        if (name is "CalGray" or "CalRGB")
+        {
+            // The parameters live in the dictionary that follows the family name.
+            Poso.Pdf.Colors.CalColor cal = Poso.Pdf.Colors.CalColor.FromDictionary(
+                colorSpaceObject is PdfArray { Count: >= 2 } cieArray ? cieArray[1] as PdfDictionary : null);
+            return (name == "CalGray" ? ShadingColorSpace.CalGray : ShadingColorSpace.CalRgb, cal);
+        }
+
+        return (name switch
         {
             "DeviceCMYK" or "CMYK" => ShadingColorSpace.Cmyk,
-            "DeviceGray" or "G" or "CalGray" => ShadingColorSpace.Gray,
-            "DeviceRGB" or "RGB" or "CalRGB" or "ICCBased" => ShadingColorSpace.Rgb,
+            "DeviceGray" or "G" => ShadingColorSpace.Gray,
             _ => ShadingColorSpace.Rgb,
-        };
+        }, null);
     }
 
     private static float[] ReadFloats(PdfArray? array, float[] fallback)

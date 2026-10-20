@@ -2027,6 +2027,28 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// A 100x100 page filled with an axial shading defined in <c>/CalRGB</c> with <c>/Gamma [1 1 1]</c> - i.e.
+    /// linear RGB - whose function returns a flat 0.5. Those samples are not sRGB values: after the white
+    /// point, matrix and sRGB transfer they land near 187, while reading them straight as encoded sRGB gives
+    /// a visibly darker 128.
+    /// </summary>
+    public static byte[] CreateCalRgbShadingPdf()
+    {
+        string shading = "/ShadingType 2 /Coords [0 50 100 50] /Extend [true true] /Function 7 0 R " +
+            "/ColorSpace [/CalRGB << /WhitePoint [0.9505 1 1.0889] " +
+            "/Matrix [0.4124 0.3576 0.1805 0.2126 0.7152 0.0722 0.0193 0.1192 0.9505] /Gamma [1 1 1] >>]";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Pattern << /P0 5 0 R >> /ColorSpace << /Cs1 8 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes("/Cs1 cs /P0 scn 0 0 100 100 re f")),
+            new PdfObjectDefinition(5, "<< /Type /Pattern /PatternType 2 /Shading 6 0 R >>"),
+            new PdfObjectDefinition(6, $"<< {shading} >>"),
+            new PdfObjectDefinition(7, "<< /FunctionType 2 /Domain [0 1] /C0 [0.5 0.5 0.5] /C1 [0.5 0.5 0.5] /N 1 >>"),
+            new PdfObjectDefinition(8, "[/Pattern /DeviceRGB]"));
+    }
+
+    /// <summary>
     /// A 100x100 page whose only mark is an ImageMask XObject drawn while the fill colour is a shading
     /// pattern: the mask is a stencil, so the gradient must show through only where its bits are set (the
     /// top-left quarter here) and the rest stays white - pdf.js issue13372.pdf draws a 646x761 bilevel mask

@@ -2635,31 +2635,7 @@ public sealed class PdfContentInterpreter
         _ => 3,
     };
 
-    private CalColor ParseCalColor(PdfObject? obj)
-    {
-        if (obj is not PdfDictionary dictionary)
-        {
-            return new CalColor();
-        }
-
-        float[]? wp = ColorFloats(dictionary.GetArray("WhitePoint"));
-        float[]? bp = ColorFloats(dictionary.GetArray("BlackPoint"));
-        float[]? gamma = ColorFloats(dictionary.GetArray("Gamma"));
-        if (gamma is null && dictionary.Get("Gamma") is PdfNumber singleGamma)
-        {
-            float g = singleGamma.AsFloat();
-            gamma = new[] { g, g, g };
-        }
-
-        float[]? matrix = ColorFloats(dictionary.GetArray("Matrix"));
-        return new CalColor
-        {
-            WhitePoint = wp is { Length: >= 3 } ? wp : new[] { 0.9505f, 1f, 1.089f },
-            BlackPoint = bp is { Length: >= 3 } ? bp : new[] { 0f, 0f, 0f },
-            Gamma = gamma is { Length: >= 3 } ? gamma : new[] { 1f, 1f, 1f },
-            Matrix = matrix is { Length: >= 9 } ? matrix : null,
-        };
-    }
+    private CalColor ParseCalColor(PdfObject? obj) => CalColor.FromDictionary(obj as PdfDictionary);
 
     private static float[]? ColorFloats(PdfArray? array)
     {

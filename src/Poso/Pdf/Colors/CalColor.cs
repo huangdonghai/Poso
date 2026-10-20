@@ -1,4 +1,5 @@
 using System;
+using Poso.Pdf.Objects;
 
 namespace Poso.Pdf.Colors;
 
@@ -23,6 +24,53 @@ public sealed class CalColor
         0.2126f, 0.7152f, 0.0722f,
         0.0193f, 0.1192f, 0.9505f,
     };
+
+    /// <summary>
+    /// Reads a CIE space's parameters out of its dictionary (ISO 32000-1 8.6.5.3/8.6.5.4): /WhitePoint,
+    /// /BlackPoint, /Gamma (one number or three) and /Matrix. Whatever the file leaves out falls back to
+    /// the defaults, which is what makes a bare `[/CalRGB << >>]` still render.
+    /// </summary>
+    public static CalColor FromDictionary(PdfDictionary? dictionary)
+    {
+        if (dictionary is null)
+        {
+            return new CalColor();
+        }
+
+        float[]? whitePoint = Floats(dictionary.GetArray("WhitePoint"));
+        float[]? blackPoint = Floats(dictionary.GetArray("BlackPoint"));
+        float[]? gamma = Floats(dictionary.GetArray("Gamma"));
+        if (gamma is null && dictionary.Get("Gamma") is PdfNumber singleGamma)
+        {
+            float g = singleGamma.AsFloat();
+            gamma = new[] { g, g, g };
+        }
+
+        float[]? matrix = Floats(dictionary.GetArray("Matrix"));
+        return new CalColor
+        {
+            WhitePoint = whitePoint is { Length: >= 3 } ? whitePoint : new[] { 0.9505f, 1f, 1.089f },
+            BlackPoint = blackPoint is { Length: >= 3 } ? blackPoint : new[] { 0f, 0f, 0f },
+            Gamma = gamma is { Length: >= 3 } ? gamma : new[] { 1f, 1f, 1f },
+            Matrix = matrix is { Length: >= 9 } ? matrix : null,
+        };
+    }
+
+    private static float[]? Floats(PdfArray? array)
+    {
+        if (array is null || array.Count == 0)
+        {
+            return null;
+        }
+
+        var values = new float[array.Count];
+        for (int i = 0; i < array.Count; i++)
+        {
+            values[i] = array.GetNumber(i)?.AsFloat() ?? 0f;
+        }
+
+        return values;
+    }
 
     public PosoColorF ToRgb(ReadOnlySpan<float> values)
     {

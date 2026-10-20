@@ -220,6 +220,27 @@ public class MeshShadingTests
         Assert.True(r > 250 && g > 250 && b > 250, $"outside the /BBox the page must stay white (got {r},{g},{b})");
     }
 
+    /// <summary>
+    /// A shading in /CalRGB with /Gamma [1 1 1] carries LINEAR samples: they must go through the white point,
+    /// matrix and the sRGB transfer, so a flat 0.5 paints near 187 rather than the 128 an identity reading
+    /// would give (ISO 32000-1 8.6.5.4).
+    /// </summary>
+    [Fact]
+    public void CalRgbShading_AppliesTransfer()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateCalRgbShadingPdf());
+        using IGraphicsContext context = Factory.CreateContext(100, 100);
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] px = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(px);
+
+        (byte r, byte g, byte b) = Luma(px, image.Width, 50, 50);
+        Assert.True(r >= 165 && r <= 210, $"a linear 0.5 must be sRGB-encoded to about 187, got {r}");
+        Assert.True(Math.Abs(r - g) < 12 && Math.Abs(r - b) < 12, $"a neutral grey must stay neutral (r={r} g={g} b={b})");
+    }
+
     private static (byte R, byte G, byte B) Luma(byte[] px, int width, int userX, int userY)
     {
         int deviceRow = 100 - userY;
