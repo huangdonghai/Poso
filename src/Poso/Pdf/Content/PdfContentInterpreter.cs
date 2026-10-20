@@ -2887,15 +2887,19 @@ public sealed class PdfContentInterpreter
         bool byAlpha = dict.GetNameValue("S") == "Alpha";
         PdfFunction? transfer = PdfFunction.Create(_document, dict.Get("TR"));
 
-        // The group's own box, in the surface's pixels. MuPDF scissors an alpha mask to it, which matters
-        // once a /TR is in play: the transfer function is only ever evaluated on area the group could have
-        // painted, so a mask smaller than its element erases outside its box rather than lifting to TR(0).
+        // The group's own box, in the surface's pixels. A form's content is clipped to it, so nothing is
+        // painted outside; the mask value there is the transfer function applied to the transparent input
+        // the group leaves behind, not zero. PDFium paints pdf.js smask_alpha_oob_transfer.pdf that way -
+        // its group box is a quarter of the element and its /TR maps 0 to 0.5, so the whole element
+        // outside the box comes out at half strength - and pdf.js says the same in as many words
+        // ("Alpha SMasks ignore /BC for the alpha output"; the out-of-bounds input alpha is 0 and is put
+        // through the transfer map). Scissoring to the box instead loses that, and a mask smaller than
+        // its element then erases outside its box rather than lifting.
         RectF? groupBox = FormBox(form) is { } box ? BoundingBoxOf(box, baseMatrix) : null;
 
         // A /BC backdrop is part of a luminosity mask - it is the colour the group is composited over
-        // before its luminance is read - and has no meaning for an alpha mask, where everything the group
-        // leaves unpainted contributes no coverage at all. That absence is what makes a mask smaller than
-        // its element clip the element to the mask's own box.
+        // before its luminance is read - and has no meaning for an alpha mask, where the group's alpha is
+        // the coverage.
         PosoColor backdrop = byAlpha ? new PosoColor(0, 0, 0, 0) : SoftMaskBackdrop(dict.GetArray("BC"));
 
         byte[] pixels;
@@ -2923,16 +2927,12 @@ public sealed class PdfContentInterpreter
         for (int pixel = 0; pixel * 4 + 3 < pixels.Length; pixel++)
         {
             int i = pixel * 4;
-            if (byAlpha && groupBox is { } cut && !cut.Contains((pixel % width) + 0.5f, (pixel / width) + 0.5f))
-            {
-                pixels[i] = pixels[i + 1] = pixels[i + 2] = 0;
-                pixels[i + 3] = 255;
-                continue;
-            }
 
             // The channels arrive premultiplied, so reading them directly is the group composited over
             // the backdrop it was cleared to. A luminosity mask takes that luminance as its coverage:
-            // white keeps the element, black erases it.
+            // white keeps the element, black erases it. An alpha mask takes the group's own alpha, which
+            // is zero wherever the group painted nothing - inside its box or out of it - and that zero
+            // goes through the transfer function like any other value.
             float coverage = byAlpha
                 ? pixels[i + 3] / 255f
                 : ((0.3f * pixels[i + 2]) + (0.59f * pixels[i + 1]) + (0.11f * pixels[i])) / 255f;

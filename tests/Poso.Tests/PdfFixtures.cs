@@ -1351,14 +1351,19 @@ public static class PdfFixtures
 
     /// <summary>
     /// A 200x200 page that fills the whole box with blue while an <c>/Alpha</c> soft mask whose group only
-    /// covers the left half is in effect, and whose <c>/TR</c> maps 0 to 0.5. The mask has to reach a plain
-    /// path - no form XObject is involved - and the area it does not cover has to stay erased rather than
-    /// take the transfer function's value for empty coverage.
+    /// covers the left half is in effect. The mask has to reach a plain path - no form XObject is involved.
+    /// With <paramref name="transferFunction"/> the <c>/TR</c> maps 0 to 0.5, and the half the group does
+    /// not cover then comes out at half strength: the group leaves transparent there, and an alpha mask's
+    /// value is the transfer function applied to that, which is what PDFium paints and what pdf.js
+    /// documents for its out-of-bounds alpha. Without the function the same half stays erased.
     /// </summary>
-    public static byte[] CreateSoftMaskedRectPdf()
+    public static byte[] CreateSoftMaskedRectPdf(bool transferFunction = true)
     {
         byte[] maskContent = Encoding.ASCII.GetBytes("1 g 0 0 100 200 re f");
         string content = "q /GS1 gs 0 0 1 rg 0 0 200 200 re f Q";
+        string transfer = transferFunction
+            ? "/TR << /FunctionType 2 /Domain [0 1] /C0 [0.5] /C1 [1] /Range [0 1] >> "
+            : string.Empty;
         return Build(1,
             new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
             new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
@@ -1368,7 +1373,7 @@ public static class PdfFixtures
             Stream(5, "/Type /XObject /Subtype /Form /FormType 1 /BBox [0 0 100 200] "
                 + "/Group << /Type /Group /S /Transparency /CS /DeviceGray >>", maskContent),
             new PdfObjectDefinition(6, "<< /Type /ExtGState /SMask << /Type /Mask /S /Alpha /G 5 0 R "
-                + "/TR << /FunctionType 2 /Domain [0 1] /C0 [0.5] /C1 [1] /Range [0 1] >> >> >>"));
+                + transfer + ">> >>"));
     }
 
     /// <summary>

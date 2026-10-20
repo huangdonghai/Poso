@@ -106,14 +106,17 @@ public class SoftMaskTests
     }
 
     /// <summary>
-    /// ExtGState <c>/SMask</c> on a plain path fill: the mask group covers only the page's left half, so
-    /// the blue rectangle may only appear there, and the <c>/TR</c> that maps 0 to 0.5 must not lift the
-    /// uncovered half to half strength. MuPDF erases it (verified on this fixture: (0,0,255) at x=50,
-    /// (255,255,255) at x=150).
+    /// ExtGState <c>/SMask</c> on a plain path fill, with a <c>/TR</c> that maps 0 to 0.5: the mask group
+    /// covers only the page's left half, and the half it leaves transparent has to come out at half
+    /// strength. An alpha mask's value is the transfer function applied to the group's alpha, and the
+    /// group's alpha outside its box is 0 - not "no coverage at all". PDFium paints pdf.js
+    /// smask_alpha_oob_transfer.pdf that way: (51,153,230) inside the group's box and (152,203,242), the
+    /// element at 50%, everywhere outside it. Verified on this fixture: (0,0,255) at x=50 and
+    /// (128,128,255) at x=150.
     /// </summary>
     [Theory]
     [MemberData(nameof(MaskCapableFactories))]
-    public void ExtGStateAlphaMaskOnAPath_ClipsToTheGroupBox(IGraphicsFactory factory)
+    public void ExtGStateAlphaMaskOnAPath_LiftsTheUncoveredAreaToTheTransferFunction(IGraphicsFactory factory)
     {
         using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateSoftMaskedRectPdf());
         using IGraphicsContext context = factory.CreateContext(200, 200);
@@ -127,7 +130,29 @@ public class SoftMaskTests
         (byte B, byte G, byte R) outside = Sample(px, image.Width, 100, 150);
 
         Assert.True(inside.B > 150 && inside.R < 90 && inside.G < 90, $"inside the mask box should stay blue (got {inside})");
-        Assert.True(outside.B > 200 && outside.R > 200 && outside.G > 200, $"outside the mask box must be erased (got {outside})");
+        Assert.True(outside.R is > 110 and < 150 && outside.G is > 110 and < 150 && outside.B > 230,
+            $"outside the mask box should be the element at TR(0)=0.5, half blue (got {outside})");
+    }
+
+    /// <summary>
+    /// The other side of the same rule: with no <c>/TR</c> the transfer function is the identity, so the
+    /// area the group leaves transparent stays at 0 and the element is erased there. pdf.js
+    /// smask_alpha_oob.pdf is this shape and both references paint it this way.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(MaskCapableFactories))]
+    public void ExtGStateAlphaMaskWithoutTransfer_ErasesTheUncoveredArea(IGraphicsFactory factory)
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateSoftMaskedRectPdf(transferFunction: false));
+        using IGraphicsContext context = factory.CreateContext(200, 200);
+        document.Pages[0].Render(factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] px = new byte[image.Width * image.Height * image.BytesPerPixel];
+        image.CopyPixels(px);
+
+        (byte B, byte G, byte R) outside = Sample(px, image.Width, 100, 150);
+        Assert.True(outside.R > 200 && outside.G > 200 && outside.B > 200, $"outside the mask box must be erased (got {outside})");
     }
 
     /// <summary>
