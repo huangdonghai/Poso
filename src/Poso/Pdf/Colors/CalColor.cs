@@ -85,6 +85,7 @@ public sealed class CalColor
             float gy = (a * (wpY - Safe(BlackPoint, 1, 0f))) + Safe(BlackPoint, 1, 0f);
             float gx = wpY == 0f ? gy : gy * Safe(WhitePoint, 0, 0.9505f) / wpY;
             float gz = wpY == 0f ? gy : gy * Safe(WhitePoint, 2, 1.089f) / wpY;
+            Cielab.AdaptToD65(ref gx, ref gy, ref gz, WhitePoint);
             return Cielab.XyzToRgb(gx, gy, gz);
         }
 
@@ -108,6 +109,8 @@ public sealed class CalColor
         x *= wx / (matrix[0] + matrix[1] + matrix[2]);
         y *= wy / (matrix[3] + matrix[4] + matrix[5]);
         z *= wz / (matrix[6] + matrix[7] + matrix[8]);
+
+        Cielab.AdaptToD65(ref x, ref y, ref z, WhitePoint);
 
         return Cielab.XyzToRgb(x, y, z);
     }

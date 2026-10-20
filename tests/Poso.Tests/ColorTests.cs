@@ -71,6 +71,38 @@ public class ColorTests
         Assert.True(Math.Abs(gray.R - 0.5f) < 0.1f, $"v=0.5 should round-trip near 0.5 ({gray})");
     }
 
+    /// <summary>
+    /// CalGray carries its own white point, and the XYZ measured against it has to reach D65 before the
+    /// sRGB primaries are applied. pdf.js calgray.pdf page 1 declares an equal-energy white point
+    /// (<c>[1 1 1]</c>) with gamma 1; adapting nothing leaves every cell warm - a 0.5 gray read
+    /// (244,219,215) where the reference paints a neutral (225,225,225).
+    /// </summary>
+    [Fact]
+    public void CalGrayEqualEnergyWhitePointStaysNeutral()
+    {
+        var cal = new CalColor { WhitePoint = new[] { 1f, 1f, 1f }, Gamma = new[] { 1f, 1f, 1f } };
+
+        PosoColorF mid = cal.ToRgb(new float[] { 0.5f });
+        Assert.True(Math.Abs(mid.R - mid.G) < 0.01f && Math.Abs(mid.G - mid.B) < 0.01f, $"v=0.5 must be neutral ({mid})");
+        Assert.True(Math.Abs(mid.R - 0.735f) < 0.02f, $"v=0.5 must sRGB-encode to 0.735 ({mid})");
+
+        PosoColorF white = cal.ToRgb(new float[] { 1f });
+        Assert.True(white.R > 0.98f && white.G > 0.98f && white.B > 0.98f, $"the white point must paint white ({white})");
+    }
+
+    /// <summary>
+    /// The same adaptation applies to CalRGB: all-1 input maps to the declared white point, so a white
+    /// point that is not D65 (here D50) has to be adapted too or white comes out tinted - (255,231,184)
+    /// rather than white.
+    /// </summary>
+    [Fact]
+    public void CalRgbNonD65WhitePointRendersWhite()
+    {
+        var cal = new CalColor { WhitePoint = new[] { 0.9642f, 1f, 0.8249f }, Gamma = new[] { 1f, 1f, 1f } };
+        PosoColorF white = cal.ToRgb(new float[] { 1f, 1f, 1f });
+        Assert.True(white.R > 0.98f && white.G > 0.98f && white.B > 0.98f, $"D50 white point must paint white ({white})");
+    }
+
     [Fact]
     public void CalRGBWithSrgbParametersProducesExpectedColor()
     {
