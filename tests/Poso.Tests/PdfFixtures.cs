@@ -558,6 +558,75 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// A form XObject with no /Resources of its own that draws another form defined only in the page's
+    /// resources (ISO 32000-1 Table 95 says such a form inherits the resources in force at the call).
+    /// pdf.js issue1055r.pdf has this shape, and without the inheritance its black square vanished.
+    /// </summary>
+    public static byte[] CreateFormWithoutResourcesPdf()
+    {
+        string inner = "0 0 0 rg 0 0 20 20 re f 1 1 1 rg 5 5 10 10 re f";
+        string outer = "q 1.5 0 0 1.5 10 10 cm /Im14 Do Q";
+        string page = "q /Tr Do Q";
+
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 50] /Resources << /XObject << /Im14 4 0 R /Tr 5 0 R >> >> /Contents 8 0 R >>"),
+            Stream(4, "/Type /XObject /Subtype /Form /BBox [0 0 20 20]", Encoding.ASCII.GetBytes(inner)),
+            Stream(5, "/Type /XObject /Subtype /Form /BBox [0 0 200 50]", Encoding.ASCII.GetBytes(outer)),
+            Stream(8, string.Empty, Encoding.ASCII.GetBytes(page)));
+    }
+
+    /// <summary>
+    /// A Type3 font whose glyph procedure opens a text object and sets its own <c>Tm</c>. The procedure
+    /// runs as if wrapped in q/Q (ISO 32000-1 9.5.5), so that matrix must not replace the caller's; if it
+    /// does, every glyph after the first is positioned from the glyph's own origin. pdf.js pr4922.pdf's
+    /// header line only showed its first character before the fix.
+    /// </summary>
+    public static byte[] CreateType3TextMatrixPdf()
+    {
+        const string glyph = "1 0 0 1 0 0 d1 q 0 g BT 1 0 0 1 0 0 Tm ET 0 0 1 1 re f Q";
+        const string font = "<< /Type /Font /Subtype /Type3 /FontMatrix [1 0 0 1 0 0] /FontBBox [0 0 1 1] "
+            + "/FirstChar 1 /LastChar 2 /Widths [1 1] /CharProcs 5 0 R /Encoding 6 0 R >>";
+        const string page = "BT /T3 10 Tf 1 0 0 1 5 5 Tm (\x01\x02) Tj ET";
+
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 50] /Resources << /Font << /T3 4 0 R >> >> /Contents 8 0 R >>"),
+            new PdfObjectDefinition(4, font),
+            new PdfObjectDefinition(5, "<< /g1 7 0 R /g2 7 0 R >>"),
+            new PdfObjectDefinition(6, "<< /Type /Encoding /Differences [1 /g1 2 /g2] >>"),
+            Stream(7, string.Empty, Encoding.ASCII.GetBytes(glyph)),
+            Stream(8, string.Empty, Encoding.ASCII.GetBytes(page)));
+    }
+
+    /// <summary>
+    /// A symbolic TrueType font whose only character map is a Macintosh (1,0) table keyed by the PDF
+    /// code: code 1 is glyph 53 and /Differences names it 'R'. The character 'R' is not in that table,
+    /// so the code itself has to be tried through the program's cmap (pdf.js issue8229.pdf).
+    /// </summary>
+    public static byte[] CreateCodeKeyedTrueTypePdf(byte[] fontProgram)
+    {
+        const string font = "<< /Type /Font /Subtype /TrueType /BaseFont /AAAAAA+CodeKeyed /Flags 4 "
+            + "/FirstChar 1 /LastChar 2 /Widths [722 500] /Encoding 5 0 R /FontDescriptor 6 0 R >>";
+        const string encoding = "<< /Type /Encoding /Differences [1 /R 2 /o] >>";
+        const string descriptor = "<< /Type /FontDescriptor /FontName /AAAAAA+CodeKeyed /Flags 4 "
+            + "/FontBBox [-1 -210 942 919] /Ascent 728 /Descent -210 /ItalicAngle 0 /StemV 141 /FontFile2 7 0 R >>";
+        const string content = "BT /F1 24 Tf 10 10 Td (\x01\x02) Tj ET";
+
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 120 40] /Resources << /Font << /F1 4 0 R >> >> /Contents 8 0 R >>"),
+            new PdfObjectDefinition(4, font),
+            new PdfObjectDefinition(5, encoding),
+            new PdfObjectDefinition(6, descriptor),
+            Stream(7, string.Empty, fontProgram),
+            Stream(8, string.Empty, Encoding.ASCII.GetBytes(content)));
+    }
+
+    /// <summary>
     /// A page whose /Resources carries no /Font at all while its content names one: pdf.js
     /// issue5954.pdf's page has only an empty /XObject entry. PDFium paints the run in a stock face
     /// rather than dropping it, so the page must not come out blank.

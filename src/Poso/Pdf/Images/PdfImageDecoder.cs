@@ -239,6 +239,7 @@ public static class PdfImageDecoder
                     stencil = MaskCoverage(document, factory, maskStream, width, height, diagnostics);
                 }
 
+
                 break;
 
             case PdfArray maskArray when maskArray.Count >= 2:
@@ -1091,8 +1092,11 @@ public static class PdfImageDecoder
     /// </summary>
     private static bool CodecEncodedMask(PdfStream mask)
     {
+        // A mask carried by an image codec has to go through the image pipeline: stream.Decode() leaves
+        // DCT/JPX/CCITT/JBIG2 bytes compressed, and reading those as samples turns the stencil into
+        // noise. pdf.js issue4379.pdf's CCITT mask over a 1000x800 indexed image did exactly that.
         List<string> filters = GetFilters(mask.Dictionary);
-        return filters.Exists(f => f is "DCTDecode" or "DCT" or "JPXDecode");
+        return filters.Exists(f => f is "DCTDecode" or "DCT" or "JPXDecode" or "CCITTFaxDecode" or "CCF" or "JBIG2Decode");
     }
 
     /// <summary>
@@ -1102,7 +1106,10 @@ public static class PdfImageDecoder
     private static byte[]? DecodedImageCoverage(
         PdfDocument document, IGraphicsFactory factory, PdfStream mask, int width, int height)
     {
-        using IImage? image = Decode(document, factory, mask, mask.Dictionary, PosoColor.Black);
+        // White, not black: an ImageMask's coverage lands in the alpha channel, and premultiplying a
+        // black stencil leaves every colour channel zero. White keeps the coverage readable from the
+        // red channel, which is also where a colour mask's luminance sits.
+        using IImage? image = Decode(document, factory, mask, mask.Dictionary, PosoColor.White);
         if (image is null)
         {
             return null;

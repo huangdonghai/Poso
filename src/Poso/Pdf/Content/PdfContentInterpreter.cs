@@ -1350,7 +1350,7 @@ public sealed class PdfContentInterpreter
                         break;
 
                     case "Form":
-                        ExecuteForm(xobject);
+                        ExecuteForm(xobject, resources);
                         break;
                 }
             }
@@ -1808,6 +1808,12 @@ public sealed class PdfContentInterpreter
         // same line, and the green text vanished under a white mask.
         _context.Save();
         _stateStack.Push(_state.Clone());
+        // The charproc's own text matrix is not part of the graphics state: a Bx/Tm inside it used to
+        // overwrite the caller's, so every glyph after the first was placed from the glyph's origin.
+        // pdf.js pr4922.pdf's Type3 font draws its whole header line and only the first character
+        // landed where the page asked. ISO 32000-1 9.5.5 makes the procedure a closed q/Q scope.
+        Matrix3x2 outerTextMatrix = _textMatrix;
+        Matrix3x2 outerTextLineMatrix = _textLineMatrix;
         // canvas = FontMatrix * textSpaceMatrix * CTM
         _context.ConcatMatrix(font.FontMatrix * textSpaceMatrix);
         try
@@ -1817,6 +1823,8 @@ public sealed class PdfContentInterpreter
         finally
         {
             _state = _stateStack.Pop();
+            _textMatrix = outerTextMatrix;
+            _textLineMatrix = outerTextLineMatrix;
             _context.Restore();
             _context.SetBlendMode(_state.BlendMode);
             _type3Stencil = outerStencil;
@@ -2981,7 +2989,7 @@ public sealed class PdfContentInterpreter
         }
     }
 
-    private void ExecuteForm(PdfStream form)
+    private void ExecuteForm(PdfStream form, PdfDictionary? callerResources)
     {
         if (_suppressContent)
         {
@@ -3020,7 +3028,10 @@ public sealed class PdfContentInterpreter
                 _context.ClipRect(box);
             }
 
-            PdfDictionary? formResources = _document.Resolve(dictionary.Get("Resources")) as PdfDictionary;
+            // A form with no /Resources inherits the resources in force where it is invoked (ISO 32000-1
+            // Table 95). pdf.js issue1055r.pdf's outer form draws an inner form that is only defined in
+            // the page's resources, and dropping the inheritance painted the square not at all.
+            PdfDictionary? formResources = _document.Resolve(dictionary.Get("Resources")) as PdfDictionary ?? callerResources;
 
             // A form whose dictionary carries a transparency group (/Group /S /Transparency) renders its
             // content on an isolated off-surface that is composited back with the alpha/blend that were in

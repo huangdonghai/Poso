@@ -59,7 +59,25 @@ public sealed class SimplePdfFont : PdfFont
         }
 
         uint unicode = _codeToUnicode[code];
-        return graphics.GetGlyphId(unicode != 0 ? unicode : (uint)code);
+        uint mapped = unicode != 0 ? unicode : (uint)code;
+        ushort glyph = graphics.GetGlyphId(mapped);
+        if (glyph == 0 && Outlines is { } outlines)
+        {
+            // A symbolic TrueType subset can route its codes straight through its own cmap: pdf.js
+            // issue8229.pdf's program carries a (1,0) format-6 table that maps code 1 to glyph 53, while
+            // /ToUnicode names that code 'R' - a character the table does not contain. The back end is
+            // asked first, then the program's map for the character, then for the code itself.
+            if (outlines.TryGetGlyphIdForCodePoint(mapped, out ushort viaCharacter))
+            {
+                glyph = viaCharacter;
+            }
+            else if (mapped != (uint)code && outlines.TryGetGlyphIdForCodePoint((uint)code, out ushort viaCode))
+            {
+                glyph = viaCode;
+            }
+        }
+
+        return glyph;
     }
 
     public override float GetWidthEm(int code)

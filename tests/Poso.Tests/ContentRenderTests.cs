@@ -773,6 +773,117 @@ public class ContentRenderTests
         Assert.True(wb > 200 && wg > 200 && wr > 200, $"the other half stays white at (2, 2), got r={wr} g={wg} b={wb}");
     }
 
+    /// <summary>
+    /// pdf.js issue4379.pdf masks a 1000x800 indexed image with a CCITT-compressed stencil. The mask
+    /// reached the decoder as raw compressed bytes because only DCT/JPX masks were routed through the
+    /// image pipeline, so the page painted a band of noise instead of the text.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Render_CodecEncodedImageMask_ShowsTheImage(bool peach)
+    {
+        IGraphicsFactory factory = peach ? PeachGraphicsFactory.Default : Factory;
+        using PdfDocument document = PdfDocument.FromArray(File.ReadAllBytes(PdfSample("masked-indexed-image.pdf")));
+        using IGraphicsContext context = factory.CreateContext(1190, 1684);
+        document.Pages[0].Render(factory, context, new PdfRenderOptions(2f, 0f, PosoColor.White));
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+
+        int ink = 0;
+        for (int i = 0; i < pixels.Length; i += 4)
+        {
+            if (pixels[i] < 200)
+            {
+                ink++;
+            }
+        }
+
+        Assert.True(ink > 80000, $"the masked image fills about 6% of the page, got {ink} dark pixels");
+    }
+
+    /// <summary>
+    /// A form with no /Resources draws a form that only the page's resources define. Dropping the
+    /// inheritance loses the whole nested drawing (pdf.js issue1055r.pdf).
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Render_FormWithoutResources_InheritsTheCallers(bool peach)
+    {
+        IGraphicsFactory factory = peach ? PeachGraphicsFactory.Default : Factory;
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateFormWithoutResourcesPdf());
+        using IGraphicsContext context = factory.CreateContext(200, 50);
+        document.Pages[0].Render(factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+
+        // The black square covers PDF (10..40, 10..40) minus a white centre; device y = 50 - y.
+        (byte b, byte g, byte r, _) = PixelAt(pixels, image.Width, 38, 12);
+        Assert.True(b < 100 && g < 100 && r < 100, $"the nested form must paint at (12, 38), got r={r} g={g} b={b}");
+    }
+
+    /// <summary>
+    /// Each Type3 glyph procedure sets its own Tm before painting its square. The procedure runs in a
+    /// closed q/Q scope, so the caller's text matrix must survive; if it does not, the second glyph is
+    /// placed from the glyph's origin instead of the next pen position.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Render_Type3GlyphTextMatrix_DoesNotLeak(bool peach)
+    {
+        IGraphicsFactory factory = peach ? PeachGraphicsFactory.Default : Factory;
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateType3TextMatrixPdf());
+        using IGraphicsContext context = factory.CreateContext(200, 50);
+        document.Pages[0].Render(factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+
+        // Two 10x10 squares at PDF (5..15, 5..15) and (15..25, 5..15); device y 35..45.
+        (byte b1, byte g1, byte r1, _) = PixelAt(pixels, image.Width, 38, 10);
+        Assert.True(b1 < 100 && g1 < 100 && r1 < 100, $"the first glyph must paint at (10, 38), got r={r1} g={g1} b={b1}");
+
+        (byte b2, byte g2, byte r2, _) = PixelAt(pixels, image.Width, 38, 20);
+        Assert.True(b2 < 100 && g2 < 100 && r2 < 100, $"the second glyph must paint at (20, 38), got r={r2} g={g2} b={b2}");
+
+        // With a leaked matrix the second square sits at PDF y 0..10, i.e. device y 40..50.
+        (byte wb, byte wg, byte wr, _) = PixelAt(pixels, image.Width, 47, 20);
+        Assert.True(wb > 200 && wg > 200 && wr > 200, $"nothing paints at (20, 47), got r={wr} g={wg} b={wb}");
+    }
+
+    /// <summary>
+    /// The subset's only cmap is a Macintosh (1,0) table keyed by the PDF code, while /Differences names
+    /// code 1 'R' - a character the table does not hold. The code itself has to reach the program's map
+    /// (pdf.js issue8229.pdf).
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Render_SymbolicTrueType_MapsItsCodesThroughTheProgramsCmap(bool peach)
+    {
+        IGraphicsFactory factory = peach ? PeachGraphicsFactory.Default : Factory;
+        byte[] pdf = PdfFixtures.CreateCodeKeyedTrueTypePdf(FontsFile("code-keyed-truetype.bin"));
+        using PdfDocument document = PdfDocument.FromArray(pdf);
+        using IGraphicsContext context = factory.CreateContext(240, 80);
+        document.Pages[0].Render(factory, context, new PdfRenderOptions(2f, 0f, PosoColor.White));
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+
+        int ink = 0;
+        for (int i = 0; i < pixels.Length; i += 4)
+        {
+            if (pixels[i] < 200)
+            {
+                ink++;
+            }
+        }
+
+        Assert.True(ink > 300, $"the two mapped glyphs must paint, got {ink} dark pixels");
+    }
+
+    private static string PdfSample(string name) => IOPath.Combine(AppContext.BaseDirectory, "Samples", "Pdf", name);
+
     private static byte[] FontsFile(string name) =>
         File.ReadAllBytes(IOPath.Combine(AppContext.BaseDirectory, "Samples", "Fonts", name));
 
