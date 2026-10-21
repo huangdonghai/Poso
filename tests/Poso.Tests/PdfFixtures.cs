@@ -470,6 +470,31 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// The same shape as <see cref="CreateOutlineFallbackPdf"/> but carrying a TrueType program, where
+    /// there are no glyph names to route by: the code has to reach the outline through the sfnt's own
+    /// cmap. PeachDrawing rejects pdf.js bug1200096.pdf's subset, so this is the fixture that exercises
+    /// the TrueType side of the fallback end to end.
+    /// </summary>
+    public static byte[] CreateTrueTypeOutlineFallbackPdf(byte[] fontProgram)
+    {
+        string font = "<< /Type /Font /Subtype /TrueType /BaseFont /KVIQXV#20Times#20New#20Roman "
+            + "/Encoding /WinAnsiEncoding /FirstChar 65 /LastChar 67 /Widths [722 667 667] /FontDescriptor 6 0 R >>";
+        string descriptor = "<< /Type /FontDescriptor /FontName /KVIQXV#20Times#20New#20Roman /Flags 32 "
+            + "/FontBBox [0 -218 963 688] /Ascent 688 /Descent -21 /ItalicAngle 0 /StemV 111 "
+            + "/FontFile2 7 0 R >>";
+        string content = "BT /F1 40 Tf 10 30 Td (ABC) Tj ET";
+
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 220 60] /Resources << /Font << /F1 4 0 R >> >> /Contents 8 0 R >>"),
+            new PdfObjectDefinition(4, font),
+            new PdfObjectDefinition(6, descriptor),
+            Stream(7, string.Empty, fontProgram),
+            Stream(8, string.Empty, Encoding.ASCII.GetBytes(content)));
+    }
+
+    /// <summary>
     /// Like <see cref="CreateNativeType1Pdf"/> but the font is <b>symbolic</b> (/Flags 4) and its
     /// /Encoding is a dictionary carrying /Differences that do NOT cover the drawn code (120). Per
     /// PDF 32000-1 Table 122 the codes outside /Differences still fall back to StandardEncoding, so

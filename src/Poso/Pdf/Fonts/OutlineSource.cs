@@ -24,4 +24,15 @@ internal abstract class OutlineSource
         glyphId = 0;
         return false;
     }
+
+    /// <summary>
+    /// Resolves a Unicode code point through the program's own character map. A simple TrueType font
+    /// has no glyph names to route by, and a back end that rejected the program cannot answer this
+    /// either, so the cmap inside the sfnt is the only bridge from a PDF code to its outline.
+    /// </summary>
+    public virtual bool TryGetGlyphIdForCodePoint(uint codePoint, out ushort glyphId)
+    {
+        glyphId = 0;
+        return false;
+    }
 }

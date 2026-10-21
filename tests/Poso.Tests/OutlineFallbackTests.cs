@@ -4,6 +4,7 @@ using Poso.Geometry;
 using Poso.Graphics;
 using Poso.Pdf;
 using Poso.Pdf.Fonts;
+using Poso.PeachDrawing;
 using Poso.Skia;
 using Xunit;
 using IOPath = System.IO.Path;
@@ -178,6 +179,54 @@ public class OutlineFallbackTests
 
         Assert.True(drawn >= 10, $"most glyphs of a Times subset carry outlines, got {drawn} of 15");
         Assert.True(seen.Count >= 10, $"distinct glyphs must give distinct bounds, got {seen.Count} of {drawn}");
+    }
+
+    /// <summary>
+    /// The TrueType fallback end to end on the PeachDrawing back end, which rejects this subset. A
+    /// TrueType program carries no glyph names, so a code reaches its outline only through the sfnt's
+    /// own cmap; without that step every lookup needed a name, found none, and the fallback painted a
+    /// blank run. This subset maps 'A' to gid 36.
+    /// </summary>
+    [Fact]
+    public void TrueTypeFallback_OnPeach_PaintsTheCmapResolvedOutlines()
+    {
+        byte[] program = FontsFile("bug1200096-times-subset.bin");
+
+        // PeachDrawing must actually reject this program, or the test proves nothing about the fallback.
+        using (PeachFont face = PeachFont.Create(program, "KVIQXV+Times New Roman")!)
+        {
+            Assert.True(face.UsedFallback, "the fixture must be a program PeachDrawing falls back from");
+        }
+
+        byte[] pdf = PdfFixtures.CreateTrueTypeOutlineFallbackPdf(program);
+        using PdfDocument document = PdfDocument.FromArray(pdf);
+        var fontDict = (Poso.Pdf.Objects.PdfDictionary)document.GetObject(4)!;
+        var font = PdfFont.Create(document, PeachGraphicsFactory.Default, fontDict);
+        Assert.True(font.NeedsOutlineFallback, "the reader must offer outlines for the rejected program");
+
+        Assert.True(font.TryGetGlyphOutlinePath(65, out IPath? a) && a is not null,
+            "code 65 must resolve to gid 36 through the cmap");
+        RectF bounds = a!.Bounds;
+        Assert.InRange(bounds.Width, 0.6f, 0.8f);
+
+        using IGraphicsContext context = PeachGraphicsFactory.Default.CreateContext(220, 60);
+        document.Pages[0].Render(PeachGraphicsFactory.Default, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+        using IImage image = context.Snapshot();
+        byte[] px = new byte[image.Width * image.Height * 4];
+        image.CopyPixels(px);
+
+        int ink = 0;
+        for (int i = 0; i < px.Length; i += 4)
+        {
+            if (px[i] < 200 || px[i + 1] < 200 || px[i + 2] < 200)
+            {
+                ink++;
+            }
+        }
+
+        // "ABC" at 40 pt spans about 82 px of pen travel; three cap letterforms carry well over 600
+        // dark pixels even through the software rasteriser's lighter anti-aliasing.
+        Assert.True(ink > 600, $"the embedded outlines must paint through PeachDrawing, got {ink} dark pixels");
     }
 
     private static byte[] FontsFile(string name) =>

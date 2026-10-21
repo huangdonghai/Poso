@@ -118,9 +118,20 @@ public sealed class SimplePdfFont : PdfFont
         }
 
         // A subset that renamed its glyphs still keeps its built-in encoding in step with the codes.
-        return EmbeddedGlyphNames is { } program && program.TryGetGlyphIdForCode(code, out ushort byCode)
-            ? byCode
-            : -1;
+        if (EmbeddedGlyphNames is { } program && program.TryGetGlyphIdForCode(code, out ushort byCode))
+        {
+            return byCode;
+        }
+
+        // A TrueType program has no names to route by: the code's Unicode value goes through the
+        // cmap the sfnt itself carries.
+        uint unicode = _codeToUnicode[code];
+        if (outlines.TryGetGlyphIdForCodePoint(unicode != 0 ? unicode : (uint)code, out ushort byCmap))
+        {
+            return byCmap;
+        }
+
+        return -1;
     }
 
     private void BuildEncoding()
