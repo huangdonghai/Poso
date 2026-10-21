@@ -264,8 +264,10 @@ public abstract class PdfFont
 
         // A bare CFF (FontFile Type1, FontFile3 Type1C/CFF) is a glyph program, not a font container:
         // package it as OpenType so the back end can load it, and keep the parsed program around so
-        // glyph names from the PDF encoding can be resolved to glyph IDs.
-        if (data[0] == 1 && data[1] == 0 && data[2] == 4)
+        // glyph names from the PDF encoding can be resolved to glyph IDs. The header size (byte 2) is
+        // usually 4 but a CID subset can write more (pdf.js issue13147.pdf writes 12), so the check is a
+        // floor, and the readers themselves locate the INDEX tables from that byte.
+        if (data[0] == 1 && data[1] == 0 && data[2] >= 4)
         {
             if (CffProgram.TryCreate(data, out CffProgram? program) && program is not null)
             {

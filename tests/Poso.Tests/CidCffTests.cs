@@ -68,6 +68,50 @@ public class CidCffTests
         Assert.InRange(ink, 1200, 1900);
     }
 
+    /// <summary>
+    /// A CID-keyed subset can carry a CFF header longer than 4 bytes: pdf.js issue13147.pdf writes a
+    /// 12-byte header. The readers used to start the INDEX walk at a fixed 4, which parsed the tables as
+    /// garbage, so the font was rejected and its CJK text drew in a substitute. The walk must begin at
+    /// the header size the program declares.
+    /// </summary>
+    [Fact]
+    public void CidCffProgram_LongHeader_ReadsItsCidToGidMap()
+    {
+        byte[] cff = File.ReadAllBytes(FontsSample("futogob-cid-subset.bin"));
+        Assert.Equal(12, cff[2]);
+
+        Assert.True(CidCffProgram.TryCreate(cff, out CidCffProgram? program));
+        Assert.Equal(99, program!.GlyphCount);
+
+        // The page's first code, CID 0x096A, is glyph 79 of the subset - not 2410, which is what an
+        // identity assumption would hand the renderer.
+        Assert.True(program.CidToGid.TryGetValue(0x096A, out ushort gid));
+        Assert.Equal((ushort)79, gid);
+    }
+
+    private static string FontsSample(string name)
+    {
+        string probe = IOPath.Combine(AppContext.BaseDirectory, "Samples", "Fonts", name);
+        if (File.Exists(probe))
+        {
+            return probe;
+        }
+
+        DirectoryInfo? dir = new(AppContext.BaseDirectory);
+        while (dir is not null)
+        {
+            string candidate = IOPath.Combine(dir.FullName, "tests", "Poso.Tests", "Samples", "Fonts", name);
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+
+            dir = dir.Parent;
+        }
+
+        throw new FileNotFoundException($"font sample '{name}' not found.", name);
+    }
+
     private static string PdfSample(string name)
     {
         string probe = IOPath.Combine(AppContext.BaseDirectory, "Samples", "Pdf", name);

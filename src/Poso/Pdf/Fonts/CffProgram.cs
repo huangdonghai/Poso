@@ -279,7 +279,15 @@ public sealed class CffProgram : ICffMetrics
             return false;
         }
 
-        int position = 4;
+        // The header's third byte is its size. CFF normally writes 4, but a CID-keyed subset can carry a
+        // longer header (pdf.js issue13147.pdf uses 12); reading the INDEX at a fixed 4 lands mid-table
+        // and the program parses as garbage.
+        int position = data[2];
+        if (position < 4 || position >= data.Length)
+        {
+            return false;
+        }
+
         if (!CffIndex.TryRead(data, ref position, out CffIndex nameIndex) ||
             !CffIndex.TryRead(data, ref position, out CffIndex topIndex) ||
             !CffIndex.TryRead(data, ref position, out CffIndex stringIndex) ||
