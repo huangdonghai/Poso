@@ -219,6 +219,17 @@ public sealed class PeachFont : IFont
             string tag = Encoding.ASCII.GetString(data, entry, 4);
             int offset = (int)BinaryPrimitives.ReadUInt32BigEndian(data.AsSpan(entry + 8));
             int length = (int)BinaryPrimitives.ReadUInt32BigEndian(data.AsSpan(entry + 12));
+
+            // A fuzzed header can claim more tables than the directory holds: pdf.js issue3405r.pdf says 9
+            // where the ninth "entry" is head's first bytes, with an offset and a length that both run past
+            // the end of the program. That entry is not a table - it is dropped instead of being clamped,
+            // because clamping its length to the bytes left subtracts more than the file has and the
+            // negative total overflows the output allocation.
+            if (offset < 0 || length < 0 || offset > data.Length || length > data.Length - offset)
+            {
+                continue;
+            }
+
             switch (tag)
             {
                 case "cmap":
@@ -282,6 +293,11 @@ public sealed class PeachFont : IFont
             tables.Add(("name", 0, name.Length));
         }
 
+        // A fuzzed header can claim more tables than the directory holds: pdf.js issue3405r.pdf says 9
+        // where the ninth "entry" is head's first bytes, with an offset and a length that both run past
+        // the end of the program. That entry is not a table, so it is dropped instead of being clamped:
+        // clamping its length to the bytes left subtracts more than the file has, and the negative total
+        // then overflows the output allocation.
         tables.Sort((left, right) => string.CompareOrdinal(left.Tag, right.Tag));
 
         int count = tables.Count;

@@ -1,9 +1,11 @@
+using System.IO;
 using System.Numerics;
 using Poso.Geometry;
 using Poso.Graphics;
 using Poso.Pdf;
 using Poso.PeachDrawing;
 using Xunit;
+using IOPath = System.IO.Path;
 
 namespace Poso.Tests;
 
@@ -350,5 +352,36 @@ public class PeachBackendTests
         }
 
         return count;
+    }
+
+    /// <summary>
+    /// pdf.js issue3405r.pdf's embedded WenQuanYi program claims 9 tables although its directory holds 8:
+    /// the ninth "entry" is really the head table's first bytes, with an offset and a length that run past
+    /// the end of the program. RepairSubset clamped that length to the bytes left - a negative number - so
+    /// the output allocation threw OverflowException and the whole Peach render was lost, while Skia drew
+    /// the page. The bogus entry has to be dropped, not clamped.
+    /// </summary>
+    [Fact]
+    public void Render_FontWhoseTableCountOverrunsItsDirectory_StillDraws()
+    {
+        string path = IOPath.Combine(AppContext.BaseDirectory, "Samples", "Pdf", "corrupt-sfnt.pdf");
+        using PdfDocument document = PdfDocument.FromArray(File.ReadAllBytes(path));
+        Assert.Equal(1, document.PageCount);
+
+        using IGraphicsContext context = Factory.CreateContext(400, 100);
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(2f, 0f, PosoColor.White));
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+
+        int ink = 0;
+        for (int i = 0; i < pixels.Length; i += 4)
+        {
+            if (pixels[i] < 200)
+            {
+                ink++;
+            }
+        }
+
+        Assert.True(ink > 2000, $"the page's six CJK glyphs must paint, got {ink} dark pixels");
     }
 }
