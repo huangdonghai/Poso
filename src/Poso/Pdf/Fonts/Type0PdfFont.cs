@@ -1,3 +1,4 @@
+using Poso.Graphics;
 using Poso.Pdf.Objects;
 
 namespace Poso.Pdf.Fonts;
@@ -13,6 +14,8 @@ public sealed class Type0PdfFont : PdfFont
     private readonly ToUnicodeCMap? _toUnicode;
     private readonly PdfDictionary? _descendantFont;
     private readonly ushort[]? _cidToGid;
+    private readonly PredefinedCMap? _predefined;
+    private readonly string? _ordering;
     private readonly Dictionary<int, float> _cidWidthEm = new();
     private readonly float _defaultWidthEm;
     private readonly bool _isVertical;
@@ -38,6 +41,10 @@ public sealed class Type0PdfFont : PdfFont
         };
 
         _descendantFont = DescendantFont;
+        _ordering = CidOrdering();
+        _predefined = encodingObject is PdfName encodingName
+            ? PredefinedCMap.ForName(encodingName.Value, _ordering)
+            : null;
         _toUnicode = document.Resolve(dictionary.Get("ToUnicode")) is PdfStream toUnicodeStream
             ? ToUnicodeCMap.Parse(toUnicodeStream.Decode())
             : null;
@@ -93,6 +100,28 @@ public sealed class Type0PdfFont : PdfFont
 
     public override void DecodeCodes(ReadOnlySpan<byte> bytes, List<int> codes)
     {
+        if (_predefined is { } predefined)
+        {
+            // The predefined CMap fixes the byte layout even though its CID table is not available here:
+            // a Shift-JIS or EUC string mixes one- and two-byte codes, and reading every pair as one code
+            // turns "(57)" plus two kanji into four nonsense codes.
+            int position = 0;
+            while (position < bytes.Length)
+            {
+                int used = predefined.Decode(bytes, position, out int code);
+                if (used == 0)
+                {
+                    position++;
+                    continue;
+                }
+
+                codes.Add(code);
+                position += used;
+            }
+
+            return;
+        }
+
         int i = 0;
         while (i < bytes.Length)
         {
@@ -147,7 +176,71 @@ public sealed class Type0PdfFont : PdfFont
             }
         }
 
+        // A font the document does not embed is drawn in a substitute face, and that face knows nothing
+        // about the CID space: its glyphs are reached by character, so the code's Unicode value is the
+        // only common ground. PDFium substitutes a CJK face for these fonts and paints them.
+        if (!HasEmbeddedProgram && _predefined is { } predefined)
+        {
+            uint unicode = predefined.ToUnicode(code);
+            if (unicode != 0 && GraphicsFont is { } face && face.GetGlyphId(unicode) is ushort substitute && substitute != 0)
+            {
+                return substitute;
+            }
+        }
+
         return (ushort)Math.Clamp(code, 0, ushort.MaxValue);
+    }
+
+    /// <summary>
+    /// A non-embedded CID font has to draw in a system face, and the default substitute (Arial) has no
+    /// CJK glyphs. The ordering names the collection: Adobe's GB1/Japan1/Korea1/CNS1 map onto the usual
+    /// system families for each. A candidate the machine does not have is skipped by the callers, which
+    /// compare the face's family name.
+    /// </summary>
+    protected override IFont? CreateGraphicsFont()
+    {
+        IFont? face = base.CreateGraphicsFont();
+        if (face is null || HasEmbeddedProgram)
+        {
+            return face;
+        }
+
+        foreach (string family in SubstituteFamilies())
+        {
+            IFont? candidate = Factory?.CreateFont(default, family);
+            if (candidate is null)
+            {
+                continue;
+            }
+
+            if (string.Equals(candidate.Name, family, StringComparison.OrdinalIgnoreCase))
+            {
+                face.Dispose();
+                return candidate;
+            }
+
+            candidate.Dispose();
+        }
+
+        return face;
+    }
+
+    private static readonly Dictionary<string, string[]> CjkFamilies = new(StringComparer.Ordinal)
+    {
+        ["GB1"] = new[] { "Microsoft YaHei", "SimSun", "Noto Sans CJK SC", "Noto Sans SC", "PingFang SC", "WenQuanYi Zen Hei" },
+        ["Japan1"] = new[] { "Yu Gothic", "MS Gothic", "Noto Sans CJK JP", "Noto Sans JP", "Hiragino Sans" },
+        ["Korea1"] = new[] { "Malgun Gothic", "Noto Sans CJK KR", "Noto Sans KR", "Apple SD Gothic Neo" },
+        ["CNS1"] = new[] { "Microsoft JhengHei", "PMingLiU", "Noto Sans CJK TC", "Noto Sans TC", "PingFang TC" },
+    };
+
+    private string[] SubstituteFamilies() =>
+        _ordering is { } ordering && CjkFamilies.TryGetValue(ordering, out string[]? families) ? families : Array.Empty<string>();
+
+    /// <summary>The descendant's /CIDSystemInfo /Ordering (Adobe-GB1/Japan1/Korea1/CNS1 and friends).</summary>
+    private string? CidOrdering()
+    {
+        PdfDictionary? info = Document.Resolve(_descendantFont?.Get("CIDSystemInfo")) as PdfDictionary;
+        return (Document.Resolve(info?.Get("Ordering")) as PdfString)?.AsTextString();
     }
 
     private Dictionary<uint, ushort>? _unicodeToGlyph;
@@ -241,7 +334,7 @@ public sealed class Type0PdfFont : PdfFont
         return code;
     }
 
-    public override uint GetUnicode(int code) => _toUnicode?.GetFirstUnit(code) ?? 0;
+    public override uint GetUnicode(int code) => _toUnicode?.GetFirstUnit(code) ?? _predefined?.ToUnicode(code) ?? 0;
 
     /// <summary>Gets all Unicode code units for a code (used by text extraction).</summary>
     public bool TryGetUnicodeUnits(int code, out uint[] units)

@@ -7,12 +7,29 @@
 /// </summary>
 internal static class PeachStandardFonts
 {
+    /// <summary>
+    /// Families a caller may name directly - the CJK substitutes a non-embedded composite font asks for.
+    /// The PDF standard-14 mapping below must not rewrite these into Arial, which has no CJK glyphs.
+    /// </summary>
+    private static readonly HashSet<string> PassThroughFamilies = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Microsoft YaHei", "SimSun", "MS Gothic", "Yu Gothic", "Malgun Gothic", "Microsoft JhengHei", "PMingLiU",
+        "Noto Sans CJK SC", "Noto Sans CJK JP", "Noto Sans CJK KR", "Noto Sans CJK TC",
+        "Noto Sans SC", "Noto Sans JP", "Noto Sans KR", "Noto Sans TC",
+        "PingFang SC", "PingFang TC", "Hiragino Sans", "Apple SD Gothic Neo", "WenQuanYi Zen Hei",
+    };
+
     /// <summary>Maps a base font name to a system font family name.</summary>
     public static string MapFamily(string baseFontName)
     {
         if (string.IsNullOrWhiteSpace(baseFontName))
         {
             return "Arial";
+        }
+
+        if (PassThroughFamilies.Contains(baseFontName))
+        {
+            return baseFontName;
         }
 
         string name = Normalize(baseFontName);

@@ -131,6 +131,9 @@ public abstract class PdfFont
     /// <summary>The embedded font program prepared for a graphics backend (cached); null when the PDF embeds none.</summary>
     protected byte[]? EmbeddedFontData => _embeddedFontData ??= LoadEmbeddedFontData();
 
+    /// <summary>True when the document actually carries a glyph program for this font.</summary>
+    protected bool HasEmbeddedProgram => EmbeddedFontData is not null;
+
     private byte[]? _embeddedFontData;
 
     /// <summary>
