@@ -55,7 +55,7 @@ public static class PdfImageDecoder
             Jbig2Page? page = Jbig2Decoder.Decode(jbig2Data);
             if (page is null)
             {
-                diagnostics?.Report(PdfUnsupportedKind.ImageCodec, "Unsupported JBIG2 features (symbol dictionaries / text / halftone / refinement regions are not decoded)");
+                diagnostics?.Report(PdfUnsupportedKind.ImageCodec, "The JBIG2 stream could not be decoded (a damaged or unsupported construction)");
                 return null;
             }
 

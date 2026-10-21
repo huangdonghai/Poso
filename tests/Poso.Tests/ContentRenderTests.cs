@@ -774,6 +774,38 @@ public class ContentRenderTests
     }
 
     /// <summary>
+    /// A Huffman symbol dictionary can encode a symbol as a refinement of another one (pdf.js
+    /// bitmap-symbol-symhuffrefineone.pdf) or as an aggregate of several (symhuffrefineseveral.pdf).
+    /// Both used to return null, so the page carried no image at all; the rendered page is 7.1% ink.
+    /// </summary>
+    [Theory]
+    [InlineData(false, "jbig2-huffman-refine.pdf")]
+    [InlineData(true, "jbig2-huffman-refine.pdf")]
+    [InlineData(false, "jbig2-huffman-aggregate.pdf")]
+    [InlineData(true, "jbig2-huffman-aggregate.pdf")]
+    public void Render_HuffmanSymbolDictionaryWithRefinement_PaintsTheImage(bool peach, string sample)
+    {
+        IGraphicsFactory factory = peach ? PeachGraphicsFactory.Default : Factory;
+        using PdfDocument document = PdfDocument.FromArray(File.ReadAllBytes(PdfSample(sample)));
+        using IGraphicsContext context = factory.CreateContext(798, 800);
+        document.Pages[0].Render(factory, context, new PdfRenderOptions(2f, 0f, PosoColor.White));
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+
+        int ink = 0;
+        for (int i = 0; i < pixels.Length; i += 4)
+        {
+            if (pixels[i] < 200)
+            {
+                ink++;
+            }
+        }
+
+        double fraction = (double)ink / (image.Width * image.Height);
+        Assert.InRange(fraction, 0.065, 0.075);
+    }
+
+    /// <summary>
     /// pdf.js issue13316_reduced.pdf's font names its glyphs /g5167 and friends. The Adobe Glyph List
     /// cannot resolve those, and a stripped subset has no post table; PDFium reads the number as the
     /// glyph index, and so does Poso now - before, the codes fell through to their own values and the

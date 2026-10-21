@@ -16,11 +16,12 @@ internal readonly record struct Jbig2Symbol(int Width, int Height, byte[] Packed
 /// segment decoder (T.88 §6.3/§6.4, segment types 6/7), ported faithfully from the reference
 /// implementation <c>jbig2_symbol_dict.c</c> / <c>jbig2_text.c</c> (Artifex jbig2dec).
 ///
-/// Covers the arithmetic-coded (non-Huffman) path without refinement for both:
-/// - Symbol dictionary: SDHUFF=0, SDREFAGG=0 → each symbol decoded via generic region arithmetic kernel.
-/// - Text region: SBHUFF=0, SBREFINE=0 → symbol instances placed via IADT/IAFS/IADS/IAIT/IAID deltas.
+/// Covers both coding modes and the refinement/aggregate constructions:
+/// - Symbol dictionary: arithmetic and Huffman dictionaries; Huffman dictionaries may code a symbol as a
+///   single refinement of another or as a text-region aggregate of several (§6.5.8.2).
+/// - Text region: arithmetic and Huffman instance placement, with or without per-instance refinement.
 ///
-/// Returns null for unsupported paths (Huffman, refinement, aggregate), so the caller degrades gracefully.
+/// Returns null for malformed or still-unsupported input, so the caller degrades gracefully.
 /// </summary>
 internal static class Jbig2SymbolDict
 {
@@ -329,19 +330,15 @@ internal static class Jbig2SymbolDict
     }
 
     /// <summary>
-    /// Decodes a Huffman-coded symbol dictionary (SDHUFF=1). Supports the non-aggregate path only
-    /// (SDREFAGG=0): per height class a single MMR/uncompressed collective bitmap is decoded and sliced
-    /// into per-symbol glyphs. Aggregate/refinement Huffman dictionaries degrade to null (not yet verified).
-    /// Mirrors jbig2_symbol_dict.c's Huffman branch; validated against MuPDF pixel-for-pixel.
+    /// Decodes a Huffman-coded symbol dictionary (SDHUFF=1). Without refinement each height class carries
+    /// one MMR/uncompressed collective bitmap that is sliced into per-symbol glyphs; with SDREFAGG a symbol
+    /// is either a single arithmetic refinement of an earlier glyph or a text-region aggregate, laid out
+    /// as PDFium does (fixed-width instance ids, RD*/RSIZE from Annex B). Mirrors PDFium's JBig2_SddProc.
     /// </summary>
     private static Jbig2Symbol[]? DecodeDictionaryHuffman(byte[] data, int bodyStart, int bodyEnd, ushort flags, Jbig2Symbol[]?[] referredDicts, Jbig2Huffman.Table?[] referredTables)
     {
         bool sdRefAgg = (flags & 0x0002) != 0;
         bool sdRTemplate = ((flags >> 12) & 1) == 1;
-        if (sdRefAgg)
-        {
-            return null; // aggregate / single-refine Huffman dictionaries: not yet oracle-verified
-        }
 
         // 7.4.2.1.6 table selection (custom tables consumed in referred-segment order via jbig2_find_table).
         int tableIndex = 0;
@@ -359,8 +356,33 @@ internal static class Jbig2SymbolDict
 
         // 7.4.2.1.2: for Huffman there is no SDAT (GBAT) field; sdat_bytes = 0.
         int offset = 2;
-        // 7.4.2.1.3: SDRAT present only for SDREFAGG && !SDRTEMPLATE (sdRefAgg already returned null above).
-        _ = sdRTemplate;
+        // 7.4.2.1.3: SDRAT (the refinement adaptive template) is present when SDREFAGG && !SDRTEMPLATE.
+        sbyte[] sdrat = new sbyte[4];
+        if (sdRefAgg && !sdRTemplate)
+        {
+            if (bodyStart + offset + 4 > bodyEnd)
+            {
+                return null;
+            }
+            for (int i = 0; i < 4; i++)
+            {
+                sdrat[i] = (sbyte)data[bodyStart + offset + i];
+            }
+            offset += 4;
+        }
+
+        // 7.4.2.1.6: the aggregation instance count is a Huffman table of its own (Table B.1 unless a
+        // custom table is named by bit 7, consumed after the BMSIZE table).
+        Jbig2Huffman.Table? aggInstTable = null;
+        if (sdRefAgg)
+        {
+            aggInstTable = (flags & 0x0080) != 0 ? NextCustom(referredTables, ref tableIndex) : Jbig2Huffman.Standard(1);
+            if (aggInstTable is null)
+            {
+                return null;
+            }
+        }
+
         if (offset + 8 > bodyEnd - bodyStart)
         {
             return null;
@@ -392,6 +414,19 @@ internal static class Jbig2SymbolDict
                 sdNumInSyms = sdInSyms.Length;
             }
         }
+
+        // SBSYMCODELEN = ceil(log2(SDNUMINSYMS + SDNUMNEWSYMS)); a single refinement names its reference
+        // symbol with that many raw bits rather than through a table.
+        int sbSymCodeLen = 0;
+        while ((1L << sbSymCodeLen) < (long)sdNumInSyms + sdNumNewSyms)
+        {
+            sbSymCodeLen++;
+        }
+
+        // Arithmetic stats for the refinement bitmaps (one context set per dictionary, as in the
+        // arithmetic path).
+        int grStatsSize = sdRTemplate ? 1 << 10 : 1 << 13;
+        byte[] grStats = sdRefAgg ? new byte[grStatsSize] : [];
 
         var hs = new Jbig2Huffman.State(data, bodyStart + offset, bodyEnd);
 
@@ -439,13 +474,37 @@ internal static class Jbig2SymbolDict
                 {
                     return null;
                 }
-                totWidth += symWidth;
-                if (totWidth <= 0 || totWidth > 10000000)
+
+                if (!sdRefAgg)
                 {
-                    return null;
+                    totWidth += symWidth;
+                    if (totWidth <= 0 || totWidth > 10000000)
+                    {
+                        return null;
+                    }
+                    symWidths[nsymsDecoded] = symWidth;
+                    nsymsDecoded++;
                 }
-                symWidths[nsymsDecoded] = symWidth;
-                nsymsDecoded++;
+                else
+                {
+                    // 6.5.8.2: refinement/aggregate symbol. Its data follows the width inside the
+                    // Huffman stream, so it is decoded here rather than after the height class.
+                    byte[]? symbolBits = DecodeHuffmanRefinedSymbol(
+                        hs, data, bodyStart, bodyEnd, aggInstTable!, sdrat, grStats, sdRTemplate,
+                        sdInSyms, sdNewSyms, nsymsDecoded, sdNumInSyms, sbSymCodeLen, symWidth, hcHeight);
+                    if (symbolBits is null)
+                    {
+                        return null;
+                    }
+
+                    sdNewSyms[nsymsDecoded] = new Jbig2Symbol(symWidth, hcHeight, symbolBits);
+                    nsymsDecoded++;
+                }
+            }
+
+            if (sdRefAgg)
+            {
+                continue; // no collective bitmap on the refinement/aggregate path
             }
 
             // 6.5.5(4d) / 6.5.9: collective bitmap for this height class (MMR, or uncompressed when BMSIZE=0).
@@ -899,6 +958,115 @@ internal static class Jbig2SymbolDict
     }
 
     /// <summary>
+    /// One refinement/aggregate-coded symbol of a Huffman dictionary (§6.5.8.2). A single instance names
+    /// a reference symbol with raw bits, then RDX/RDY (Table B.15) and the arithmetic-coded refinement
+    /// bitmap's byte size (Table B.1); the bitmap itself is decoded with the refinement context and the
+    /// Huffman stream is advanced past it. Multi-instance aggregates are a nested text region and are not
+    /// handled here (they return null, which the caller treats as an undecodable segment).
+    /// </summary>
+    private static byte[]? DecodeHuffmanRefinedSymbol(
+        Jbig2Huffman.State hs, byte[] data, int bodyStart, int bodyEnd,
+        Jbig2Huffman.Table aggInstTable, sbyte[] sdrat, byte[] grStats, bool sdRTemplate,
+        Jbig2Symbol[]? sdInSyms, Jbig2Symbol[] sdNewSyms, int nsymsDecoded, int sdNumInSyms,
+        int sbSymCodeLen, int symWidth, int hcHeight)
+    {
+        int code;
+        int refAggNInst = hs.Get(aggInstTable, out code);
+        if (code != 0 || refAggNInst <= 0)
+        {
+            return null;
+        }
+
+        if (refAggNInst > 1)
+        {
+            // §6.5.8.2.2 (2): the aggregate is a text region over the input symbols plus the ones already
+            // decoded, laid out into this symbol's box (Table 17). Unlike a text region segment, it has no
+            // symbol-code table in the stream: PDFium gives every symbol a fixed-width id (the table is
+            // the identity), and the instances follow the REFAGGNINST value directly.
+            var symbols = new List<Jbig2Symbol>(sdNumInSyms + nsymsDecoded);
+            if (sdInSyms is not null)
+            {
+                symbols.AddRange(sdInSyms);
+            }
+            for (int i = 0; i < nsymsDecoded; i++)
+            {
+                symbols.Add(sdNewSyms[i]);
+            }
+
+            if (!DecodeTextRegionBodyHuffman(
+                    hs, data, bodyEnd, symbols.ToArray(), symWidth, hcHeight,
+                    sbStrips: 1, refCorner: 0, transposed: false,
+                    sbCombOp: 0, sbDefPixel: false, sbDsOffset: 0, sbNumInstances: refAggNInst,
+                    fs: Jbig2Huffman.Standard(6), ds: Jbig2Huffman.Standard(8), dt: Jbig2Huffman.Standard(11),
+                    rdw: Jbig2Huffman.Standard(15), rdh: Jbig2Huffman.Standard(15),
+                    rdx: Jbig2Huffman.Standard(15), rdy: Jbig2Huffman.Standard(15),
+                    rsize: Jbig2Huffman.Standard(1),
+                    sbRefine: true, sbRTemplate: sdRTemplate, sbrat: sdrat,
+                    fixedWidthSymbolIds: true, out byte[]? aggregate) || aggregate is null)
+            {
+                return null;
+            }
+
+            return aggregate;
+        }
+
+        int symbolId = hs.GetBits(sbSymCodeLen, out code);
+        if (code != 0)
+        {
+            return null;
+        }
+        int rdx = hs.Get(Jbig2Huffman.Standard(15), out code);
+        if (code != 0) { return null; }
+        int rdy = hs.Get(Jbig2Huffman.Standard(15), out code);
+        if (code != 0) { return null; }
+        int bmSize = hs.Get(Jbig2Huffman.Standard(1), out code);
+        if (code != 0 || bmSize < 0)
+        {
+            return null;
+        }
+
+        Jbig2Symbol refSym;
+        if (symbolId < sdNumInSyms)
+        {
+            if (sdInSyms is null) { return null; }
+            refSym = sdInSyms[symbolId];
+        }
+        else if (symbolId - sdNumInSyms < nsymsDecoded)
+        {
+            refSym = sdNewSyms[symbolId - sdNumInSyms];
+        }
+        else
+        {
+            return null;
+        }
+
+        hs.SkipToByteBoundary();
+        int start = hs.Offset();
+        int stride = (symWidth + 7) / 8;
+        if (bmSize == 0)
+        {
+            // A zero BMSIZE means the bitmap is stored uncompressed-sized: the caller skips its raw size.
+            bmSize = hcHeight * stride;
+        }
+        if (start < 0 || start + bmSize > bodyEnd)
+        {
+            return null;
+        }
+
+        var mq = new Jbig2MqDecoder(data, start, start + bmSize);
+        byte[]? bits = Jbig2Refinement.Decode(
+            sdRTemplate ? 1 : 0, false, sdrat, mq, grStats,
+            symWidth, hcHeight, refSym.Packed, refSym.Width, refSym.Height, rdx, rdy);
+        if (bits is null)
+        {
+            return null;
+        }
+
+        hs.Advance(bmSize);
+        return bits;
+    }
+
+    /// <summary>
     /// Decodes a Huffman-coded text region (SBHUFF=1). Non-refinement path only: instance deltas via the
     /// FS/DS/DT tables and symbol IDs via the runlength-constructed symbol ID table; placement geometry is
     /// identical to the arithmetic path. Mirrors jbig2_text.c's Huffman branch, validated against MuPDF.
@@ -982,12 +1150,75 @@ internal static class Jbig2SymbolDict
             }
         }
 
-        int sbNumSyms = referredSymbols.Length;
         var hs = new Jbig2Huffman.State(data, cursor, bodyEnd);
-        Jbig2Huffman.Table? symCodes = BuildSymbolIdTable(hs, sbNumSyms);
-        if (symCodes is null)
+        return DecodeTextRegionBodyHuffman(
+            hs, data, bodyEnd, referredSymbols, regionWidth, regionHeight,
+            sbStrips, refCorner, transposed, sbCombOp, sbDefPixel, sbDsOffset, sbNumInstances,
+            fs, ds, dt, rdw, rdh, rdx, rdy, rsize, sbRefine, sbRTemplate, sbrat,
+            fixedWidthSymbolIds: false, out regionResult);
+    }
+
+    /// <summary>
+    /// The instance-placement core of a Huffman text region (T.88 6.4), shared by a text region segment
+    /// and by a multi-instance aggregate symbol inside a symbol dictionary (6.5.8.2.2). The caller has
+    /// already consumed the segment header and selected the tables; <paramref name="hs"/> continues at
+    /// the current bit position, which is what lets the aggregate interleave with the dictionary stream.
+    /// </summary>
+    private static bool DecodeTextRegionBodyHuffman(
+        Jbig2Huffman.State hs,
+        byte[] data,
+        int bodyEnd,
+        Jbig2Symbol[] referredSymbols,
+        int regionWidth,
+        int regionHeight,
+        int sbStrips,
+        int refCorner,
+        bool transposed,
+        int sbCombOp,
+        bool sbDefPixel,
+        int sbDsOffset,
+        int sbNumInstances,
+        Jbig2Huffman.Table fs,
+        Jbig2Huffman.Table ds,
+        Jbig2Huffman.Table dt,
+        Jbig2Huffman.Table? rdw,
+        Jbig2Huffman.Table? rdh,
+        Jbig2Huffman.Table? rdx,
+        Jbig2Huffman.Table? rdy,
+        Jbig2Huffman.Table? rsize,
+        bool sbRefine,
+        bool sbRTemplate,
+        sbyte[] sbrat,
+        bool fixedWidthSymbolIds,
+        out byte[]? regionResult)
+    {
+        regionResult = null;
+        int logSbStrips = 0;
+        while ((1 << logSbStrips) < sbStrips)
         {
-            return false;
+            logSbStrips++;
+        }
+
+        int sbNumSyms = referredSymbols.Length;
+        Jbig2Huffman.Table? symCodes = null;
+        int symIdBits = 0;
+        if (fixedWidthSymbolIds)
+        {
+            // An aggregate inside a symbol dictionary numbers its instances with plain fixed-width bits;
+            // the text region segment's run-coded table is not in the stream (PDFium builds the identity
+            // table with codelen = ceil(log2(SBNUMSYMS))).
+            while ((1 << symIdBits) < sbNumSyms)
+            {
+                symIdBits++;
+            }
+        }
+        else
+        {
+            symCodes = BuildSymbolIdTable(hs, sbNumSyms);
+            if (symCodes is null)
+            {
+                return false;
+            }
         }
 
         // Arithmetic refinement stats persist across instances within this text region (§6.4.11).
@@ -1041,7 +1272,7 @@ internal static class Jbig2SymbolDict
                 }
                 int t = stripT + curt;
 
-                int id = hs.Get(symCodes, out code);
+                int id = fixedWidthSymbolIds ? hs.GetBits(symIdBits, out code) : hs.Get(symCodes!, out code);
                 if (code != 0)
                 {
                     return false;
@@ -1063,11 +1294,16 @@ internal static class Jbig2SymbolDict
                     }
                     if (ri != 0)
                     {
-                        int rdwVal = hs.Get(rdw!, out code); if (code != 0) return false;
-                        int rdhVal = hs.Get(rdh!, out code); if (code != 0) return false;
-                        int rdxVal = hs.Get(rdx!, out code); if (code != 0) return false;
-                        int rdyVal = hs.Get(rdy!, out code); if (code != 0) return false;
-                        int bmSize = hs.Get(rsize!, out code); if (code != 0) return false;
+                        int rdwVal = hs.Get(rdw!, out code);
+                        if (code != 0) { return false; }
+                        int rdhVal = hs.Get(rdh!, out code);
+                        if (code != 0) { return false; }
+                        int rdxVal = hs.Get(rdx!, out code);
+                        if (code != 0) { return false; }
+                        int rdyVal = hs.Get(rdy!, out code);
+                        if (code != 0) { return false; }
+                        int bmSize = hs.Get(rsize!, out code);
+                        if (code != 0) { return false; }
                         hs.SkipToByteBoundary();
 
                         int newW = ib.Width + rdwVal;
@@ -1154,6 +1390,8 @@ internal static class Jbig2SymbolDict
 
                 nInstances++;
 
+                // The strip carries one more IDS after its last instance (PDFium reads it and expects
+                // OOB); that trailing symbol is what closes the strip.
                 int ids = hs.Get(ds, out code);
                 if (code < 0)
                 {

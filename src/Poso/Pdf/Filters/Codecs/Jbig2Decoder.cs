@@ -12,9 +12,10 @@ public readonly record struct Jbig2Page(int Width, int Height, byte[] Packed)
 
 /// <summary>
 /// JBIG2 (ITU-T T.88 / ISO 14492) page-stream decoder. Handles page-information, MMR and arithmetic
-/// generic regions (templates 0-3, default/custom GBAT, TPGDON), arithmetic symbol dictionaries (type 0),
-/// and arithmetic text regions (types 6/7) — all validated against MuPDF pixel-for-pixel.
-/// Unsupported segments (Huffman, refinement, halftone, XOR/XNOR compositing) cause null return.
+/// generic regions (templates 0-3, default/custom GBAT, TPGDON), symbol dictionaries (arithmetic and
+/// Huffman, including refinement and aggregate-coded symbols), text regions (arithmetic and Huffman,
+/// with or without refinement), halftone regions and generic refinements — validated against MuPDF and
+/// PDFium. Segments with constructions the decoder cannot follow (e.g. XOR/XNOR compositing) return null.
 /// </summary>
 public static class Jbig2Decoder
 {
