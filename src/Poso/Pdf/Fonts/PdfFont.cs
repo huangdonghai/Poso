@@ -192,6 +192,18 @@ public abstract class PdfFont
             return null;
         }
 
+        // A real 'OTTO' container - one that carries a head table, so TryExtractCff left it alone - still
+        // holds a CFF table, and a CID font can need the glyph names inside it. pdf.js issue7901.pdf embeds
+        // one as a CIDFontType0 whose codes are numbered by the encoding while the CFF's own glyph order
+        // starts at "space": without the names, code 1 (U+20AC) painted glyph 1 instead of the Euro. The
+        // bytes themselves go to the back end untouched - it can read a finished container.
+        if (data.Length > 12 && data[0] == 0x4F && data[1] == 0x54 && data[2] == 0x54 && data[3] == 0x4F &&
+            EmbeddedCffTable(data) is { } embeddedCff &&
+            CffProgram.TryCreate(embeddedCff, out CffProgram? embeddedProgram) && embeddedProgram is not null)
+        {
+            EmbeddedGlyphNames = embeddedProgram;
+        }
+
         // A native binary Type 1 (FontFile) program is neither a container nor a CFF: convert its
         // charstrings to Type 2 and rebuild them as a CFF so it renders through the exact same path
         // as a Type1C font. Handle both name-keyed and CID-keyed (Adobe TN 5014) variants.
@@ -222,6 +234,34 @@ public abstract class PdfFont
         }
 
         return data;
+    }
+
+    /// <summary>The bytes of an sfnt container's CFF table, or null when it has none.</summary>
+    private static byte[]? EmbeddedCffTable(byte[] sfnt)
+    {
+        int count = (sfnt[4] << 8) | sfnt[5];
+        if (sfnt.Length < 12 + (count * 16))
+        {
+            return null;
+        }
+
+        for (int i = 0; i < count; i++)
+        {
+            int entry = 12 + (i * 16);
+            if (sfnt[entry] != (byte)'C' || sfnt[entry + 1] != (byte)'F' ||
+                sfnt[entry + 2] != (byte)'F' || sfnt[entry + 3] != (byte)' ')
+            {
+                continue;
+            }
+
+            int offset = (int)System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(sfnt.AsSpan(entry + 8));
+            int length = (int)System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(sfnt.AsSpan(entry + 12));
+            return offset > 0 && length > 0 && sfnt.Length >= offset + length
+                ? sfnt[offset..(offset + length)]
+                : null;
+        }
+
+        return null;
     }
 
     /// <summary>Wraps a bare CFF program into the OpenType container the back end loads, using the

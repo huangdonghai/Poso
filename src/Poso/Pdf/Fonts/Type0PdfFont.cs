@@ -134,9 +134,74 @@ public sealed class Type0PdfFont : PdfFont
             {
                 return cidMap.TryGetValue(code, out ushort gid) ? gid : (ushort)0;
             }
+
+            // The program is a name-keyed CFF, so it has no CID space of its own - yet the PDF declares
+            // this as a CID font and numbers its codes in the encoding's order, not the CFF's.
+            // pdf.js issue7901.pdf is one: code 1 is U+20AC (Euro) while glyph 1 of the program is
+            // "space", so the identity fallback below painted "üäÍ†Ë…" for every line. The glyph names
+            // bridge the two: ToUnicode says which character a code stands for, the Adobe Glyph List
+            // turns that into a glyph name, and the CFF charset turns the name into a glyph id.
+            if (TryGetGlyphIdByName(code, out ushort named))
+            {
+                return named;
+            }
         }
 
         return (ushort)Math.Clamp(code, 0, ushort.MaxValue);
+    }
+
+    private Dictionary<uint, ushort>? _unicodeToGlyph;
+
+    /// <summary>
+    /// Resolves a code through its Unicode value and the embedded CFF's glyph names. Built lazily: a
+    /// program addressed by CID never needs it.
+    /// </summary>
+    private bool TryGetGlyphIdByName(int code, out ushort glyphId)
+    {
+        glyphId = 0;
+        if (EmbeddedGlyphNames is not { } program || _toUnicode is null)
+        {
+            return false;
+        }
+
+        // A space is the one code the embedded ToUnicode table is least reliable about: pdf.js
+        // issue7901.pdf maps code 32 to U+00FE, so following it painted a thorn in every word break.
+        // The PDF spec fixes the glyph name for a space, and the CFF charset resolves that exactly.
+        if (code == 0x20 && program.TryGetGlyphId("space", out glyphId))
+        {
+            return true;
+        }
+
+        uint unicode = _toUnicode.GetFirstUnit(code);
+        if (unicode == 0)
+        {
+            return false;
+        }
+
+        _unicodeToGlyph ??= BuildUnicodeToGlyph(program);
+        return _unicodeToGlyph.TryGetValue(unicode, out glyphId);
+    }
+
+    /// <summary>Maps every code point the program names onto its glyph id; the first name wins.</summary>
+    private static Dictionary<uint, ushort> BuildUnicodeToGlyph(CffProgram program)
+    {
+        var map = new Dictionary<uint, ushort>(program.GlyphCount);
+        for (int gid = 0; gid < program.GlyphCount; gid++)
+        {
+            string? name = program.GetNameForGlyph(gid);
+            if (string.IsNullOrEmpty(name))
+            {
+                continue;
+            }
+
+            uint unicode = AdobeGlyphList.GetUnicode(name!);
+            if (unicode != 0)
+            {
+                map.TryAdd(unicode, (ushort)gid);
+            }
+        }
+
+        return map;
     }
 
     public override float GetWidthEm(int code) =>

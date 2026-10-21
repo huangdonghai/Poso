@@ -28,11 +28,13 @@ public sealed class CffProgram : ICffMetrics
     private readonly Dictionary<string, ushort> _nameToGlyph;
     private readonly CffIndex _charStrings;
     private readonly byte[] _program;
+    private readonly int[] _charsetSids;
 
     private CffProgram(byte[] program, CffIndex charStrings, int glyphCount, float[] fontMatrix, float[] fontBBox, string[] strings, int[] charsetSids, int[] codeToGlyph)
     {
         _program = program;
         _charStrings = charStrings;
+        _charsetSids = charsetSids;
         GlyphCount = glyphCount;
         FontMatrix = fontMatrix;
         FontBBox = fontBBox;
@@ -248,6 +250,10 @@ public sealed class CffProgram : ICffMetrics
     }
 
     /// <summary>Resolves a string ID to a glyph name; null when the SID is out of range.</summary>
+    /// <summary>The PostScript name of a glyph, from the charset; null when the charset names none.</summary>
+    public string? GetNameForGlyph(int glyphId) =>
+        glyphId >= 0 && glyphId < _charsetSids.Length ? GetName(_charsetSids[glyphId]) : null;
+
     public string? GetName(int sid)
     {
         if (sid < 0)
