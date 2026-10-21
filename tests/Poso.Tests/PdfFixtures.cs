@@ -627,6 +627,31 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// A TrueType subset whose glyph names spell their glyph id (/g53, /g82), the convention pdf.js
+    /// issue13316_reduced.pdf's YouYuan uses for CJK codes. The names are not in the Adobe Glyph List,
+    /// so the id in the name is the only route from the code to the glyph.
+    /// </summary>
+    public static byte[] CreateGlyphIndexNamePdf(byte[] fontProgram)
+    {
+        const string font = "<< /Type /Font /Subtype /TrueType /BaseFont /AAAAAA+GlyphIndex /Flags 4 "
+            + "/FirstChar 1 /LastChar 2 /Widths [722 500] /Encoding 5 0 R /FontDescriptor 6 0 R >>";
+        const string encoding = "<< /Type /Encoding /Differences [1 /g53 2 /g82] >>";
+        const string descriptor = "<< /Type /FontDescriptor /FontName /AAAAAA+GlyphIndex /Flags 4 "
+            + "/FontBBox [-1 -210 942 919] /Ascent 728 /Descent -210 /ItalicAngle 0 /StemV 141 /FontFile2 7 0 R >>";
+        const string content = "BT /F1 24 Tf 10 10 Td (\x01\x02) Tj ET";
+
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 120 40] /Resources << /Font << /F1 4 0 R >> >> /Contents 8 0 R >>"),
+            new PdfObjectDefinition(4, font),
+            new PdfObjectDefinition(5, encoding),
+            new PdfObjectDefinition(6, descriptor),
+            Stream(7, string.Empty, fontProgram),
+            Stream(8, string.Empty, Encoding.ASCII.GetBytes(content)));
+    }
+
+    /// <summary>
     /// A page whose /Resources carries no /Font at all while its content names one: pdf.js
     /// issue5954.pdf's page has only an empty /XObject entry. PDFium paints the run in a stock face
     /// rather than dropping it, so the page must not come out blank.

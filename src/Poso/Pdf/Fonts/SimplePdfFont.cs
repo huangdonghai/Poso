@@ -58,6 +58,18 @@ public sealed class SimplePdfFont : PdfFont
             }
         }
 
+        // Some producers name a subset's glyphs g<glyph id> (pdf.js issue13316_reduced.pdf's YouYuan
+        // uses /g5167 for 开), and a stripped subset has no post table to name them otherwise. The
+        // Adobe Glyph List does not know the name, so PDFium reads the number as the glyph index; the
+        // code would otherwise fall through to its own value and paint 'A' instead.
+        if (_codeToName[code] is { } indexName &&
+            TryParseGlyphIndexName(indexName, out ushort namedGlyph) &&
+            Outlines is { } namedOutlines &&
+            namedGlyph < namedOutlines.GlyphCount)
+        {
+            return namedGlyph;
+        }
+
         uint unicode = _codeToUnicode[code];
         uint mapped = unicode != 0 ? unicode : (uint)code;
         ushort glyph = graphics.GetGlyphId(mapped);
@@ -150,6 +162,35 @@ public sealed class SimplePdfFont : PdfFont
         }
 
         return -1;
+    }
+
+    /// <summary>Whether a glyph name spells its glyph id, as in <c>g5167</c>.</summary>
+    private static bool TryParseGlyphIndexName(string name, out ushort glyphId)
+    {
+        glyphId = 0;
+        if (name.Length < 2 || name[0] != 'g')
+        {
+            return false;
+        }
+
+        int value = 0;
+        for (int i = 1; i < name.Length; i++)
+        {
+            char c = name[i];
+            if (c < '0' || c > '9')
+            {
+                return false;
+            }
+
+            value = (value * 10) + (c - '0');
+            if (value > ushort.MaxValue)
+            {
+                return false;
+            }
+        }
+
+        glyphId = (ushort)value;
+        return true;
     }
 
     private void BuildEncoding()
