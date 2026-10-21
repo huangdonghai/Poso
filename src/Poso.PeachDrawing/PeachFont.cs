@@ -32,13 +32,20 @@ public sealed class PeachFont : IFont
     // new empty one wins the Unicode lookup, so every code maps to glyph 0 and a page of text goes blank.
     private readonly Dictionary<uint, ushort>? _cmapFallback;
 
+    // Whether the program carries a character map at all. A TrueType subset without one cannot answer
+    // a code-point lookup, and PdfFont substitutes a face by name in that case (the Skia back end has
+    // the same flag); without it the embedded face was kept and drew identity glyph ids that do not
+    // exist. Checked against the original bytes: RepairSubset adds a synthetic cmap.
+    private readonly bool _mapsCodePointsToGlyphs;
+
     private PeachFont(
         PeachText.Typeface typeface,
         int unitsPerEm,
         bool usedFallback,
         Poso.Pdf.Fonts.CffProgram? cff = null,
         PeachText.FontSet? embeddedSet = null,
-        Dictionary<uint, ushort>? cmapFallback = null)
+        Dictionary<uint, ushort>? cmapFallback = null,
+        bool mapsCodePointsToGlyphs = true)
     {
         _typeface = typeface;
         _unitsPerEm = unitsPerEm;
@@ -46,9 +53,12 @@ public sealed class PeachFont : IFont
         _cff = cff;
         _embeddedSet = embeddedSet;
         _cmapFallback = cmapFallback;
+        _mapsCodePointsToGlyphs = mapsCodePointsToGlyphs;
     }
 
     public bool UsedFallback { get; }
+
+    public bool MapsCodePointsToGlyphs => _mapsCodePointsToGlyphs;
 
     /// <summary>
     /// Probes the lazily-initialized metrics and wraps the typeface. PeachDrawing loads font tables on
@@ -60,7 +70,8 @@ public sealed class PeachFont : IFont
         bool usedFallback,
         Poso.Pdf.Fonts.CffProgram? cff = null,
         PeachText.FontSet? embeddedSet = null,
-        Dictionary<uint, ushort>? cmapFallback = null)
+        Dictionary<uint, ushort>? cmapFallback = null,
+        bool mapsCodePointsToGlyphs = true)
     {
         try
         {
@@ -71,7 +82,7 @@ public sealed class PeachFont : IFont
             }
 
             // A failed probe must still let the private set go; on success it rides along on the font.
-            return new PeachFont(typeface, unitsPerEm, usedFallback, cff, embeddedSet, cmapFallback);
+            return new PeachFont(typeface, unitsPerEm, usedFallback, cff, embeddedSet, cmapFallback, mapsCodePointsToGlyphs);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
         {
@@ -120,6 +131,32 @@ public sealed class PeachFont : IFont
         return null;
     }
 
+    /// <summary>Whether the program's table directory lists a <c>cmap</c> table.</summary>
+    private static bool HasCmapTable(byte[] font)
+    {
+        if (font.Length < 12)
+        {
+            return false;
+        }
+
+        int numTables = Poso.Pdf.Fonts.TrueTypeOutlines.ReadU16(font, 4);
+        if (numTables <= 0 || font.Length < 12 + (numTables * 16))
+        {
+            return false;
+        }
+
+        for (int i = 0; i < numTables; i++)
+        {
+            int entry = 12 + (i * 16);
+            if (font[entry] == 'c' && font[entry + 1] == 'm' && font[entry + 2] == 'a' && font[entry + 3] == 'p')
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public static PeachFont? Create(ReadOnlySpan<byte> fontData, string baseFontName)
     {
         if (!fontData.IsEmpty)
@@ -140,6 +177,7 @@ public sealed class PeachFont : IFont
     {
         // Copy: FontSet keeps the memory alive and the caller's span may be a temporary.
         byte[] data = fontData.ToArray();
+        bool hasCmapTable = HasCmapTable(data);
         Dictionary<uint, ushort>? cmap = Poso.Pdf.Fonts.SfntCmap.Read(data);
         string familyName = "poso-embedded-" + Guid.NewGuid().ToString("n");
         byte[]? repaired = RepairSubset(data, familyName);
@@ -169,7 +207,7 @@ public sealed class PeachFont : IFont
                     return null;
                 }
 
-                return From(match.Typeface, usedFallback: false, CffFrom(data), set, cmap);
+                return From(match.Typeface, usedFallback: false, CffFrom(data), set, cmap, hasCmapTable);
             }
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
