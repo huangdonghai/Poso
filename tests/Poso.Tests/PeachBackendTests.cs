@@ -355,6 +355,22 @@ public class PeachBackendTests
     }
 
     /// <summary>
+    /// pdf.js issue2017r.pdf's subset has no Unicode cmap: its (3,0) table keys at 0xF0xx and its (1,0)
+    /// table is the Macintosh one. PeachDrawing's repair appends an empty (3,1), which then wins the
+    /// backend's lookup and maps every code to 0; the program's own map has to answer instead.
+    /// </summary>
+    [Fact]
+    public void Font_SubsetWithoutUnicodeCmap_MapsItsCodesThroughTheProgramsOwnCmap()
+    {
+        string path = IOPath.Combine(AppContext.BaseDirectory, "Samples", "Fonts", "mac-cmap-subset.bin");
+        using PeachFont font = PeachFont.Create(File.ReadAllBytes(path), "HEJHEO+NewCenturySchlbk-Roman+2")!;
+
+        Assert.False(font.UsedFallback);
+        Assert.Equal(36, font.GetGlyphId('A'));
+        Assert.Equal(72, font.GetGlyphId('e'));
+    }
+
+    /// <summary>
     /// pdf.js issue3405r.pdf's embedded WenQuanYi program claims 9 tables although its directory holds 8:
     /// the ninth "entry" is really the head table's first bytes, with an offset and a length that run past
     /// the end of the program. RepairSubset clamped that length to the bytes left - a negative number - so

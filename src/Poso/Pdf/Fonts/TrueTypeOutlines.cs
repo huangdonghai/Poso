@@ -102,7 +102,7 @@ internal sealed class TrueTypeOutlines : OutlineSource
         return true;
     }
 
-    private static bool TryFindTable(byte[] data, string tag, out int offset, out int length)
+    internal static bool TryFindTable(byte[] data, string tag, out int offset, out int length)
     {
         offset = 0;
         length = 0;
@@ -142,230 +142,8 @@ internal sealed class TrueTypeOutlines : OutlineSource
     /// </summary>
     public override bool TryGetGlyphIdForCodePoint(uint codePoint, out ushort glyphId)
     {
-        _codeToGlyph ??= ReadCmap();
+        _codeToGlyph ??= SfntCmap.Read(_font);
         return _codeToGlyph.TryGetValue(codePoint, out glyphId);
-    }
-
-    private Dictionary<uint, ushort> ReadCmap()
-    {
-        var map = new Dictionary<uint, ushort>();
-        if (!TryFindTable(_font, "cmap", out int cmap, out _))
-        {
-            return map;
-        }
-
-        int subTables = ReadU16(_font, cmap + 2);
-        for (int i = 0; i < subTables; i++)
-        {
-            int record = cmap + 4 + (i * 8);
-            if (record + 8 > _font.Length)
-            {
-                break;
-            }
-
-            int sub = cmap + (int)ReadU32(_font, record + 4);
-            if (sub + 2 > _font.Length)
-            {
-                continue;
-            }
-
-            switch (ReadU16(_font, sub))
-            {
-                case 0:
-                    ReadCmapFormat0(sub, map);
-                    break;
-
-                case 2:
-                    ReadCmapFormat2(sub, map);
-                    break;
-
-                case 4:
-                    ReadCmapFormat4(sub, map);
-                    break;
-
-                case 6:
-                    ReadCmapFormat6(sub, map);
-                    break;
-
-                case 12:
-                    ReadCmapFormat12(sub, map);
-                    break;
-            }
-        }
-
-        return map;
-    }
-
-    private void ReadCmapFormat0(int sub, Dictionary<uint, ushort> map)
-    {
-        if (sub + 6 + 256 > _font.Length)
-        {
-            return;
-        }
-
-        for (int code = 0; code < 256; code++)
-        {
-            ushort glyph = _font[sub + 6 + code];
-            if (glyph != 0)
-            {
-                map.TryAdd((uint)code, glyph);
-            }
-        }
-    }
-
-    /// <summary>
-    /// The mixed 8/16-bit table Ghostscript and many Windows subsets actually write. The two-byte code
-    /// is (high &lt;&lt; 8) | low; a high byte whose key points at an empty sub-header falls through to
-    /// the one-byte codes below 256, which the PDF /Encoding addresses directly.
-    /// </summary>
-    private void ReadCmapFormat2(int sub, Dictionary<uint, ushort> map)
-    {
-        int keys = sub + 6;
-        int subHeaders = keys + 512;
-        if (subHeaders + 8 > _font.Length)
-        {
-            return;
-        }
-
-        for (int high = 0; high < 256; high++)
-        {
-            int key = ReadU16(_font, keys + (high * 2)) / 8;
-            int header = subHeaders + (key * 8);
-            if (header + 8 > _font.Length)
-            {
-                continue;
-            }
-
-            int firstCode = ReadU16(_font, header);
-            int entryCount = ReadU16(_font, header + 2);
-            short delta = (short)ReadU16(_font, header + 4);
-            int rangeOffset = ReadU16(_font, header + 6);
-            for (int low = firstCode; low < firstCode + entryCount && low < 256; low++)
-            {
-                int address = header + 6 + rangeOffset + ((low - firstCode) * 2);
-                if (address + 2 > _font.Length)
-                {
-                    continue;
-                }
-
-                int glyph = ReadU16(_font, address);
-                if (glyph == 0)
-                {
-                    continue;
-                }
-
-                glyph = (glyph + delta) & 0xffff;
-                if (glyph != 0)
-                {
-                    map.TryAdd((uint)((high << 8) | low), (ushort)glyph);
-                }
-            }
-        }
-    }
-
-    private void ReadCmapFormat4(int sub, Dictionary<uint, ushort> map)
-    {
-        if (sub + 14 > _font.Length)
-        {
-            return;
-        }
-
-        int segX2 = ReadU16(_font, sub + 6);
-        int segments = segX2 / 2;
-        int ends = sub + 14;
-        int starts = ends + segX2 + 2;
-        int deltas = starts + segX2;
-        int ranges = deltas + segX2;
-        for (int s = 0; s < segments; s++)
-        {
-            if (ends + s * 2 + 2 > _font.Length || starts + s * 2 + 2 > _font.Length)
-            {
-                break;
-            }
-
-            int last = ReadU16(_font, ends + (s * 2));
-            int first = ReadU16(_font, starts + (s * 2));
-            short delta = (short)ReadU16(_font, deltas + (s * 2));
-            int rangeOffset = ReadU16(_font, ranges + (s * 2));
-            for (int code = first; code <= last && code != 0xffff; code++)
-            {
-                ushort glyph;
-                if (rangeOffset == 0)
-                {
-                    glyph = (ushort)((code + delta) & 0xffff);
-                }
-                else
-                {
-                    int address = ranges + (s * 2) + rangeOffset + ((code - first) * 2);
-                    if (address + 2 > _font.Length)
-                    {
-                        break;
-                    }
-
-                    int raw = ReadU16(_font, address);
-                    glyph = raw == 0 ? (ushort)0 : (ushort)((raw + delta) & 0xffff);
-                }
-
-                if (glyph != 0)
-                {
-                    map.TryAdd((uint)code, glyph);
-                }
-            }
-        }
-    }
-
-    private void ReadCmapFormat6(int sub, Dictionary<uint, ushort> map)
-    {
-        if (sub + 10 > _font.Length)
-        {
-            return;
-        }
-
-        int first = ReadU16(_font, sub + 6);
-        int count = ReadU16(_font, sub + 8);
-        for (int i = 0; i < count; i++)
-        {
-            int address = sub + 10 + (i * 2);
-            if (address + 2 > _font.Length)
-            {
-                break;
-            }
-
-            ushort glyph = (ushort)ReadU16(_font, address);
-            if (glyph != 0)
-            {
-                map.TryAdd((uint)(first + i), glyph);
-            }
-        }
-    }
-
-    private void ReadCmapFormat12(int sub, Dictionary<uint, ushort> map)
-    {
-        if (sub + 16 > _font.Length)
-        {
-            return;
-        }
-
-        int groups = (int)ReadU32(_font, sub + 12);
-        for (int g = 0; g < groups; g++)
-        {
-            int record = sub + 16 + (g * 12);
-            if (record + 12 > _font.Length)
-            {
-                break;
-            }
-
-            uint start = ReadU32(_font, record);
-            uint end = ReadU32(_font, record + 4);
-            uint glyphStart = ReadU32(_font, record + 8);
-            for (uint code = start; code <= end && code - start < 65536; code++)
-            {
-                if (glyphStart + (code - start) <= ushort.MaxValue)
-                {
-                    map.TryAdd(code, (ushort)(glyphStart + (code - start)));
-                }
-            }
-        }
     }
 
     public override bool TryGetOutline(int glyphId, IPathBuilder path) =>
@@ -759,9 +537,9 @@ internal sealed class TrueTypeOutlines : OutlineSource
         }
     }
 
-    private static int ReadU16(byte[] data, int offset) =>
+    internal static int ReadU16(byte[] data, int offset) =>
         (data[offset] << 8) | data[offset + 1];
 
-    private static uint ReadU32(byte[] data, int offset) =>
+    internal static uint ReadU32(byte[] data, int offset) =>
         ((uint)data[offset] << 24) | ((uint)data[offset + 1] << 16) | ((uint)data[offset + 2] << 8) | data[offset + 3];
 }

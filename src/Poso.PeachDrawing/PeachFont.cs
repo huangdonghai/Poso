@@ -27,13 +27,25 @@ public sealed class PeachFont : IFont
     private readonly int _unitsPerEm;
     private readonly Poso.Pdf.Fonts.CffProgram? _cff;
 
-    private PeachFont(PeachText.Typeface typeface, int unitsPerEm, bool usedFallback, Poso.Pdf.Fonts.CffProgram? cff = null, PeachText.FontSet? embeddedSet = null)
+    // The program's own character map, consulted when the back end's face cannot answer. PeachDrawing's
+    // repair appends a (3,1) subtable, and when the program only carried a (3,0)/(1,0)/(0,1) table that
+    // new empty one wins the Unicode lookup, so every code maps to glyph 0 and a page of text goes blank.
+    private readonly Dictionary<uint, ushort>? _cmapFallback;
+
+    private PeachFont(
+        PeachText.Typeface typeface,
+        int unitsPerEm,
+        bool usedFallback,
+        Poso.Pdf.Fonts.CffProgram? cff = null,
+        PeachText.FontSet? embeddedSet = null,
+        Dictionary<uint, ushort>? cmapFallback = null)
     {
         _typeface = typeface;
         _unitsPerEm = unitsPerEm;
         UsedFallback = usedFallback;
         _cff = cff;
         _embeddedSet = embeddedSet;
+        _cmapFallback = cmapFallback;
     }
 
     public bool UsedFallback { get; }
@@ -43,7 +55,12 @@ public sealed class PeachFont : IFont
     /// first access and some malformed embedded programs throw (NRE inside its OpenType descriptor);
     /// such a font must fail here, at load, so the caller can fall back instead of crashing mid-render.
     /// </summary>
-    private static PeachFont? From(PeachText.Typeface typeface, bool usedFallback, Poso.Pdf.Fonts.CffProgram? cff = null, PeachText.FontSet? embeddedSet = null)
+    private static PeachFont? From(
+        PeachText.Typeface typeface,
+        bool usedFallback,
+        Poso.Pdf.Fonts.CffProgram? cff = null,
+        PeachText.FontSet? embeddedSet = null,
+        Dictionary<uint, ushort>? cmapFallback = null)
     {
         try
         {
@@ -54,7 +71,7 @@ public sealed class PeachFont : IFont
             }
 
             // A failed probe must still let the private set go; on success it rides along on the font.
-            return new PeachFont(typeface, unitsPerEm, usedFallback, cff, embeddedSet);
+            return new PeachFont(typeface, unitsPerEm, usedFallback, cff, embeddedSet, cmapFallback);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
         {
@@ -123,6 +140,7 @@ public sealed class PeachFont : IFont
     {
         // Copy: FontSet keeps the memory alive and the caller's span may be a temporary.
         byte[] data = fontData.ToArray();
+        Dictionary<uint, ushort>? cmap = Poso.Pdf.Fonts.SfntCmap.Read(data);
         string familyName = "poso-embedded-" + Guid.NewGuid().ToString("n");
         byte[]? repaired = RepairSubset(data, familyName);
         if (repaired is not null)
@@ -151,7 +169,7 @@ public sealed class PeachFont : IFont
                     return null;
                 }
 
-                return From(match.Typeface, usedFallback: false, CffFrom(data), set);
+                return From(match.Typeface, usedFallback: false, CffFrom(data), set, cmap);
             }
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
@@ -683,6 +701,14 @@ public sealed class PeachFont : IFont
         if (!Rune.IsValid(codePoint))
         {
             return 0;
+        }
+
+        // The program's own map wins where it has the code: issue4800.pdf's face answers every lookup
+        // with the code itself (65 for 'A') instead of a glyph id, which paints nothing, and the sfnt's
+        // (0,1) table gives the real 40. Back ends that read one subtable only are no better here.
+        if (_cmapFallback is { } cmap && cmap.TryGetValue(codePoint, out ushort mapped) && mapped != 0)
+        {
+            return mapped;
         }
 
         try

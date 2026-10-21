@@ -229,6 +229,23 @@ public class OutlineFallbackTests
         Assert.True(ink > 600, $"the embedded outlines must paint through PeachDrawing, got {ink} dark pixels");
     }
 
+    /// <summary>
+    /// The shared sfnt reader has to prefer the Unicode tables and translate the Windows symbol
+    /// convention: pdf.js issue2017r.pdf's subset carries a (1,0) table under ASCII and a (3,0) table
+    /// whose entries sit at 0xF020-0xF0FF. Merging them last-wins would let the symbol table's zero
+    /// entries erase the Mac mappings, and not translating 0xF0xx would leave every CDE lookup empty.
+    /// </summary>
+    [Fact]
+    public void SfntCmap_PrefersTheUnicodeTablesAndNormalisesASymbolTable()
+    {
+        byte[] program = FontsFile("mac-cmap-subset.bin");
+        var map = SfntCmap.Read(program);
+
+        Assert.Equal(36, map[0x41]);   // 'A' through the (1,0) table
+        Assert.Equal(72, map[0x65]);   // 'e' through the (3,0) table at 0xF065
+        Assert.Equal(72, map[0xF065]);
+    }
+
     private static byte[] FontsFile(string name) =>
         File.ReadAllBytes(IOPath.Combine(AppContext.BaseDirectory, "Samples", "Fonts", name));
 }
