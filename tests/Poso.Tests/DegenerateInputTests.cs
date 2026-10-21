@@ -33,6 +33,20 @@ public class DegenerateInputTests
     }
 
     /// <summary>
+    /// A stray keyword where a dictionary key belongs is damage, not a reason to lose the document: every
+    /// key that is readable still describes the object (pdf.js issue11549_reduced.pdf).
+    /// </summary>
+    [Fact]
+    public void DictionaryWithAStrayKeyword_KeepsTheReadableKeys()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateDictionaryWithAStrayKeywordPdf());
+
+        Assert.Single(document.Pages);
+        Assert.Equal(200f, document.Pages[0].Width);
+        Assert.Equal(50f, document.Pages[0].Height);
+    }
+
+    /// <summary>
     /// A lexer handed a start past the end of the buffer reports "nothing here" rather than indexing past
     /// its data. Defensive: the construction that reached it in practice - a cross-reference entry beyond
     /// the last byte, as in pdf.js operator_list_cycle.pdf - also has <c>End</c> at the file length, so

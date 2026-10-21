@@ -1003,6 +1003,18 @@ public static class PdfFixtures
             + "/Resources << /ColorSpace << /Cs1 [/Indexed /DeviceRGB 255 <AABB>] >> >> /Contents 4 0 R >>"),
         Stream(4, string.Empty, Encoding.ASCII.GetBytes("/Cs1 cs 1.0 scn 10 10 80 40 re f")));
 
+    /// <summary>
+    /// A dictionary with a stray keyword where a key belongs. pdf.js issue11549_reduced.pdf has one and a
+    /// strict reader loses the whole document over it; skipping the token keeps every readable key, which
+    /// is what the reference readers do.
+    /// </summary>
+    public static byte[] CreateDictionaryWithAStrayKeywordPdf() => Build(1,
+        new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+        new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+        new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 50] null "
+            + "/Contents 4 0 R /Resources << >> >>"),
+        Stream(4, string.Empty, Encoding.ASCII.GetBytes("0 0 0 rg 10 10 80 30 re f")));
+
     /// <summary>A document whose xref sends object 3 past the end of the file.</summary>
     public static byte[] CreateXrefOffsetPastEndPdf()
     {

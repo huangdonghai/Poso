@@ -228,7 +228,15 @@ public sealed class PdfParser
             PdfToken key = _lexer.NextToken();
             if (key.Kind != PdfTokenKind.Name)
             {
-                throw new PdfFormatException($"Dictionary keys must be names, but found {key.Kind}");
+                if (key.Kind == PdfTokenKind.Eof)
+                {
+                    throw new PdfFormatException("The dictionary is not closed before the end of the data");
+                }
+
+                // A stray token where a key belongs is damage, and pdf.js issue11549_reduced.pdf has one -
+                // a keyword sitting inside a dictionary. Throwing costs the whole document; skipping the
+                // token keeps every key that is readable, which is what PDFium and MuPDF do here.
+                continue;
             }
 
             _lexer.SkipWhiteSpace();
