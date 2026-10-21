@@ -145,11 +145,24 @@ public sealed class PdfDocument : IDisposable
     /// <summary>
     /// Resolves the /Encrypt dictionary, falling back to a raw scan for the object header when the
     /// cross-reference is not yet trustworthy (encrypted files that use cross-reference streams).
-    /// The encryption dictionary itself is never encrypted, so scanning is safe.
+    /// The encryption dictionary itself is never encrypted, so scanning is safe. A dictionary the parser
+    /// cannot read at all (pdf.js PDFBOX-4352-0.pdf's opens with "E&lt;" where "&lt;&lt;" belongs) is treated
+    /// as absent: the document cannot be decrypted, so it opens as if unencrypted and each stream renders
+    /// whatever its own filter can recover from it - PDFium shows that page blank rather than refusing it.
     /// </summary>
     private PdfDictionary? ResolveEncryptionDictionary(PdfObject? encryptObject)
     {
-        if (Resolve(encryptObject) is PdfDictionary direct)
+        PdfDictionary? direct;
+        try
+        {
+            direct = Resolve(encryptObject) as PdfDictionary;
+        }
+        catch (PdfFormatException)
+        {
+            direct = null;
+        }
+
+        if (direct is not null)
         {
             return direct;
         }
@@ -166,7 +179,14 @@ public sealed class PdfDocument : IDisposable
         }
 
         var parser = new Parsing.PdfParser(_buffer, offset) { Resolver = Resolve, Encryption = _encryption, DecryptStrings = false };
-        return parser.TryParseIndirectObject()?.Object as PdfDictionary;
+        try
+        {
+            return parser.TryParseIndirectObject()?.Object as PdfDictionary;
+        }
+        catch (PdfFormatException)
+        {
+            return null;
+        }
     }
 
     private int FindObjectOffset(int objectNumber)

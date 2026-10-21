@@ -1,7 +1,11 @@
+using System.IO;
 using System.Text;
+using Poso.Graphics;
 using Poso.Pdf;
 using Poso.Pdf.Parsing;
+using Poso.Skia;
 using Xunit;
+using IOPath = System.IO.Path;
 
 namespace Poso.Tests;
 
@@ -23,6 +27,33 @@ public class PdfParsingTests
         }
 
         Assert.True(lexer.AtEnd, "a stray ')' must be consumed, not returned as a zero-length token");
+    }
+
+    /// <summary>
+    /// pdf.js PDFBOX-4352-0.pdf is a fuzzed file whose /Encrypt dictionary opens with <c>E&lt;</c> where
+    /// <c>&lt;&lt;</c> belongs. The dictionary cannot be read, so nothing can be decrypted; PDFium opens the
+    /// document anyway and shows a blank page. Reading it must not turn the whole document into an
+    /// exception - the page renders what is recoverable from its streams, which here is nothing.
+    /// </summary>
+    [Fact]
+    public void Open_UnreadableEncryptDictionary_RendersThePageInsteadOfThrowing()
+    {
+        string path = IOPath.Combine(AppContext.BaseDirectory, "Samples", "Pdf", "corrupt-encrypt.pdf");
+        using PdfDocument document = PdfDocument.FromArray(File.ReadAllBytes(path));
+
+        Assert.Equal(1, document.PageCount);
+        using IGraphicsContext context = SkiaGraphicsFactory.Default.CreateContext(400, 100);
+        document.Pages[0].Render(SkiaGraphicsFactory.Default, context, new PdfRenderOptions(2f, 0f, PosoColor.White));
+        using IImage image = context.Snapshot();
+        Assert.Equal(400, image.Width);
+        Assert.Equal(100, image.Height);
+
+        byte[] px = new byte[image.Width * image.Height * 4];
+        image.CopyPixels(px);
+        for (int i = 0; i < px.Length; i += 4)
+        {
+            Assert.True(px[i] > 200 && px[i + 1] > 200 && px[i + 2] > 200, $"pixel {i / 4} is not white");
+        }
     }
 
     /// <summary>
