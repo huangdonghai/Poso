@@ -12,21 +12,28 @@ namespace Poso.PeachDrawing;
 /// </summary>
 public sealed class PeachFont : IFont
 {
-    // One FontSet serves the whole process; PeachDrawing's font database is not documented as
-    // thread-safe, and the render pipeline runs several pages concurrently, so every access is serialised.
+    // System-family lookups go through this set, which only ever reads the process-wide font database.
+    // Embedded programs do NOT: PeachDrawing's FontSet has no removal API, and AddData keeps the
+    // program's bytes, family and descriptor alive for as long as the set lives, so registering every
+    // document's fonts here pinned them for the life of the process. Each embedded program now loads
+    // through a private FontSet (see LoadEmbedded); the lock still serialises all PeachDrawing font
+    // access because its internal caches are not documented as thread-safe and the render pipeline
+    // runs several pages concurrently.
     internal static readonly PeachText.FontSet SharedFontSet = new();
     internal static readonly object FontSetLock = new();
 
     private readonly PeachText.Typeface _typeface;
+    private PeachText.FontSet? _embeddedSet;
     private readonly int _unitsPerEm;
     private readonly Poso.Pdf.Fonts.CffProgram? _cff;
 
-    private PeachFont(PeachText.Typeface typeface, int unitsPerEm, bool usedFallback, Poso.Pdf.Fonts.CffProgram? cff = null)
+    private PeachFont(PeachText.Typeface typeface, int unitsPerEm, bool usedFallback, Poso.Pdf.Fonts.CffProgram? cff = null, PeachText.FontSet? embeddedSet = null)
     {
         _typeface = typeface;
         _unitsPerEm = unitsPerEm;
         UsedFallback = usedFallback;
         _cff = cff;
+        _embeddedSet = embeddedSet;
     }
 
     public bool UsedFallback { get; }
@@ -36,12 +43,18 @@ public sealed class PeachFont : IFont
     /// first access and some malformed embedded programs throw (NRE inside its OpenType descriptor);
     /// such a font must fail here, at load, so the caller can fall back instead of crashing mid-render.
     /// </summary>
-    private static PeachFont? From(PeachText.Typeface typeface, bool usedFallback, Poso.Pdf.Fonts.CffProgram? cff = null)
+    private static PeachFont? From(PeachText.Typeface typeface, bool usedFallback, Poso.Pdf.Fonts.CffProgram? cff = null, PeachText.FontSet? embeddedSet = null)
     {
         try
         {
             int unitsPerEm = typeface.Metrics.UnitsPerEm;
-            return unitsPerEm > 0 ? new PeachFont(typeface, unitsPerEm, usedFallback, cff) : null;
+            if (unitsPerEm <= 0)
+            {
+                return null;
+            }
+
+            // A failed probe must still let the private set go; on success it rides along on the font.
+            return new PeachFont(typeface, unitsPerEm, usedFallback, cff, embeddedSet);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
         {
@@ -121,10 +134,14 @@ public sealed class PeachFont : IFont
         {
             lock (FontSetLock)
             {
-                SharedFontSet.AddData(
+                // A set of one's own: the program is registered here and nowhere else, so releasing the
+                // font releases the program. A fresh FontSet still sees the process-wide system families
+                // (the lookup below is a read), and building one costs nothing measurable.
+                var set = new PeachText.FontSet();
+                set.AddData(
                     data,
                     new PeachText.AddOptions { FamilyName = familyName });
-                if (!SharedFontSet.TryFindFamily(familyName, out PeachText.TypefaceFamily? family) || family is null)
+                if (!set.TryFindFamily(familyName, out PeachText.TypefaceFamily? family) || family is null)
                 {
                     return null;
                 }
@@ -134,7 +151,7 @@ public sealed class PeachFont : IFont
                     return null;
                 }
 
-                return From(match.Typeface, usedFallback: false, CffFrom(data));
+                return From(match.Typeface, usedFallback: false, CffFrom(data), set);
             }
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
@@ -757,7 +774,9 @@ public sealed class PeachFont : IFont
 
     public void Dispose()
     {
-        // Typeface instances live in the shared FontSet for the process lifetime (PDF documents reuse
-        // fonts across pages and zoom levels); there is nothing per-instance to release.
+        // The typeface itself is not disposable in PeachDrawing, but an embedded face carries the one
+        // FontSet that registered its program; dropping that reference lets the program's bytes and
+        // descriptor go with the font, which is the point of the private set.
+        _embeddedSet = null;
     }
 }
