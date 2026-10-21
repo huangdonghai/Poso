@@ -1551,18 +1551,21 @@ public sealed class PdfContentInterpreter
             {
                 widthEm = font.GetWidthEm(code);
                 ushort glyphId = font.GetGlyphId(code);
-                if (glyphId != 0)
-                {
-                    // Vertical writing (WMode 2): glyphs stay upright but advance downward along the
-                    // writing axis (negative text-space Y), rather than left-to-right along X. Mirroring
-                    // MuPDF's vertical position vector v = (h.w/2, DW2y): the glyph is shifted left by
-                    // half its horizontal advance to centre it on the vertical baseline (v.x), and the
-                    // baseline is dropped one VY so the em-cell top sits at the pen.
-                    glyphCodes[glyphCount] = code;
-                    glyphs[glyphCount++] = font.IsVertical
-                        ? new GlyphPosition(glyphId, -widthEm * 0.5f, -penEm - font.VerticalOriginEm)
-                        : new GlyphPosition(glyphId, penEm, 0f);
-                }
+
+                // Glyph 0 is .notdef, and .notdef is a real glyph: pdf.js issue8234.pdf's subset maps
+                // code 32 onto it, and its .notdef is a drawn 'ä'. A viewer that skips zero paints the
+                // page blank where PDFium and MuPDF show the glyph. A code the face cannot map lands
+                // here too, which is exactly what the other viewers draw for it.
+                //
+                // Vertical writing (WMode 2): glyphs stay upright but advance downward along the
+                // writing axis (negative text-space Y), rather than left-to-right along X. Mirroring
+                // MuPDF's vertical position vector v = (h.w/2, DW2y): the glyph is shifted left by
+                // half its horizontal advance to centre it on the vertical baseline (v.x), and the
+                // baseline is dropped one VY so the em-cell top sits at the pen.
+                glyphCodes[glyphCount] = code;
+                glyphs[glyphCount++] = font.IsVertical
+                    ? new GlyphPosition(glyphId, -widthEm * 0.5f, -penEm - font.VerticalOriginEm)
+                    : new GlyphPosition(glyphId, penEm, 0f);
 
                 TextSink?.OnGlyph(font, code, glyphId, GetUnicodeUnits(font, code), textToUser, penEm, fontSize, widthEm);
             }
@@ -1835,17 +1838,20 @@ public sealed class PdfContentInterpreter
 
     private PdfFont? ResolveFont(PdfDictionary? resources, PdfName? fontName)
     {
-        if (fontName is null || resources is null)
+        if (fontName is null)
         {
             return null;
         }
 
-        PdfObject? fontObject = (_document.Resolve(resources.Get("Font")) as PdfDictionary)?.Get(fontName.Value);
+        PdfObject? fontObject = resources is null ? null : (_document.Resolve(resources.Get("Font")) as PdfDictionary)?.Get(fontName.Value);
         PdfIndirectRef? reference = fontObject as PdfIndirectRef;
         PdfDictionary? dictionary = _document.Resolve(fontObject) as PdfDictionary;
         if (dictionary is null)
         {
-            return null;
+            // A page can name a font its /Resources does not carry: pdf.js issue5954.pdf's page has a
+            // Resources dict holding only /XObject, and the /F1 the text asks for is nowhere in it.
+            // PDFium draws such a run in a stock Helvetica rather than losing it, and so does this.
+            return StandardFont(fontName.Value);
         }
 
         // Type3 fonts accumulate mutable glyph-width state while their charprocs run, so keep them
@@ -1869,6 +1875,29 @@ public sealed class PdfContentInterpreter
             _fonts[reference.ObjectNumber] = font;
         }
 
+        return font;
+    }
+
+    // Stock faces handed out for font names the content stream uses but its resources do not define.
+    // One per name per page render: every show-text op for the same missing name shares the face.
+    private readonly Dictionary<string, PdfFont> _standardFonts = new(StringComparer.Ordinal);
+
+    private PdfFont StandardFont(string name)
+    {
+        if (_standardFonts.TryGetValue(name, out PdfFont? cached))
+        {
+            return cached;
+        }
+
+        var dictionary = new PdfDictionary
+        {
+            ["Type"] = new PdfName("Font"),
+            ["Subtype"] = new PdfName("Type1"),
+            ["BaseFont"] = new PdfName("Helvetica"),
+            ["Encoding"] = new PdfName("WinAnsiEncoding"),
+        };
+        PdfFont font = PdfFont.Create(_document, _factory, dictionary);
+        _standardFonts[name] = font;
         return font;
     }
 

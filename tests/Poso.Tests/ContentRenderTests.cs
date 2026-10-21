@@ -1,8 +1,11 @@
+using System.IO;
 using Poso.Geometry;
 using Poso.Graphics;
 using Poso.Pdf;
+using Poso.PeachDrawing;
 using Poso.Skia;
 using Xunit;
+using IOPath = System.IO.Path;
 
 namespace Poso.Tests;
 
@@ -659,6 +662,71 @@ public class ContentRenderTests
         Assert.True(lg < 80, $"near the bright end of the mask the red stroke must survive (scale={scale} g={lg})");
         Assert.True(rg > 200, $"near the dark end the stroke must be erased (scale={scale} left g={lg}, right g={rg})");
     }
+
+    /// <summary>
+    /// pdf.js issue8234.pdf's subset maps code 32 onto glyph 0, and its glyph 0 is a drawn letterform
+    /// rather than an empty .notdef. A viewer that treats zero as "no glyph" paints nothing, while
+    /// PDFium and MuPDF both draw it; the page must carry ink on both back ends.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Render_CodeMappedToGlyphZero_PaintsNotdef(bool peach)
+    {
+        byte[] data = PdfFixtures.CreateSymbolicNotdefPdf(FontsFile("symbolic-notdef.bin"));
+        IGraphicsFactory factory = peach ? PeachGraphicsFactory.Default : Factory;
+
+        using PdfDocument document = PdfDocument.FromArray(data);
+        using IGraphicsContext context = factory.CreateContext(300, 250);
+        document.Pages[0].Render(factory, context, new PdfRenderOptions(2f, 0f, PosoColor.White));
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+
+        int ink = 0;
+        for (int i = 0; i < pixels.Length; i += 4)
+        {
+            if (pixels[i] < 200)
+            {
+                ink++;
+            }
+        }
+
+        Assert.True(ink > 1000, $"glyph zero must paint, got {ink} dark pixels");
+    }
+
+    /// <summary>
+    /// The content names /F1 but the page's /Resources has no /Font entry at all (pdf.js issue5954.pdf:
+    /// its resources carry only an empty /XObject). PDFium draws the run in a stock Helvetica instead of
+    /// dropping it, and the page must not come out blank.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Render_FontMissingFromResources_DrawsInAStockFace(bool peach)
+    {
+        byte[] data = PdfFixtures.CreateMissingFontResourcePdf();
+        IGraphicsFactory factory = peach ? PeachGraphicsFactory.Default : Factory;
+
+        using PdfDocument document = PdfDocument.FromArray(data);
+        using IGraphicsContext context = factory.CreateContext(220, 60);
+        document.Pages[0].Render(factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+
+        int ink = 0;
+        for (int i = 0; i < pixels.Length; i += 4)
+        {
+            if (pixels[i] < 200)
+            {
+                ink++;
+            }
+        }
+
+        Assert.True(ink > 100, $"a missing font resource must still paint, got {ink} dark pixels");
+    }
+
+    private static byte[] FontsFile(string name) =>
+        File.ReadAllBytes(IOPath.Combine(AppContext.BaseDirectory, "Samples", "Fonts", name));
 
     private static byte[] ReadPixels(IImage image)
     {

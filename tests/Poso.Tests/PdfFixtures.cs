@@ -495,6 +495,45 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// A symbolic TrueType font (/Flags 4, no /Encoding) whose own cmap maps code 32 onto glyph 0, and
+    /// whose glyph 0 is a drawn letterform: pdf.js issue8234.pdf's subset. Treating glyph 0 as "missing"
+    /// and skipping it loses the only thing the page paints.
+    /// </summary>
+    public static byte[] CreateSymbolicNotdefPdf(byte[] fontProgram)
+    {
+        string font = "<< /Type /Font /Subtype /TrueType /BaseFont /AAAAAC#20Arial /FirstChar 32 /LastChar 32 "
+            + "/Widths [556] /FontDescriptor 6 0 R >>";
+        string descriptor = "<< /Type /FontDescriptor /FontName /AAAAAC#20Arial /Flags 4 "
+            + "/FontBBox [0 -228 2000 921] /Ascent 922 /Descent -196 /ItalicAngle 0 /StemV 0 /FontFile2 7 0 R >>";
+        string content = "BT /F1 200 Tf 20 20 Td ( ) Tj ET";
+
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 250] /Resources << /Font << /F1 4 0 R >> >> /Contents 8 0 R >>"),
+            new PdfObjectDefinition(4, font),
+            new PdfObjectDefinition(6, descriptor),
+            Stream(7, string.Empty, fontProgram),
+            Stream(8, string.Empty, Encoding.ASCII.GetBytes(content)));
+    }
+
+    /// <summary>
+    /// A page whose /Resources carries no /Font at all while its content names one: pdf.js
+    /// issue5954.pdf's page has only an empty /XObject entry. PDFium paints the run in a stock face
+    /// rather than dropping it, so the page must not come out blank.
+    /// </summary>
+    public static byte[] CreateMissingFontResourcePdf()
+    {
+        string content = "BT /F1 40 Tf 10 10 Td (Hello) Tj ET";
+
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 220 60] /Resources << /XObject << >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)));
+    }
+
+    /// <summary>
     /// Like <see cref="CreateNativeType1Pdf"/> but the font is <b>symbolic</b> (/Flags 4) and its
     /// /Encoding is a dictionary carrying /Differences that do NOT cover the drawn code (120). Per
     /// PDF 32000-1 Table 122 the codes outside /Differences still fall back to StandardEncoding, so
