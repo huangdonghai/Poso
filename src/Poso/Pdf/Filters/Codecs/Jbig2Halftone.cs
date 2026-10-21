@@ -54,8 +54,8 @@ internal static class Jbig2Halftone
             // CcittFax's blackIs1:true preserves the fax raw convention (1=black); we must additionally
             // invert so the collective bitmap uses MuPDF's 0=black convention that the shared slicing
             // loop below expects when it treats `bit != 0` as "pattern pixel is black".
-            byte[] raw = CcittFaxDecoder.Decode(data, bodyData, bodyEnd - bodyData, collectiveWidth, hdph,
-                k: -1, encodedByteAlign: false, blackIs1: true, endOfBlock: false, endOfLine: false, out _, out _);
+            byte[] raw = CcittFaxDecoder.DecodeMmr(data, bodyData, bodyEnd - bodyData, collectiveWidth, hdph,
+                blackIs1: true, out _, out _);
             collective = new byte[raw.Length];
             for (int i = 0; i < raw.Length; i++)
             {
@@ -237,8 +237,8 @@ internal static class Jbig2Halftone
                 {
                     return false;
                 }
-                byte[] raw = CcittFaxDecoder.Decode(data, mmrCursor, remaining, hgw, hgh, k: -1,
-                    encodedByteAlign: false, blackIs1: true, endOfBlock: false, endOfLine: false, out _, out int bitsConsumed);
+                byte[] raw = CcittFaxDecoder.DecodeMmr(data, mmrCursor, remaining, hgw, hgh,
+                    blackIs1: true, out _, out int bitsConsumed);
                 // Apply PDFium's byte-inversion (line 3731) so gray-bit 1 in the plane corresponds
                 // to the black pixel in the MMR stream (which under fax raw is encoded as bit=1).
                 plane = new byte[raw.Length];

@@ -31,6 +31,17 @@ public static class CcittFaxDecoder
         => Decode(data, 0, data.Length, columns, rows, k, encodedByteAlign, blackIs1, endOfBlock, endOfLine, out _, out _);
 
     /// <summary>
+    /// Decodes an MMR (Group 4) codestream, which is what a JBIG2 region's collective bitmap carries.
+    /// MMR has no EOL codes and codes every line against the one before it.
+    /// </summary>
+    public static byte[] DecodeMmr(byte[] data, int columns, int rows, bool blackIs1)
+        => DecodeMmr(data, 0, data.Length, columns, rows, blackIs1, out _, out _);
+
+    /// <summary>Range-aware MMR decode, reporting the bytes and the bits the decoder consumed.</summary>
+    public static byte[] DecodeMmr(byte[] data, int offset, int length, int columns, int rows, bool blackIs1, out int consumed, out int bitsConsumed)
+        => Decode(data, offset, length, columns, rows, k: -1, encodedByteAlign: false, blackIs1, endOfBlock: false, endOfLine: false, mmr: true, out consumed, out bitsConsumed);
+
+    /// <summary>
     /// Range-aware overload reporting bytes pulled from the source. JBIG2's caller usually wants the
     /// *precise* bit position (see the <c>bitsConsumed</c> overload below) so it can align to a byte
     /// boundary and skip the EOFB tail padding exactly as PDFium does.
@@ -46,8 +57,11 @@ public static class CcittFaxDecoder
     /// <c>pStream->alignByte(); pStream->offset(3);</c> does at JBig2_GeneralDecoder.cpp line 3302.
     /// </summary>
     public static byte[] Decode(byte[] data, int offset, int length, int columns, int rows, int k, bool encodedByteAlign, bool blackIs1, bool endOfBlock, bool endOfLine, out int consumed, out int bitsConsumed)
+        => Decode(data, offset, length, columns, rows, k, encodedByteAlign, blackIs1, endOfBlock, endOfLine, mmr: false, out consumed, out bitsConsumed);
+
+    private static byte[] Decode(byte[] data, int offset, int length, int columns, int rows, int k, bool encodedByteAlign, bool blackIs1, bool endOfBlock, bool endOfLine, bool mmr, out int consumed, out int bitsConsumed)
     {
-        var decoder = new State(data, offset, length, columns, rows, k, encodedByteAlign, blackIs1, endOfBlock, endOfLine);
+        var decoder = new State(data, offset, length, columns, rows, k, encodedByteAlign, blackIs1, endOfBlock, endOfLine, mmr);
         int bytesPerRow = (columns + 7) / 8;
         var output = new byte[Math.Max(0, rows) * bytesPerRow];
         int produced = 0;
@@ -107,9 +121,9 @@ public static class CcittFaxDecoder
         private bool _err;
 
         public State(byte[] data, int columns, int rows, int k, bool byteAlign, bool blackIs1, bool endOfBlock, bool endOfLine)
-            : this(data, 0, data.Length, columns, rows, k, byteAlign, blackIs1, endOfBlock, endOfLine) { }
+            : this(data, 0, data.Length, columns, rows, k, byteAlign, blackIs1, endOfBlock, endOfLine, mmr: false) { }
 
-        public State(byte[] data, int offset, int length, int columns, int rows, int k, bool byteAlign, bool blackIs1, bool endOfBlock, bool endOfLine)
+        public State(byte[] data, int offset, int length, int columns, int rows, int k, bool byteAlign, bool blackIs1, bool endOfBlock, bool endOfLine, bool mmr)
         {
             _data = data;
             _sourceStart = offset;
@@ -128,7 +142,9 @@ public static class CcittFaxDecoder
             _codingLine[0] = _columns;
             _codingPos = 0;
             _row = 0;
-            _nextLine2D = _encoding < 0;
+            // PDF 32000-1 Table 11: K = 0 is Group 3 1-D and K < 0 selects the 2-D coding. JBIG2's
+            // collective bitmaps are MMR (Group 4) and come through this decoder with their own flag.
+            _nextLine2D = mmr || _encoding < 0;
 
             int code1;
             while ((code1 = LookBits(12)) == 0)

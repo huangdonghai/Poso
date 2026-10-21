@@ -56,6 +56,16 @@ public sealed class SimplePdfFont : PdfFont
             {
                 return byCode;
             }
+
+            // A CFF with no built-in encoding at all is read through the standard encoding: the code
+            // names a standard string and the charset says which glyph carries that name. pdf.js
+            // issue11279.pdf's symbolic CMR10 subset has no Encoding operator, and its page number -
+            // the code for "one" - was left without a glyph. A program that does carry an encoding is
+            // left alone: its codes mean what it says they mean.
+            if (cff.TryGetGlyphIdForStandardCode(code, out ushort byStandard))
+            {
+                return byStandard;
+            }
         }
 
         // Some producers name a subset's glyphs g<glyph id> (pdf.js issue13316_reduced.pdf's YouYuan

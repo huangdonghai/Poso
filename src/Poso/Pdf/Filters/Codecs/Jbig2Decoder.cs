@@ -563,7 +563,7 @@ public static class Jbig2Decoder
             // T.6 / Group 4 MMR. JBIG2 generic-region MMR codestreams do not carry the T.6 EOFB terminator,
             // so decode by row count (endOfBlock=false). The 1-bit output uses 1=black under BlackIs1; JBIG2
             // paints the inverse of that convention relative to MuPDF's rendering (verified against MuPDF).
-            regionBits = CcittFaxDecoder.Decode(codestream, regionWidth, regionHeight, k: -1, encodedByteAlign: false, blackIs1: true, endOfBlock: false, endOfLine: false);
+            regionBits = CcittFaxDecoder.DecodeMmr(codestream, regionWidth, regionHeight, blackIs1: true);
             bitIsBlack = false;
             return true;
         }

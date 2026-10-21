@@ -549,7 +549,7 @@ internal static class Jbig2SymbolDict
                 // Group 4 MMR (no T.6 EOFB). MuPDF renders JBIG2 MMR collective bitmaps with the inverse
                 // bit polarity of the uncompressed path (mirrors the generic-region MMR convention), so the
                 // glyph bitmap is produced with 0 = black here (blackIs1:false).
-                collective = CcittFaxDecoder.Decode(mmr, cw, ch, k: -1, encodedByteAlign: false, blackIs1: false, endOfBlock: false, endOfLine: false);
+                collective = CcittFaxDecoder.DecodeMmr(mmr, cw, ch, blackIs1: false);
                 consumed = bmSize;
             }
             hs.Advance((int)consumed);

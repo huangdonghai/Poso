@@ -30,7 +30,7 @@ public sealed class CffProgram : ICffMetrics
     private readonly byte[] _program;
     private readonly int[] _charsetSids;
 
-    private CffProgram(byte[] program, CffIndex charStrings, int glyphCount, float[] fontMatrix, float[] fontBBox, string[] strings, int[] charsetSids, int[] codeToGlyph)
+    private CffProgram(byte[] program, CffIndex charStrings, int glyphCount, float[] fontMatrix, float[] fontBBox, string[] strings, int[] charsetSids, int[] codeToGlyph, bool hasBuiltInEncoding)
     {
         _program = program;
         _charStrings = charStrings;
@@ -40,6 +40,7 @@ public sealed class CffProgram : ICffMetrics
         FontBBox = fontBBox;
         Strings = strings;
         CodeToGlyph = codeToGlyph;
+        HasBuiltInEncoding = hasBuiltInEncoding;
 
         _nameToGlyph = new Dictionary<string, ushort>(glyphCount, StringComparer.Ordinal);
         for (int gid = 0; gid < charsetSids.Length; gid++)
@@ -67,6 +68,13 @@ public sealed class CffProgram : ICffMetrics
 
     /// <summary>The program's built-in encoding: character code to glyph index, or -1 when the code is undefined.</summary>
     public int[] CodeToGlyph { get; }
+
+    /// <summary>
+    /// True when the program carries no built-in encoding at all (no Encoding operator in the top
+    /// dictionary). Such a program is read through the standard encoding: the code names a standard
+    /// string and the charset says which glyph carries that name.
+    /// </summary>
+    public bool HasBuiltInEncoding { get; }
 
     /// <summary>Maps a PostScript glyph name to the glyph ID within this program.</summary>
     public bool TryGetGlyphId(string name, out ushort glyphId) => _nameToGlyph.TryGetValue(name, out glyphId);
@@ -107,9 +115,11 @@ public sealed class CffProgram : ICffMetrics
 
     /// <summary>
     /// A standard-encoding code as a glyph id: the code names a standard string, the charset says which
-    /// glyph carries that name.
+    /// glyph carries that name. A CFF with no built-in encoding (no Encoding operator) is read this
+    /// way: pdf.js issue11279.pdf's symbolic CMR10 subset names its glyphs "one", "A" and "B", and the
+    /// page number it draws is the code for "one" in the standard encoding.
     /// </summary>
-    private bool TryGetGlyphIdForStandardCode(int code, out ushort glyphId)
+    public bool TryGetGlyphIdForStandardCode(int code, out ushort glyphId)
     {
         glyphId = 0;
         string? name = StandardEncodingName(code);
@@ -325,6 +335,7 @@ public sealed class CffProgram : ICffMetrics
         float[]? bbox = dict.GetArray(5);
         int[] sids = ReadCharset(data, (int)dict.Get(15), charStrings.Count);
         int[] codeToGlyph = ReadEncoding(data, (int)dict.Get(16), charStrings.Count);
+        bool hasBuiltInEncoding = dict.Get(16) > 0;
 
         program = new CffProgram(
             data,
@@ -334,7 +345,8 @@ public sealed class CffProgram : ICffMetrics
             bbox is { Length: 4 } ? bbox : [0f, 0f, 0f, 0f],
             stringIndex.ReadStrings(data),
             sids,
-            codeToGlyph);
+            codeToGlyph,
+            hasBuiltInEncoding);
         return true;
     }
 
