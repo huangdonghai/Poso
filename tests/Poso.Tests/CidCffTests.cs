@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using Poso.Geometry;
 using Poso.Graphics;
 using Poso.Pdf;
 using Poso.Pdf.Fonts;
@@ -89,6 +90,24 @@ public class CidCffTests
         Assert.Equal((ushort)79, gid);
     }
 
+    /// <summary>
+    /// Generators write an identity CharMatrix as a placeholder: pdf.js issue11713.pdf's font dict says
+    /// [1 0 0 1 0 0] while its top DICT carries the real 1/1000. Taking the identity would put the
+    /// wrapper's unitsPerEm at 1 and blow every glyph up to a thousand em, so it must be skipped and
+    /// the parent's scale kept.
+    /// </summary>
+    [Fact]
+    public void CidCffProgram_IdentityCharMatrixInFontDict_KeepsTheParentScale()
+    {
+        byte[] cff = File.ReadAllBytes(FontsSample("issue11713-cid-identity-fd.bin"));
+        Assert.True(CidCffProgram.TryCreate(cff, out CidCffProgram? program));
+        Assert.NotNull(program);
+
+        // The top DICT declares 1/1000 and the FD's identity must not override it.
+        Assert.Equal(0.001f, program!.FontMatrix[0], 6);
+        Assert.Equal(0.001f, program.FontMatrix[3], 6);
+    }
+
     private static string FontsSample(string name)
     {
         string probe = IOPath.Combine(AppContext.BaseDirectory, "Samples", "Fonts", name);
@@ -110,6 +129,45 @@ public class CidCffTests
         }
 
         throw new FileNotFoundException($"font sample '{name}' not found.", name);
+    }
+
+    /// <summary>
+    /// A CID-keyed font dict declares its design-space scale as CharMatrix (12 7), not FontMatrix (7):
+    /// pdf.js text_clip_cff_cid.pdf's FD carries only 12 7, at 1/2048. The OpenType wrapper derives its
+    /// unitsPerEm from this matrix, so reading the wrong one scaled every glyph 2x - PeachDrawing drew
+    /// the page's outlines at two em wide until the FD matrix was read.
+    /// </summary>
+    [Fact]
+    public void CidCffProgram_CharMatrixInFontDict_BecomesTheDesignScale()
+    {
+        byte[] cff = File.ReadAllBytes(FontsSample("reitam-cid-charmatrix.bin"));
+        Assert.True(CidCffProgram.TryCreate(cff, out CidCffProgram? program));
+        Assert.NotNull(program);
+
+        // 1/2048, not the 1/1000 default: the FD's CharMatrix must win over the absent top FontMatrix.
+        Assert.Equal(0.000488281f, program!.FontMatrix[0], 6);
+        Assert.Equal(0.000488281f, program.FontMatrix[3], 6);
+    }
+
+    /// <summary>
+    /// The outline reader must run the charstrings under the same FD CharMatrix: a glyph of this font
+    /// spans about 1300 design units, which is 0.63 em at 1/2048 and 1.3 em at the 1/1000 default -
+    /// the doubled reading is exactly what made the glyphs overlap.
+    /// </summary>
+    [Fact]
+    public void CidCffOutlines_CharMatrixScalesGlyphsToEm()
+    {
+        byte[] cff = File.ReadAllBytes(FontsSample("reitam-cid-charmatrix.bin"));
+        Assert.True(CffOutlines.TryCreate(cff, out OutlineSource? outlines) && outlines is not null);
+
+        var builder = new PathBuilder();
+        Assert.True(outlines!.TryGetOutline(24, builder), "gid 24 must yield an outline");
+        RectF b = builder.Build().Bounds;
+
+        // Hand-decoded charstring extents are (66, 34)-(1265, 1349); at 1/2048 that is at most 0.66 em
+        // wide and 0.66 em tall. A 2x reading would land near 1.3.
+        Assert.True(b.Width < 0.7f, $"the CharMatrix must scale the outline to em, got width {b.Width}");
+        Assert.True(b.Height < 0.7f, $"the CharMatrix must scale the outline to em, got height {b.Height}");
     }
 
     private static string PdfSample(string name)

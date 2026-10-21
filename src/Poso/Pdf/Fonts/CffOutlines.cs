@@ -93,8 +93,8 @@ internal sealed class CffOutlines : OutlineSource
             return false;
         }
 
-        float[]? topMatrix = top.GetArray(7);
-        float[] matrix = topMatrix is { Length: >= 4 } ? Expand(topMatrix) : DefaultFontMatrix;
+        float[]? topMatrix = CffMatrix.Declared(top);
+        float[] matrix = topMatrix ?? DefaultFontMatrix;
         string[] strings = stringIndex.ReadStrings(data);
         int[] sids = ReadCharset(data, (int)top.Get(15), charStrings.Count);
 
@@ -120,10 +120,13 @@ internal sealed class CffOutlines : OutlineSource
                     continue;
                 }
 
-                float[]? fdMatrix = fd.GetArray(7);
+                // A CID-keyed font dict declares its scale as CharMatrix (12 7) rather than FontMatrix (7);
+                // Adobe's own CFF spec lists both, and generators write one or the other - pdf.js
+                // text_clip_cff_cid.pdf's FD carries only 12 7, at 1/2048. An identity at either position
+                // is a placeholder (issue11713.pdf), and a missing one leaves the parent's matrix in force.
                 fonts[i] = new FontProgram(
                     ReadLocalSubrs(data, fd),
-                    fdMatrix is { Length: >= 4 } ? Expand(fdMatrix) : matrix);
+                    CffMatrix.Declared(fd) ?? matrix);
             }
 
             fdSelect = ReadFdSelect(data, (int)top.Get((12 << 8) | 37), charStrings.Count, fdArray.Count);
@@ -531,8 +534,4 @@ internal sealed class CffOutlines : OutlineSource
         string? name = code >= 0 && code < PdfEncodings.Standard.Length ? PdfEncodings.Standard[code] : null;
         return name is not null && TryGetGlyphIdForName(name, out glyphId);
     }
-
-    private static float[] Expand(float[] matrix) => matrix.Length >= 6
-        ? [matrix[0], matrix[1], matrix[2], matrix[3], matrix[4], matrix[5]]
-        : [matrix[0], matrix[1], matrix[2], matrix[3], 0f, 0f];
 }

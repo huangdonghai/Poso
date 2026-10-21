@@ -16,7 +16,7 @@ namespace Poso.Pdf.Fonts;
 /// </remarks>
 internal sealed class CidCffProgram : ICffMetrics
 {
-    private static readonly float[] DefaultFontMatrix = [0.001f, 0f, 0f, 0f, 0.001f, 0f];
+    private static readonly float[] DefaultFontMatrix = CffMatrix.Default;
 
     private CidCffProgram(int glyphCount, float[] fontMatrix, float[] fontBBox, Dictionary<int, ushort> cidToGid)
     {
@@ -79,21 +79,41 @@ internal sealed class CidCffProgram : ICffMetrics
             return false;
         }
 
-        float[]? matrix = dict.GetArray(7);
+        float[]? matrix = CidDesignMatrix(data, dict);
         float[]? bbox = dict.GetArray(5);
         Dictionary<int, ushort> cidToGid = ReadCidToGid(data, (int)dict.Get(15), charStrings.Count);
 
         program = new CidCffProgram(
             charStrings.Count,
-            matrix is { Length: >= 4 } ? ExpandMatrix(matrix) : DefaultFontMatrix,
+            matrix ?? DefaultFontMatrix,
             bbox is { Length: 4 } ? bbox : [0f, 0f, 0f, 0f],
             cidToGid);
         return true;
     }
 
-    private static float[] ExpandMatrix(float[] matrix) => matrix.Length >= 6
-        ? [matrix[0], matrix[1], matrix[2], matrix[3], matrix[4], matrix[5]]
-        : [matrix[0], matrix[1], 0f, matrix[2], 0f, matrix[3]];
+    /// <summary>
+    /// The design-space scale a CID-keyed program's charstrings run at. A CID font dict declares it as
+    /// CharMatrix (12 7), not FontMatrix (7) - pdf.js text_clip_cff_cid.pdf's FD carries only 12 7, at
+    /// 1/2048 - and the top DICT of a CID font usually names neither. The OpenType wrapper's unitsPerEm
+    /// is derived from this matrix, so reading the wrong one (or none) makes every renderer that
+    /// normalises by upem scale the outlines wrong: PeachDrawing drew that font's glyphs at 2x until
+    /// the FD matrix was read. An identity matrix is a placeholder rather than a statement -
+    /// issue11713.pdf's FD says [1 0 0 1 0 0] while its top DICT carries the real 1/1000 - so the
+    /// search starts at the font dict and lets <see cref="CffMatrix"/> skip what means nothing.
+    /// </summary>
+    private static float[]? CidDesignMatrix(byte[] data, CffDict top)
+    {
+        int fdArrayOffset = (int)top.Get((12 << 8) | 36);
+        if (fdArrayOffset > 0 && fdArrayOffset < data.Length &&
+            CffIndex.TryRead(data, ref fdArrayOffset, out CffIndex fdArray) && fdArray.Count > 0 &&
+            CffDict.TryParse(fdArray.ReadItem(data, 0), out CffDict? fd) && fd is not null &&
+            CffMatrix.Declared(fd) is { } fdMatrix)
+        {
+            return fdMatrix;
+        }
+
+        return CffMatrix.Declared(top);
+    }
 
     /// <summary>
     /// Reads the charset (which for a CID font lists a CID per glyph, GID 1..n) and inverts it into a
