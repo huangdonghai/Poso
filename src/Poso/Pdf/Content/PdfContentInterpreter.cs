@@ -1800,7 +1800,12 @@ public sealed class PdfContentInterpreter
         bool outerStencil = _type3Stencil;
         _type3Stencil = false;
         PdfDictionary? glyphResources = font.Resources ?? _currentResources;
+        // A glyph description runs as if surrounded by q and Q (ISO 32000-1 9.5.5): the graphics state
+        // its procedure sets must not outlive it. pdf.js issue19634.pdf's F4 charprocs set a Luminosity
+        // /SMask through gs; without the state save that mask leaked into the F5 run painted over the
+        // same line, and the green text vanished under a white mask.
         _context.Save();
+        _stateStack.Push(_state.Clone());
         // canvas = FontMatrix * textSpaceMatrix * CTM
         _context.ConcatMatrix(font.FontMatrix * textSpaceMatrix);
         try
@@ -1809,7 +1814,9 @@ public sealed class PdfContentInterpreter
         }
         finally
         {
+            _state = _stateStack.Pop();
             _context.Restore();
+            _context.SetBlendMode(_state.BlendMode);
             _type3Stencil = outerStencil;
         }
 

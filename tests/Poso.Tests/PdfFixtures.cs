@@ -2272,6 +2272,21 @@ public static class PdfFixtures
         Stream(6, string.Empty, Encoding.ASCII.GetBytes("800 0 0 0 800 800 d1\n1 1 1 rg\n0 0 m 800 0 l 800 800 l 0 800 l h f")));
 
     /// <summary>
+    /// A 100x100 page that shows one Type3 glyph and then fills a rectangle without setting a colour.
+    /// The glyph procedure fills itself red; a glyph description runs as if surrounded by q and Q
+    /// (ISO 32000-1 9.5.5), so the red must not outlive it and the rectangle has to appear in the
+    /// default black. pdf.js issue19634.pdf sets a Luminosity /SMask inside its Type3 charprocs, and
+    /// that mask leaked into the text painted after the run, hiding it under a white layer.
+    /// </summary>
+    public static byte[] CreateType3StateLeakPdf() => Build(1,
+        new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+        new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+        new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>"),
+        Stream(4, string.Empty, Encoding.ASCII.GetBytes("BT 10 40 Td /F1 60 Tf (A) Tj ET 60 10 30 30 re f")),
+        new PdfObjectDefinition(5, "<< /Type /Font /Subtype /Type3 /FontMatrix [.001 0 0 .001 0 0] /FirstChar 65 /LastChar 65 /Widths [800] /Encoding << /Type /Encoding /Differences [65 /A] >> /CharProcs << /A 6 0 R >> >>"),
+        Stream(6, string.Empty, Encoding.ASCII.GetBytes("800 0 0 0 800 800 d0\n1 0 0 rg\n0 0 m 800 0 l 800 800 l 0 800 l h f")));
+
+    /// <summary>
     /// A 100x100 page whose only marks are two annotations with no appearance stream: a red-stroked Square
     /// and a blue-stroked, green-filled Circle (ISO 32000-1 12.5.5.2/12.5.5.3 leave their drawing to the
     /// viewer) - the shape of pdf.js annotation-square-circle-without-appearance.pdf.

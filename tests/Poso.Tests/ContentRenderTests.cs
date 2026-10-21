@@ -369,6 +369,32 @@ public class ContentRenderTests
     }
 
     /// <summary>
+    /// A Type3 glyph procedure runs as if surrounded by q and Q (ISO 32000-1 9.5.5), so the graphics
+    /// state it sets must not outlive it. pdf.js issue19634.pdf's charprocs set a Luminosity /SMask;
+    /// the mask leaked into the next text run and painted it under a white layer, so the whole line
+    /// vanished. Here the glyph fills itself red and the page then paints a rectangle with no colour
+    /// of its own: the rectangle must be the default black, not the glyph's red.
+    /// </summary>
+    [Fact]
+    public void Type3Glyph_GraphicsStateDoesNotLeakOut()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateType3StateLeakPdf());
+        using IGraphicsContext context = Factory.CreateContext(100, 100);
+        document.Pages[0].Render(Factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+
+        // The rectangle spans user x 60..90, y 10..40; device row 75, column 75 sits inside it.
+        (byte b, byte g, byte r, _) = PixelAt(pixels, image.Width, 75, 75);
+        Assert.True(r < 80 && g < 80 && b < 80, $"the rectangle must paint in the default black, not the glyph's red (r={r} g={g} b={b})");
+
+        // The glyph itself is red: user x 10..58, y 40..88; device row 40, column 30.
+        (byte gb, byte gg, byte gr, _) = PixelAt(pixels, image.Width, 40, 30);
+        Assert.True(gr > 180 && gg < 90 && gb < 90, $"the d0 glyph must keep its own red (r={gr} g={gg} b={gb})");
+    }
+
+    /// <summary>
     /// A Type3 glyph procedure with no /Resources on the font inherits the resources in force where the
     /// text was shown - pdf.js pr4922.pdf's glyph procedures show text with the page's own fonts, and
     /// resolving only against the font's (absent) resources left the page empty.
