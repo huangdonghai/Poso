@@ -1015,6 +1015,19 @@ public static class PdfFixtures
             + "/Contents 4 0 R /Resources << >> >>"),
         Stream(4, string.Empty, Encoding.ASCII.GetBytes("0 0 0 rg 10 10 80 30 re f")));
 
+    /// <summary>
+    /// A document whose trailer /Root names the /Info dictionary instead of the catalog - pdf.js
+    /// issue9418.pdf's incremental update does exactly that. The scan finds the real catalog, and the
+    /// trailer has to prefer it over a /Root that names something else.
+    /// </summary>
+    public static byte[] CreateRootPointingAtInfoPdf() => Build(1,
+        new PdfObjectDefinition(1, "<< /Producer (fixture) >>"),
+        new PdfObjectDefinition(2, "<< /Type /Catalog /Pages 3 0 R >>"),
+        new PdfObjectDefinition(3, "<< /Type /Pages /Kids [4 0 R] /Count 1 >>"),
+        new PdfObjectDefinition(4, "<< /Type /Page /Parent 3 0 R /MediaBox [0 0 200 50] "
+            + "/Contents 5 0 R /Resources << >> >>"),
+        Stream(5, string.Empty, Encoding.ASCII.GetBytes("0 0 0 rg 10 10 80 30 re f")));
+
     /// <summary>A document whose xref sends object 3 past the end of the file.</summary>
     public static byte[] CreateXrefOffsetPastEndPdf()
     {

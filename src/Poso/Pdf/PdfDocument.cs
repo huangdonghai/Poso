@@ -71,8 +71,20 @@ public sealed class PdfDocument : IDisposable
             return;
         }
 
-        // One step further in: a table can index the catalog but not the /Pages it names, which is
-        // pdf.js issue9418.pdf's shape and reads the same way - "missing the page tree root".
+        // A /Root can resolve to a dictionary that is not the catalog at all - pdf.js issue9418.pdf's
+        // incremental update points it at the /Info dictionary - and then the document reports a missing
+        // /Pages rather than a missing catalog. Both read the same way from here, so both rebuild.
+        if (catalog.Get("Pages") is null)
+        {
+            if (!_xref.WasRebuilt)
+            {
+                _xref.Repair(_buffer);
+            }
+
+            return;
+        }
+
+        // One step further in: a table can index the catalog but not the /Pages it names.
         if (catalog.Get("Pages") is PdfIndirectRef pages && Resolve(pages) is not PdfDictionary)
         {
             _xref.Repair(_buffer);

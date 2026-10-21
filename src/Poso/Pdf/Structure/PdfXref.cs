@@ -534,8 +534,10 @@ public sealed class PdfXref
         // family stopped (MuPDF repairs object streams the same way).
         ExpandObjectStreams(data);
 
-        // 3) Assemble the trailer.
-        if (trailer is null || trailer.Get("Root") is null)
+        // 3) Assemble the trailer. A /Root that names something other than a catalog counts as missing:
+        // pdf.js issue9418.pdf's incremental update rewrites it to point at the /Info dictionary, and the
+        // scan above has already found the real catalog, so use that.
+        if (trailer is null || trailer.Get("Root") is null || !RootIsACatalog(data, trailer.Get("Root")))
         {
             if (catalogObjectNumber is not null)
             {
@@ -566,6 +568,31 @@ public sealed class PdfXref
     }
 
     /// <summary>Parse the "N G" object header backwards from the position of the obj keyword.</summary>
+    /// <summary>Whether a trailer's /Root names a dictionary whose /Type is /Catalog.</summary>
+    private bool RootIsACatalog(byte[] data, PdfObject? root)
+    {
+        if (root is not PdfIndirectRef reference)
+        {
+            return root is PdfDictionary direct && direct.GetNameValue("Type") == "Catalog";
+        }
+
+        // The entry comes from the scan just done, so it points at a real object header.
+        if (GetEntry(reference.ObjectNumber, reference.Generation) is not { Type: PdfXrefEntryType.InFile } entry)
+        {
+            return false;
+        }
+
+        try
+        {
+            var parser = new PdfParser(data, (int)entry.Offset) { Encryption = _encryption, DecryptStrings = false };
+            return parser.TryParseIndirectObject()?.Object is PdfDictionary dict && dict.GetNameValue("Type") == "Catalog";
+        }
+        catch (PdfException)
+        {
+            return false;
+        }
+    }
+
     private static bool TryParseObjectHeaderBefore(byte[] data, int objIndex, out int objectNumber, out int generation, out int headerStart)
     {
         objectNumber = 0;

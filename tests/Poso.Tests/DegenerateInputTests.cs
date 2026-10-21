@@ -47,6 +47,19 @@ public class DegenerateInputTests
     }
 
     /// <summary>
+    /// A trailer /Root that names the /Info dictionary instead of the catalog (pdf.js issue9418.pdf's
+    /// incremental update) has to give way to the catalog the scan found, not sink the document.
+    /// </summary>
+    [Fact]
+    public void RootNamingSomethingOtherThanTheCatalog_StillOpens()
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateRootPointingAtInfoPdf());
+
+        Assert.Single(document.Pages);
+        Assert.Equal(200f, document.Pages[0].Width);
+    }
+
+    /// <summary>
     /// A lexer handed a start past the end of the buffer reports "nothing here" rather than indexing past
     /// its data. Defensive: the construction that reached it in practice - a cross-reference entry beyond
     /// the last byte, as in pdf.js operator_list_cycle.pdf - also has <c>End</c> at the file length, so
