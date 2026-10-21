@@ -1996,8 +1996,15 @@ public sealed class PdfContentInterpreter
         // landed where the page asked. ISO 32000-1 9.5.5 makes the procedure a closed q/Q scope.
         Matrix3x2 outerTextMatrix = _textMatrix;
         Matrix3x2 outerTextLineMatrix = _textLineMatrix;
-        // canvas = FontMatrix * textSpaceMatrix * CTM
-        _context.ConcatMatrix(font.FontMatrix * textSpaceMatrix);
+        // canvas = FontMatrix * textSpaceMatrix * CTM. The graphics state has to follow: the glyph
+        // procedure's own operators (a cm of its own, above all) build on the current transform, and
+        // without the font matrix and the text space in it they would be measured against the page's
+        // matrix instead. pdf.js issue14999_reduced.pdf's Type3 glyphs scale their content by 0.01
+        // inside a 10600-unit cell, and the scale landed on the page's matrix - the text came out
+        // a hundred times too large and only its top edge survived the page.
+        Matrix3x2 glyphMatrix = font.FontMatrix * textSpaceMatrix;
+        _state.Ctm = glyphMatrix * _state.Ctm;
+        _context.ConcatMatrix(glyphMatrix);
         try
         {
             ExecuteContent(glyphStream.Decode(_diag), glyphResources);
