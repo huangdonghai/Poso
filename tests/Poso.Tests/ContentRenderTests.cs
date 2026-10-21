@@ -937,6 +937,51 @@ public class ContentRenderTests
     }
 
     /// <summary>
+    /// A Type3 glyph procedure runs in the font's space, so the scale it applies to its own content
+    /// is measured against the font matrix and the text space, not against the page. pdf.js
+    /// issue19634.pdf's F4 glyph scales its content by 0.01 inside a 10600-unit cell: with the page's
+    /// transform in the wrong place the scale lands on the page and the text comes out a hundred times
+    /// too large, with only its top edge on the page.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Render_Type3GlyphScale_AppliesToTheGlyphNotThePage(bool peach)
+    {
+        IGraphicsFactory factory = peach ? PeachGraphicsFactory.Default : Factory;
+        using PdfDocument document = PdfDocument.FromArray(File.ReadAllBytes(PdfSample("type3-scaled-glyph.pdf")));
+        using IGraphicsContext context = factory.CreateContext(918, 1188);
+        document.Pages[0].Render(factory, context, new PdfRenderOptions(2f, 0f, PosoColor.White));
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+
+        // The green words are the F5 glyphs; the pink rectangles behind them are the F4 ones, which
+        // PDFium paints as a soft grey shadow. With the scale on the page instead of on the glyph, the
+        // F4 rectangles are mis-placed and trail every line as solid blocks.
+        int green = 0, pink = 0;
+        for (int i = 0; i < pixels.Length; i += 4)
+        {
+            // The pixels come as BGRA.
+            int b = pixels[i], g = pixels[i + 1], r = pixels[i + 2];
+            if (g > r + 20 && g > b + 20)
+            {
+                green++;
+            }
+            else if (r > 200 && g < 220 && b < 220 && r - b > 10)
+            {
+                pink++;
+            }
+        }
+
+        Assert.True(green > 200, $"the green words must paint, got {green} pixels");
+
+        // The F4 shadow is a mis-placed block when the glyph procedure runs against the page's
+        // transform: the ink it adds is a solid rectangle in the text colour, and the page carries
+        // far more of it than the letters do.
+        Assert.True(pink < 3000, $"the shadow must not become solid blocks ({pink} pixels)");
+    }
+
+    /// <summary>
     /// pdf.js issue4379.pdf masks a 1000x800 indexed image with a CCITT-compressed stencil. The mask
     /// reached the decoder as raw compressed bytes because only DCT/JPX masks were routed through the
     /// image pipeline, so the page painted a band of noise instead of the text.
