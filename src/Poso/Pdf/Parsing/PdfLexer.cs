@@ -13,8 +13,13 @@ public sealed class PdfLexer
     public PdfLexer(byte[] data, int start = 0, int length = -1)
     {
         _data = data ?? throw new ArgumentNullException(nameof(data));
-        _pos = start;
-        _end = length < 0 ? data.Length : Math.Min(start + length, data.Length);
+
+        // A cross-reference entry may point past the end of the file - a truncated or hand-edited table
+        // does exactly that - and the scan loop indexes _data[_pos] before it looks at _end, so an
+        // unclamped start throws IndexOutOfRangeException instead of reporting "nothing here".
+        // pdf.js operator_list_cycle.pdf sends its reader beyond the last byte that way.
+        _pos = Math.Clamp(start, 0, data.Length);
+        _end = length < 0 ? data.Length : Math.Clamp(start + length, 0, data.Length);
     }
 
     public int Position

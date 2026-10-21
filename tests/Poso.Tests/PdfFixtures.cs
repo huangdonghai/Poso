@@ -990,6 +990,42 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// A page whose <c>scn</c> names an /Indexed colour space with a lookup shorter than one entry. The
+    /// index has nothing to clamp to, and pdf.js issue1985.pdf's truncated palette took that as a reason to
+    /// throw out of Math.Clamp and lose the whole page.
+    /// </summary>
+    public static byte[] CreateShortIndexedLookupPdf() => Build(1,
+        new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+        new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+        new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] "
+            // 2 bytes for a 3-component space: longer than nothing, shorter than one entry, which is the
+            // shape that leaves maxIndex at -1.
+            + "/Resources << /ColorSpace << /Cs1 [/Indexed /DeviceRGB 255 <AABB>] >> >> /Contents 4 0 R >>"),
+        Stream(4, string.Empty, Encoding.ASCII.GetBytes("/Cs1 cs 1.0 scn 10 10 80 40 re f")));
+
+    /// <summary>A document whose xref sends object 3 past the end of the file.</summary>
+    public static byte[] CreateXrefOffsetPastEndPdf()
+    {
+        byte[] wellFormed = CreateSimplePdf();
+        string text = Encoding.ASCII.GetString(wellFormed);
+        int table = text.LastIndexOf("\nxref\n", StringComparison.Ordinal);
+        if (table < 0)
+        {
+            throw new InvalidOperationException("the fixture drifted");
+        }
+
+        // Object 3's entry carries an offset far beyond the last byte.
+        string[] lines = text[(table + 1)..].Split('\n');
+        if (!lines[5].EndsWith(" n ", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("the fixture drifted");
+        }
+
+        lines[5] = "9999999999 00000 n ";
+        return Encoding.ASCII.GetBytes(text[..(table + 1)] + string.Join('\n', lines));
+    }
+
+    /// <summary>
     /// A document with an outline (two top-level items, one with a child, one via a named
     /// destination) and two link annotations on page 1 (a URI link and an internal GoTo).
     /// </summary>

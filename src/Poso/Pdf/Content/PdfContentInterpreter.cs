@@ -2738,8 +2738,21 @@ public sealed class PdfContentInterpreter
         }
 
         int maxIndex = (lookup.Length / lookupComponents) - 1;
+
+        // A lookup shorter than one entry leaves nothing to clamp to: maxIndex is -1 and Math.Clamp
+        // throws when min > max, which cost pdf.js issue1985.pdf the whole page instead of the colour it
+        // does describe. Indexing past the end of a truncated palette is the same case one step later.
+        if (maxIndex < 0)
+        {
+            return PosoColor.Black;
+        }
+
         int clamped = (int)MathF.Round(Math.Clamp(index, 0f, maxIndex));
         int offset = clamped * lookupComponents;
+        if (offset + lookupComponents > lookup.Length)
+        {
+            return PosoColor.Black;
+        }
 
         return lookupComponents switch
         {
