@@ -60,6 +60,23 @@ public class PdfParsingTests
     /// A dictionary ends at <c>&gt;&gt;</c> or at a lone <c>&gt;</c>. Matching only the doubled form loses
     /// the object - and the page hanging off it - on files from the PDF Association's difference corpus.
     /// </summary>
+    /// <summary>
+    /// An array element that cannot start an object is damage; the array around it is still readable and
+    /// dropping the token keeps it. pdf.js bug1953099.pdf's TJ array carries a lone '-' between two
+    /// strings, and throwing on it lost the whole line.
+    /// </summary>
+    [Fact]
+    public void Parse_ArrayWithAStrayToken_KeepsTheElementsAroundIt()
+    {
+        var parser = new PdfParser(Encoding.ASCII.GetBytes("[ (a) - (b) 12 ]"));
+        var array = Assert.IsType<Poso.Pdf.Objects.PdfArray>(parser.ParseObject());
+
+        Assert.Equal(3, array.Count);
+        Assert.IsType<Poso.Pdf.Objects.PdfString>(array[0]);
+        Assert.IsType<Poso.Pdf.Objects.PdfString>(array[1]);
+        Assert.Equal(12, Assert.IsType<Poso.Pdf.Objects.PdfNumber>(array[2]).AsInt());
+    }
+
     [Fact]
     public void Open_DictionaryClosedByASingleAngleBracket_ReadsThePage()
     {

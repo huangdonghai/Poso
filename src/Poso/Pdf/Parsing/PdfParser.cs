@@ -188,6 +188,20 @@ public sealed class PdfParser
                 break;
             }
 
+            // An element that cannot start an object is damage, and dropping it keeps the array: pdf.js
+            // bug1953099.pdf's TJ array carries a lone '-' between two strings, which made the whole
+            // array unreadable and the line vanish. PDFium skips the token and paints the text. The
+            // three keyword-shaped values are real objects, so only the others are skipped.
+            PdfToken next = _lexer.PeekToken();
+            if (next.Kind == PdfTokenKind.Keyword &&
+                !_lexer.Match(next, "true"u8) &&
+                !_lexer.Match(next, "false"u8) &&
+                !_lexer.Match(next, "null"u8))
+            {
+                _lexer.NextToken();
+                continue;
+            }
+
             items.Add(ParseObject(depth + 1));
         }
 
