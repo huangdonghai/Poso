@@ -518,6 +518,46 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// A 100x100 page filled with an 8x8 tiling pattern whose /BBox starts at (10, 30). The lattice is
+    /// anchored at the BBox origin, so a black cell covers (10..18, 30..38); indexing the absolute pattern
+    /// coordinates instead shifts every cell by floor(30 / 8) steps and leaves the top of the page empty.
+    /// </summary>
+    public static byte[] CreateOffsetTilingPatternPdf()
+    {
+        string cell = "10 30 4 4 re f";
+        string pattern = "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 "
+            + "/BBox [10 30 18 38] /XStep 8 /YStep 8 /Resources << >>";
+        string content = "q /Pattern cs /P1 scn 0 0 100 100 re f Q";
+
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Pattern << /P1 5 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            Stream(5, pattern, Encoding.ASCII.GetBytes(cell)));
+    }
+
+    /// <summary>
+    /// The same pattern with /Matrix [1 0 0 -1 0 100], which mirrors pattern space into the page. Each
+    /// 8x8 cell paints its top half (pattern y 4..8), so the black half-band must land at device y 4..8
+    /// of every cell; a blit that always puts the tile's first row at the rect's top flips it to 0..4.
+    /// </summary>
+    public static byte[] CreateMirroredTilingPatternPdf()
+    {
+        string cell = "0 4 8 4 re f";
+        string pattern = "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 "
+            + "/BBox [0 0 8 8] /XStep 8 /YStep 8 /Matrix [1 0 0 -1 0 100] /Resources << >>";
+        string content = "q /Pattern cs /P1 scn 0 0 100 100 re f Q";
+
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Pattern << /P1 5 0 R >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            Stream(5, pattern, Encoding.ASCII.GetBytes(cell)));
+    }
+
+    /// <summary>
     /// A page whose /Resources carries no /Font at all while its content names one: pdf.js
     /// issue5954.pdf's page has only an empty /XObject entry. PDFium paints the run in a stock face
     /// rather than dropping it, so the page must not come out blank.

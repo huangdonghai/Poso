@@ -725,6 +725,54 @@ public class ContentRenderTests
         Assert.True(ink > 100, $"a missing font resource must still paint, got {ink} dark pixels");
     }
 
+    /// <summary>
+    /// The tiling lattice starts at the pattern's /BBox, not at the coordinate origin: this fixture's cell
+    /// begins at (10, 30), and indexing the absolute pattern coordinates moves every cell up by three
+    /// steps, leaving the top of the page blank.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Render_TilingPatternWithAnOffsetBBox_AnchorsAtTheBox(bool peach)
+    {
+        IGraphicsFactory factory = peach ? PeachGraphicsFactory.Default : Factory;
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateOffsetTilingPatternPdf());
+        using IGraphicsContext context = factory.CreateContext(100, 100);
+        document.Pages[0].Render(factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+
+        // The cell's painted quarter is (10..14, 30..34) in PDF space, i.e. device (10..14, 66..70).
+        (byte b, byte g, byte r, _) = PixelAt(pixels, image.Width, 68, 12);
+        Assert.True(b < 100 && g < 100 && r < 100, $"the cell must paint at (12, 68), got r={r} g={g} b={b}");
+
+        (byte gb, byte gg, byte gr, _) = PixelAt(pixels, image.Width, 64, 12);
+        Assert.True(gb > 200 && gg > 200 && gr > 200, $"the rest of the cell stays white at (12, 64), got r={gr} g={gg} b={gb}");
+    }
+
+    /// <summary>
+    /// A pattern /Matrix that mirrors pattern space must place the cell mirrored too. The cell paints its
+    /// top half, so the black band lands at device y 4..8 of each cell; a plain device blit flips it.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Render_MirroredTilingPattern_KeepsTheCellOrientation(bool peach)
+    {
+        IGraphicsFactory factory = peach ? PeachGraphicsFactory.Default : Factory;
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateMirroredTilingPatternPdf());
+        using IGraphicsContext context = factory.CreateContext(100, 100);
+        document.Pages[0].Render(factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+
+        (byte b, byte g, byte r, _) = PixelAt(pixels, image.Width, 6, 2);
+        Assert.True(b < 100 && g < 100 && r < 100, $"the band must paint at (2, 6), got r={r} g={g} b={b}");
+
+        (byte wb, byte wg, byte wr, _) = PixelAt(pixels, image.Width, 2, 2);
+        Assert.True(wb > 200 && wg > 200 && wr > 200, $"the other half stays white at (2, 2), got r={wr} g={wg} b={wb}");
+    }
+
     private static byte[] FontsFile(string name) =>
         File.ReadAllBytes(IOPath.Combine(AppContext.BaseDirectory, "Samples", "Fonts", name));
 

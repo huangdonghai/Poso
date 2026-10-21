@@ -2674,7 +2674,11 @@ public sealed class PdfContentInterpreter
             return;
         }
 
-        Matrix3x2 dt = patternMatrix * _state.Ctm;
+        // A pattern is anchored to the default space of the content stream that names it, not to the
+        // CTM in force where it is painted: pdf.js issue13561_reduced.pdf scales its stencil image by
+        // 252x191 before painting it, and multiplying by that transform blows the cells off the page.
+        // Shading patterns already use the same entry transform.
+        Matrix3x2 dt = patternMatrix * _streamEntryMatrix;
         float sx = MathF.Sqrt((dt.M11 * dt.M11) + (dt.M12 * dt.M12));
         float sy = MathF.Sqrt((dt.M21 * dt.M21) + (dt.M22 * dt.M22));
         if (sx <= 0f || sy <= 0f)
@@ -2732,10 +2736,13 @@ public sealed class PdfContentInterpreter
                 maxPy = Math.Max(maxPy, p.Y);
             }
 
-            int i0 = (int)MathF.Floor(minPx / xStep);
-            int i1 = (int)MathF.Ceiling(maxPx / xStep);
-            int j0 = (int)MathF.Floor(minPy / yStep);
-            int j1 = (int)MathF.Ceiling(maxPy / yStep);
+            // The lattice is anchored at the BBox origin, not at (0, 0): pdf.js issue13561_reduced.pdf's
+            // cell starts at (35.4, 396.6), so indexing the absolute pattern coordinates puts every cell
+            // two steps up and the whole fill lands outside the page.
+            int i0 = (int)MathF.Floor((minPx - bx0) / xStep);
+            int i1 = (int)MathF.Ceiling((maxPx - bx0) / xStep);
+            int j0 = (int)MathF.Floor((minPy - by0) / yStep);
+            int j1 = (int)MathF.Ceiling((maxPy - by0) / yStep);
             if ((long)(i1 - i0 + 1) * (j1 - j0 + 1) > 200000)
             {
                 return; // guard against pathological tile counts
@@ -2747,8 +2754,13 @@ public sealed class PdfContentInterpreter
             // the PDF image convention (first row at the cell's top), which is what the back ends expect of
             // a destination rect given in the y-up pattern space. An axis-aligned matrix keeps the plain
             // device-space blit - the overwhelmingly common case, and it needs no per-tile matrix change.
+            //
+            // A mirrored matrix (dt.M11 < 0 or dt.M22 > 0) must take the same route: the plain blit always
+            // puts the tile's first row at the rect's top, which is only right while pattern +y points up
+            // in device space. pdf.js issue13561_reduced.pdf's pattern Matrix has [1 0 0 -1], so its cell
+            // came out upside down.
             bool sheared = _factory.SupportsTransformedImagePlacement &&
-                (Math.Abs(dt.M12) > 1e-5f || Math.Abs(dt.M21) > 1e-5f);
+                (Math.Abs(dt.M12) > 1e-5f || Math.Abs(dt.M21) > 1e-5f || dt.M11 < 0f || dt.M22 > 0f);
             if (sheared)
             {
                 _context.SetMatrix(dt);
