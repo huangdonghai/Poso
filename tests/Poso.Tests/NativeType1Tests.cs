@@ -262,6 +262,26 @@ public class NativeType1Tests
         Assert.False(Poso.Pdf.Fonts.Type1Program.TryCreate(new byte[] { 0x25, 0x21 }, out _));
     }
 
+    /// <summary>
+    /// pdf.js bug1539074.1.pdf's second font declares FontMatrix [0.001 0.002 0.003 -0.004 0 0]: a real
+    /// Type 1 face whose design space shears. Re-serialised to CFF, a plain negative number must open
+    /// with the minus nibble (0xE), not the exponent-minus marker (0xC) - the reader turns "E-" into an
+    /// unparsable mantissa and drops the operand to zero, which flattened every y coordinate onto the
+    /// baseline. The converted program must still carry -0.004.
+    /// </summary>
+    [Fact]
+    public void NegativeFontMatrixType1_RoundTripsThroughCffUnchanged()
+    {
+        byte[] program = File.ReadAllBytes(FontsFile("lucida-typewriter-slant.bin"));
+        Assert.True(Poso.Pdf.Fonts.Type1Program.TryCreate(program, out Poso.Pdf.Fonts.Type1Program? t1) && t1 is not null);
+        Assert.Equal(0.001f, t1!.FontMatrix[0], 6);
+        Assert.Equal(-0.004f, t1.FontMatrix[3], 6);
+
+        byte[] cff = Poso.Pdf.Fonts.Type1ToCff.Build(t1, "SlantTest");
+        Assert.True(Poso.Pdf.Fonts.CffProgram.TryCreate(cff, out Poso.Pdf.Fonts.CffProgram? cffProg) && cffProg is not null);
+        Assert.Equal(-0.004f, cffProg!.FontMatrix[3], 6);
+    }
+
     private static string FontsFile(string name)
     {
         string probe = IOPath.Combine(AppContext.BaseDirectory, "Samples", "Fonts", name);

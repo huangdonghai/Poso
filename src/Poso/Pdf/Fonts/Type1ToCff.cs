@@ -259,7 +259,8 @@ internal static class Type1ToCff
         var nibbles = new List<int>();
         if (text.StartsWith("-", StringComparison.Ordinal))
         {
-            nibbles.Add(0xc);
+            // 0xE is the minus sign; 0xC is the "E-" exponent marker and must not open a plain negative.
+            nibbles.Add(0xe);
             text = text[1..];
         }
 
