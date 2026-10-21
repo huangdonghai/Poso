@@ -2294,16 +2294,27 @@ public sealed class PdfContentInterpreter
             // whose points happen to be collinear is still a curve, and PDFium does not draw it as a
             // line (pdf.js issue11279.pdf's form ends in such a curve).
             bool straight = true;
+            int drawn = 0;
             for (int i = 0; i < sub.SegmentCount; i++)
             {
-                if (sub.GetSegment(i).Type == PathSegmentType.CubicTo)
+                PathSegmentType type = sub.GetSegment(i).Type;
+                if (type == PathSegmentType.CubicTo)
                 {
                     straight = false;
-                    break;
+                }
+                else if (type != PathSegmentType.MoveTo)
+                {
+                    drawn++;
                 }
             }
 
-            result.Add((sub, straight && (width <= 0f || height <= 0f)));
+            // A lone move-to draws nothing at all, so it is neither a shape nor a degenerate contour:
+            // counting it as one would cancel the real contour next to it (pdf.js issue11279.pdf's
+            // form ends with "h m f").
+            if (drawn > 0)
+            {
+                result.Add((sub, straight && (width <= 0f || height <= 0f)));
+            }
             builder = new PathBuilder();
             started = false;
             minX = float.MaxValue; minY = float.MaxValue; maxX = float.MinValue; maxY = float.MinValue;
