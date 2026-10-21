@@ -1690,18 +1690,17 @@ public sealed class PdfContentInterpreter
         }
 
         var builder = new PathBuilder(glyphs.Length * 32);
-        var glyphPath = new PathBuilder();
         bool drew = false;
 
         for (int i = 0; i < glyphs.Length; i++)
         {
-            glyphPath = new PathBuilder();
-            if (!font.TryGetGlyphOutline(codes[i], glyphPath))
+            // The cached outline is in em units with the glyph origin at zero; the pen position places it.
+            if (!font.TryGetGlyphOutlinePath(codes[i], out IPath? outline) || outline is null)
             {
                 continue;
             }
 
-            AppendTranslated(glyphPath.Build(), glyphs[i].X, glyphs[i].Y, builder);
+            AppendTranslated(outline, glyphs[i].X, glyphs[i].Y, builder);
             drew = true;
         }
 

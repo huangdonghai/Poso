@@ -205,13 +205,62 @@ public abstract class PdfFont
     /// </summary>
     public virtual bool TryGetGlyphOutline(int code, IPathBuilder path)
     {
-        if (Outlines is not { } outlines)
+        if (!TryGetGlyphOutlinePath(code, out IPath? outline) || outline is null)
         {
             return false;
         }
 
-        return outlines.TryGetOutline(ResolveOutlineGlyph(outlines, code), path);
+        for (int i = 0; i < outline.SegmentCount; i++)
+        {
+            PathSegment segment = outline.GetSegment(i);
+            switch (segment.Type)
+            {
+                case PathSegmentType.MoveTo:
+                    path.MoveTo(segment.X1, segment.Y1);
+                    break;
+
+                case PathSegmentType.LineTo:
+                    path.LineTo(segment.X1, segment.Y1);
+                    break;
+
+                case PathSegmentType.CubicTo:
+                    path.CubicTo(segment.X1, segment.Y1, segment.X2, segment.Y2, segment.X3, segment.Y3);
+                    break;
+
+                case PathSegmentType.Close:
+                    path.Close();
+                    break;
+            }
+        }
+
+        return true;
     }
+
+    /// <summary>
+    /// The cached outline of a code, in em units, or null when the program cannot supply one. The path
+    /// is shared and must only be read; callers that place it pass it to a translate-and-copy step.
+    /// </summary>
+    public bool TryGetGlyphOutlinePath(int code, out IPath? outline)
+    {
+        // A glyph's outline is an em-space constant of the code, so parse it once: a text-heavy page
+        // shows the same dozens of codes thousands of times, and re-running the charstring every time
+        // was the fallback's dominant cost. A failed code is cached too - it will not start working.
+        outline = OutlineCache.GetOrAdd(code, static (code, font) =>
+        {
+            if (font.Outlines is not { } outlines)
+            {
+                return null;
+            }
+
+            var builder = new PathBuilder();
+            return outlines.TryGetOutline(font.ResolveOutlineGlyph(outlines, code), builder) ? builder.Build() : null;
+        }, this);
+
+        return outline is not null;
+    }
+
+    /// <summary>Parsed outlines by code; fonts are shared across pages, which render concurrently.</summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<int, IPath?> OutlineCache = new();
 
     /// <summary>The glyph id to read out of the embedded program for a code, in the program's own order.</summary>
     internal virtual int ResolveOutlineGlyph(OutlineSource outlines, int code) => code;
