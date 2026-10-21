@@ -246,6 +246,52 @@ public class OutlineFallbackTests
         Assert.Equal(72, map[0xF065]);
     }
 
+    /// <summary>
+    /// A cmap record's subtable offset is a uint. A corrupt program can point it near 4G, which wraps
+    /// negative when added to the table start; "offset + 2" then passes the upper-bound test and the
+    /// reader walks off the array. pdf.js bug1050040.pdf's directory does this, and it took the Peach
+    /// render down before the guard.
+    /// </summary>
+    [Fact]
+    public void SfntCmap_SubtableOffsetPastTheProgram_YieldsNoMappingsInsteadOfThrowing()
+    {
+        var font = new byte[64];
+        font[0] = 0;
+        font[1] = 1;
+        font[2] = 0;
+        font[3] = 0;
+        font[4] = 0;
+        font[5] = 1; // one table
+        "cmap"u8.CopyTo(font.AsSpan(12));
+        uint cmapOffset = 28;
+        uint cmapLength = 32;
+        font[20] = (byte)(cmapOffset >> 24);
+        font[21] = (byte)(cmapOffset >> 16);
+        font[22] = (byte)(cmapOffset >> 8);
+        font[23] = (byte)cmapOffset;
+        font[24] = (byte)(cmapLength >> 24);
+        font[25] = (byte)(cmapLength >> 16);
+        font[26] = (byte)(cmapLength >> 8);
+        font[27] = (byte)cmapLength;
+
+        // cmap header: format 0, one record pointing at 0xFFFFFFF0.
+        font[28] = 0;
+        font[29] = 1;
+        font[30] = 0;
+        font[31] = 1;
+        font[36] = 0; // platform
+        font[37] = 3;
+        font[38] = 0; // encoding
+        font[39] = 1;
+        font[40] = 0xFF;
+        font[41] = 0xFF;
+        font[42] = 0xFF;
+        font[43] = 0xF0;
+
+        var map = SfntCmap.Read(font);
+        Assert.Empty(map);
+    }
+
     private static byte[] FontsFile(string name) =>
         File.ReadAllBytes(IOPath.Combine(AppContext.BaseDirectory, "Samples", "Fonts", name));
 }

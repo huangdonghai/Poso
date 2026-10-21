@@ -22,6 +22,11 @@ internal static class SfntCmap
             return map;
         }
 
+        if (cmap < 0 || cmap > data.Length - 4)
+        {
+            return map;
+        }
+
         int count = TrueTypeOutlines.ReadU16(data, cmap + 2);
         var records = new List<(int Rank, int Offset)>(count);
         for (int i = 0; i < count; i++)
@@ -34,11 +39,17 @@ internal static class SfntCmap
 
             int platform = TrueTypeOutlines.ReadU16(data, record);
             int encoding = TrueTypeOutlines.ReadU16(data, record + 2);
-            int sub = cmap + (int)TrueTypeOutlines.ReadU32(data, record + 4);
-            if (sub + 2 > data.Length)
+
+            // The offset is a uint: a corrupt one near 4G wraps negative when added to the table start,
+            // and a negative "sub + 2" passes a naive upper-bound test. pdf.js bug1050040.pdf has such
+            // a directory, and reading through it took the whole Peach render down.
+            long subOffset = (long)cmap + TrueTypeOutlines.ReadU32(data, record + 4);
+            if (subOffset < cmap || subOffset > data.Length - 2)
             {
                 continue;
             }
+
+            int sub = (int)subOffset;
 
             records.Add((Rank(platform, encoding), sub));
         }
