@@ -106,7 +106,17 @@ public sealed class Type1Program : IType1Program
             body += 6;
         }
 
-        byte[] decrypted = Decrypt(Slice(data, body, data.Length - body), EexecKey, 4);
+        byte[] cipher = Slice(data, body, data.Length - body);
+
+        // A .pfa program keeps the eexec body as ASCIIHex text: pairs of hex digits up to a '>'
+        // terminator, then "cleartomark". pdf.js issue11740_reduced.pdf embeds one verbatim, and
+        // decrypting the hex characters as ciphertext yields garbage that no program follows.
+        if (LooksLikeAsciiHex(cipher))
+        {
+            cipher = DecodeAsciiHex(cipher);
+        }
+
+        byte[] decrypted = Decrypt(cipher, EexecKey, 4);
         if (decrypted.Length == 0)
         {
             return false;
@@ -713,6 +723,84 @@ public sealed class Type1Program : IType1Program
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// True when the eexec body is ASCIIHex text rather than ciphertext: a .pfa program writes the
+    /// encrypted bytes as hex digit pairs. Ciphertext starts with four random IV bytes, which land on
+    /// non-hex characters about 94% of the time, so sampling the leading run is a reliable test.
+    /// </summary>
+    private static bool LooksLikeAsciiHex(byte[] data)
+    {
+        int digits = 0;
+        for (int i = 0; i < data.Length && digits < 64; i++)
+        {
+            byte b = data[i];
+            if (b is (byte)'\r' or (byte)'\n' or (byte)' ' or (byte)'\t')
+            {
+                continue;
+            }
+
+            if (b == (byte)'>')
+            {
+                return digits > 0;
+            }
+
+            if (b is not ((>= (byte)'0' and <= (byte)'9') or (>= (byte)'a' and <= (byte)'f') or (>= (byte)'A' and <= (byte)'F')))
+            {
+                return false;
+            }
+
+            digits++;
+        }
+
+        return digits >= 64;
+    }
+
+    /// <summary>Decodes an ASCIIHex run: hex digit pairs, whitespace skipped, up to a '>' terminator.</summary>
+    private static byte[] DecodeAsciiHex(byte[] data)
+    {
+        var bytes = new List<byte>(data.Length / 2);
+        int high = -1;
+        foreach (byte b in data)
+        {
+            int value = b switch
+            {
+                >= (byte)'0' and <= (byte)'9' => b - '0',
+                >= (byte)'a' and <= (byte)'f' => b - 'a' + 10,
+                >= (byte)'A' and <= (byte)'F' => b - 'A' + 10,
+                (byte)'>' => -2,
+                _ => -1,
+            };
+
+            if (value == -2)
+            {
+                break;
+            }
+
+            if (value < 0)
+            {
+                continue;
+            }
+
+            if (high < 0)
+            {
+                high = value;
+            }
+            else
+            {
+                bytes.Add((byte)((high << 4) | value));
+                high = -1;
+            }
+        }
+
+        // A final odd nibble is zero-padded per the ASCIIHexDecode filter (ISO 32000-1 7.4.2).
+        if (high >= 0)
+        {
+            bytes.Add((byte)(high << 4));
+        }
+
+        return bytes.ToArray();
     }
 
     internal static byte[] Decrypt(byte[] data, int key, int discard)

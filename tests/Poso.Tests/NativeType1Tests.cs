@@ -282,6 +282,27 @@ public class NativeType1Tests
         Assert.Equal(-0.004f, cffProg!.FontMatrix[3], 6);
     }
 
+    /// <summary>
+    /// A .pfa program keeps its eexec body as ASCIIHex text rather than raw ciphertext: pdf.js
+    /// issue11740_reduced.pdf embeds one, and decrypting the hex characters as ciphertext yields
+    /// garbage, so the font was rejected and drew in a substitute. The reader must hex-decode first.
+    /// </summary>
+    [Fact]
+    public void PfaAsciiHexBody_DecryptsToAWorkingProgram()
+    {
+        byte[] program = File.ReadAllBytes(FontsFile("acaura-pfa.bin"));
+        Assert.Equal((byte)'%', program[0]); // the cleartext %!PS header
+
+        Assert.True(Poso.Pdf.Fonts.Type1Program.TryCreate(program, out Poso.Pdf.Fonts.Type1Program? t1) && t1 is not null);
+        // The subset carries a Cyrillic upper case plus a few marks; its built-in encoding names code 83 "O".
+        Assert.True(t1!.Glyphs.Count > 80, $"a Cyrillic text face must carry its glyphs, got {t1.Glyphs.Count}");
+        Assert.Equal("O", t1.BuiltInEncoding?[83]);
+
+        byte[] cff = Poso.Pdf.Fonts.Type1ToCff.Build(t1, "AuraTest");
+        Assert.True(Poso.Pdf.Fonts.CffProgram.TryCreate(cff, out Poso.Pdf.Fonts.CffProgram? cffProg) && cffProg is not null);
+        Assert.True(cffProg!.TryGetGlyphId("O", out _), "the converted program must name its glyphs");
+    }
+
     private static string FontsFile(string name)
     {
         string probe = IOPath.Combine(AppContext.BaseDirectory, "Samples", "Fonts", name);
