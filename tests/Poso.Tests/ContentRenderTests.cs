@@ -911,6 +911,32 @@ public class ContentRenderTests
     }
 
     /// <summary>
+    /// A rectangle with no height encloses no area, so a strict fill leaves it blank - but PDFium
+    /// paints its edges, and pdf.js issue4260_reduced.pdf draws a whole table of grid lines that way.
+    /// The line is one device pixel wide and sits on the pixel the contour falls in.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Render_DegenerateRectangle_PaintsItsEdges(bool peach)
+    {
+        IGraphicsFactory factory = peach ? PeachGraphicsFactory.Default : Factory;
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateDegenerateRectPdf());
+        using IGraphicsContext context = factory.CreateContext(300, 200);
+        document.Pages[0].Render(factory, context, new PdfRenderOptions(1f, 0f, PosoColor.White));
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+
+        // The horizontal line runs along PDF y = 100, which is device row 100 on a 200-tall page.
+        (byte hb, byte hg, byte hr, _) = PixelAt(pixels, image.Width, 100, 100);
+        Assert.True(hr < 120 && hg < 120 && hb < 120, $"the horizontal line must paint at (100, 100), got r={hr} g={hg} b={hb}");
+
+        // The vertical one is blue, along PDF x = 10, from y = 20 to 220.
+        (byte vb, byte vg, byte vr, _) = PixelAt(pixels, image.Width, 100, 10);
+        Assert.True(vb > 120 && vr < 120 && vg < 120, $"the vertical line must paint at (10, 100), got r={vr} g={vg} b={vb}");
+    }
+
+    /// <summary>
     /// pdf.js issue4379.pdf masks a 1000x800 indexed image with a CCITT-compressed stencil. The mask
     /// reached the decoder as raw compressed bytes because only DCT/JPX masks were routed through the
     /// image pipeline, so the page painted a band of noise instead of the text.

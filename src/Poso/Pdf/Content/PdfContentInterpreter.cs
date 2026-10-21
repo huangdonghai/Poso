@@ -2140,6 +2140,232 @@ public sealed class PdfContentInterpreter
         _currentY = _startY;
     }
 
+    /// <summary>
+    /// Fills a path, painting its degenerate sub-paths as lines. A rectangle with no height (or no
+    /// width) encloses no area, so a strict fill leaves it blank - but PDFium draws its edges, and
+    /// pdf.js issue4260_reduced.pdf builds a whole table that way: every row is a zero-height
+    /// rectangle. A degenerate sub-path only counts when it stands alone in the path: mixed with a
+    /// sub-path that does enclose area, PDFium fills nothing at all (the winding of the degenerate
+    /// contour cancels the other one).
+    /// </summary>
+    private void FillWithDegenerateSubpaths(IPath path, PosoColor color, bool evenOdd)
+    {
+        List<(IPath Sub, bool Degenerate)> parts = SplitSubpaths(path);
+        bool anySolid = false;
+        bool anyDegenerate = false;
+        foreach ((IPath sub, bool degenerate) in parts)
+        {
+            if (degenerate)
+            {
+                anyDegenerate = true;
+            }
+            else
+            {
+                anySolid = true;
+            }
+        }
+
+        if (anySolid)
+        {
+            // PDFium's fill of a path that mixes a degenerate contour with a real one is empty.
+            if (anyDegenerate)
+            {
+                return;
+            }
+
+            _context.FillPath(path, color, evenOdd);
+            return;
+        }
+
+        if (parts.Count == 0)
+        {
+            _context.FillPath(path, color, evenOdd);
+        }
+
+        // The line PDFium draws is one device pixel wide, whatever the user-space scale is, so the
+        // degenerate contour becomes a thin filled box of that size rather than a stroked path (a
+        // stroke thinner than a pixel is anti-aliased into a pale line, which is not what PDFium paints).
+        foreach ((IPath sub, bool degenerate) in parts)
+        {
+            if (!degenerate)
+            {
+                continue;
+            }
+
+            // A zero-width contour is a vertical line, a zero-height one a horizontal line; the other
+            // extent of the line is the contour's own length.
+            RectF box = sub.Bounds;
+            bool vertical = box.Width <= 0f;
+            float along = vertical ? box.Height : box.Width;
+
+            // PDFium paints the line one device pixel wide, centred on the pixel the contour falls in.
+            // Placing it by the transformed position (rather than by the user-space coordinates) puts
+            // it on the pixel centre, so the line is solid black instead of an anti-aliased grey.
+            Vector2 start = Vector2.Transform(new Vector2(box.X, box.Y), _state.Ctm);
+            Vector2 end = vertical
+                ? Vector2.Transform(new Vector2(box.X, box.Y + box.Height), _state.Ctm)
+                : Vector2.Transform(new Vector2(box.X + box.Width, box.Y), _state.Ctm);
+
+            // The line runs between the two ends; a vertical contour's far end is below its start in
+            // user space but above it on the device, so the extent is taken from the two ends.
+
+            // The line is one device pixel wide, centred on the pixel the contour falls in. It is
+            // built in device space and mapped back into user space, so it lands on the pixel centre
+            // instead of straddling two of them.
+            // The line is one device pixel wide and lies along the contour. It is built in device
+            // space, on the pixel the contour falls in, and mapped back into user space: drawn in user
+            // space it would straddle two pixels and come out half grey.
+            if (!Matrix3x2.Invert(_state.Ctm, out Matrix3x2 deviceToUser))
+            {
+                continue;
+            }
+
+            float x0 = MathF.Floor(MathF.Min(start.X, end.X));
+            float x1 = MathF.Floor(MathF.Max(start.X, end.X));
+            float y0 = MathF.Floor(MathF.Min(start.Y, end.Y));
+            float y1 = MathF.Floor(MathF.Max(start.Y, end.Y));
+
+            var line = new PathBuilder();
+            if (vertical)
+            {
+                Vector2 a = Vector2.Transform(new Vector2(x0, y0), deviceToUser);
+                Vector2 b = Vector2.Transform(new Vector2(x0 + 1f, y0), deviceToUser);
+                Vector2 c = Vector2.Transform(new Vector2(x0 + 1f, y1), deviceToUser);
+                Vector2 e = Vector2.Transform(new Vector2(x0, y1), deviceToUser);
+                line.MoveTo(a.X, a.Y);
+                line.LineTo(b.X, b.Y);
+                line.LineTo(c.X, c.Y);
+                line.LineTo(e.X, e.Y);
+            }
+            else
+            {
+                Vector2 a = Vector2.Transform(new Vector2(x0, y0), deviceToUser);
+                Vector2 b = Vector2.Transform(new Vector2(x1, y0), deviceToUser);
+                Vector2 c = Vector2.Transform(new Vector2(x1, y0 + 1f), deviceToUser);
+                Vector2 e = Vector2.Transform(new Vector2(x0, y0 + 1f), deviceToUser);
+                line.MoveTo(a.X, a.Y);
+                line.LineTo(b.X, b.Y);
+                line.LineTo(c.X, c.Y);
+                line.LineTo(e.X, e.Y);
+            }
+
+            line.Close();
+            _context.FillPath(line.Build(), color, false);
+        }
+    }
+
+    /// <summary>The height of one device pixel in user space, at the current transform.</summary>
+    private float DevicePixelHeight()
+    {
+        float scale = MathF.Sqrt(MathF.Abs(_state.Ctm.M11 * _state.Ctm.M22) - (_state.Ctm.M12 * _state.Ctm.M21));
+        if (scale <= 1e-6f || float.IsNaN(scale))
+        {
+            scale = 1f;
+        }
+
+        return 1f / scale;
+    }
+
+    /// <summary>
+    /// Splits a path into its sub-paths and reports which of them enclose no area. A sub-path is
+    /// degenerate when its points are collinear (a zero-height rectangle, a straight line) - that is
+    /// what a rasteriser cannot fill.
+    /// </summary>
+    private static List<(IPath Sub, bool Degenerate)> SplitSubpaths(IPath path)
+    {
+        var result = new List<(IPath, bool)>();
+        var builder = new PathBuilder();
+        float minX = float.MaxValue, minY = float.MaxValue, maxX = float.MinValue, maxY = float.MinValue;
+        bool started = false;
+        float startX = 0f, startY = 0f;
+
+        void Flush()
+        {
+            if (!started)
+            {
+                return;
+            }
+
+            IPath sub = builder.Build();
+            float width = maxX - minX;
+            float height = maxY - minY;
+
+            // Only a contour made of straight lines can be a degenerate rectangle or line. A curve
+            // whose points happen to be collinear is still a curve, and PDFium does not draw it as a
+            // line (pdf.js issue11279.pdf's form ends in such a curve).
+            bool straight = true;
+            for (int i = 0; i < sub.SegmentCount; i++)
+            {
+                if (sub.GetSegment(i).Type == PathSegmentType.CubicTo)
+                {
+                    straight = false;
+                    break;
+                }
+            }
+
+            result.Add((sub, straight && (width <= 0f || height <= 0f)));
+            builder = new PathBuilder();
+            started = false;
+            minX = float.MaxValue; minY = float.MaxValue; maxX = float.MinValue; maxY = float.MinValue;
+        }
+
+        for (int i = 0; i < path.SegmentCount; i++)
+        {
+            PathSegment segment = path.GetSegment(i);
+            switch (segment.Type)
+            {
+                case PathSegmentType.MoveTo:
+                    Flush();
+                    builder.MoveTo(segment.X1, segment.Y1);
+                    startX = segment.X1; startY = segment.Y1;
+                    minX = maxX = segment.X1; minY = maxY = segment.Y1;
+                    started = true;
+                    break;
+
+                case PathSegmentType.LineTo:
+                    if (!started)
+                    {
+                        break;
+                    }
+
+                    builder.LineTo(segment.X1, segment.Y1);
+                    minX = Math.Min(minX, segment.X1); maxX = Math.Max(maxX, segment.X1);
+                    minY = Math.Min(minY, segment.Y1); maxY = Math.Max(maxY, segment.Y1);
+                    break;
+
+                case PathSegmentType.CubicTo:
+                    if (!started)
+                    {
+                        break;
+                    }
+
+                    builder.CubicTo(segment.X1, segment.Y1, segment.X2, segment.Y2, segment.X3, segment.Y3);
+                    minX = Math.Min(minX, Math.Min(segment.X1, segment.X3)); maxX = Math.Max(maxX, Math.Max(segment.X1, segment.X3));
+                    minY = Math.Min(minY, Math.Min(segment.Y1, segment.Y3)); maxY = Math.Max(maxY, Math.Max(segment.Y1, segment.Y3));
+                    break;
+
+                case PathSegmentType.Close:
+                    if (!started)
+                    {
+                        break;
+                    }
+
+                    builder.Close();
+
+                    // The closing segment returns to the sub-path's start, which the bounds have to
+                    // include: a degenerate rectangle's width is the distance between its start and
+                    // its last corner.
+                    minX = Math.Min(minX, startX); maxX = Math.Max(maxX, startX);
+                    minY = Math.Min(minY, startY); maxY = Math.Max(maxY, startY);
+                    break;
+            }
+        }
+
+        Flush();
+        _ = startX; _ = startY;
+        return result;
+    }
+
     private void PaintPath(bool fill, bool stroke, bool evenOdd)
     {
         ApplyPendingClip();
@@ -2164,7 +2390,7 @@ public sealed class PdfContentInterpreter
                     }
                     else
                     {
-                        _context.FillPath(path, FillPaintColor(), evenOdd);
+                        FillWithDegenerateSubpaths(path, FillPaintColor(), evenOdd);
                     }
                 }
 

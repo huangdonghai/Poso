@@ -677,6 +677,22 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// A page whose only content is a zero-height rectangle filled black, and another with a
+    /// zero-width one: pdf.js issue4260_reduced.pdf builds a whole table of grid lines that way.
+    /// PDFium paints them as one-pixel lines, a strict fill would leave the page blank.
+    /// </summary>
+    public static byte[] CreateDegenerateRectPdf()
+    {
+        const string content = "q 0 0 0 rg 10 100 200 0 re f 0 0 1 rg 10 20 0 200 re f Q";
+
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)));
+    }
+
+    /// <summary>
     /// A page whose /Resources carries no /Font at all while its content names one: pdf.js
     /// issue5954.pdf's page has only an empty /XObject entry. PDFium paints the run in a stock face
     /// rather than dropping it, so the page must not come out blank.
