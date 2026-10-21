@@ -827,6 +827,26 @@ public class ContentRenderTests
     }
 
     /// <summary>
+    /// A zero-padded glyph name is a character code, not a glyph index: pdf.js bug1027533.pdf names its
+    /// glyphs /g0024 and /g003a, and reading the number as an id picked the wrong glyphs. The code-keyed
+    /// cmap is the fallback that stays right (code 1 -> glyph 53, code 2 -> glyph 82).
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Font_ZeroPaddedGlyphName_IsNotReadAsAGlyphIndex(bool peach)
+    {
+        IGraphicsFactory factory = peach ? PeachGraphicsFactory.Default : Factory;
+        byte[] pdf = PdfFixtures.CreatePaddedGlyphNamePdf(FontsFile("code-keyed-truetype.bin"));
+        using PdfDocument document = PdfDocument.FromArray(pdf);
+        var font = Poso.Pdf.Fonts.PdfFont.Create(
+            document, factory, (Poso.Pdf.Objects.PdfDictionary)document.GetObject(4)!);
+
+        Assert.Equal(53, font.GetGlyphId(1));
+        Assert.Equal(82, font.GetGlyphId(2));
+    }
+
+    /// <summary>
     /// pdf.js issue4379.pdf masks a 1000x800 indexed image with a CCITT-compressed stencil. The mask
     /// reached the decoder as raw compressed bytes because only DCT/JPX masks were routed through the
     /// image pipeline, so the page painted a band of noise instead of the text.

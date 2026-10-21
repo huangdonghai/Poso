@@ -173,6 +173,13 @@ public sealed class SimplePdfFont : PdfFont
             return false;
         }
 
+        // A leading zero means the number is a zero-padded code (bug1027533.pdf names glyphs g0024,
+        // g003a - hexadecimal character codes), not the plain glyph index issue13316_reduced.pdf uses.
+        if (name.Length > 2 && name[1] == '0')
+        {
+            return false;
+        }
+
         int value = 0;
         for (int i = 1; i < name.Length; i++)
         {
