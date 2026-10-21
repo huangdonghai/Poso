@@ -1,5 +1,6 @@
 using System.Numerics;
 using Poso.Geometry;
+using System.Text;
 using Poso.Graphics;
 using Poso.Pdf.Colors;
 using Poso.Pdf.Fonts;
@@ -371,6 +372,21 @@ public sealed class PdfContentInterpreter
                 continue;
             }
 
+            if (subtype == "Ink")
+            {
+                RenderInkFallback(annot, rect, opacity);
+                continue;
+            }
+
+            // A FreeText annotation without /AP is still expected to show its text: the /DA names the
+            // font, size and colour, /Contents is the string (ISO 32000-1 12.5.6.4). pdf.js
+            // bug1865341.pdf relies on it.
+            if (subtype == "FreeText")
+            {
+                RenderFreeTextFallback(annot, rect, opacity);
+                continue;
+            }
+
             if (Array.IndexOf(MarkupSubtypes, subtype) < 0)
             {
                 continue;
@@ -587,6 +603,172 @@ public sealed class PdfContentInterpreter
             _document.GetArrayNumber(array, 2)?.AsFloat() ?? 0f,
             _document.GetArrayNumber(array, 3)?.AsFloat() ?? 0f);
     }
+
+    /// <summary>
+    /// Ink annotations carry their geometry in /InkList (one array of alternating x/y per stroke) and
+    /// have no required appearance stream; the strokes are drawn in /C with the /BS width.
+    /// </summary>
+    private void RenderInkFallback(PdfDictionary annot, RectF rect, float opacity)
+    {
+        if (_document.Resolve(annot.Get("InkList")) is not PdfArray strokes)
+        {
+            return;
+        }
+
+        float width = 1f;
+        if (_document.Resolve(annot.Get("BS")) is PdfDictionary style && style.GetNumberValue("W") is double w)
+        {
+            width = (float)w;
+        }
+        else if (annot.GetArray("Border") is { Count: >= 3 } border)
+        {
+            width = border.GetNumber(2)?.AsFloat() ?? 1f;
+        }
+
+        if (width <= 0f)
+        {
+            width = 1f;
+        }
+
+        byte alpha = (byte)Math.Clamp((int)MathF.Round(opacity * 255f), 0, 255);
+        PosoColor paint = ParseColor(annot.Get("C"), PosoColor.Black).WithAlpha(alpha);
+        var stroke = new StrokeStyle(width, LineCap.Round, LineJoin.Round);
+
+        _context.SetMatrix(_pageBaseMatrix);
+        foreach (PdfObject item in strokes)
+        {
+            if (_document.Resolve(item) is not PdfArray points || points.Count < 4)
+            {
+                continue;
+            }
+
+            var path = new PathBuilder();
+            path.MoveTo(AnnotationNumber(points, 0), AnnotationNumber(points, 1));
+            for (int i = 2; i + 1 < points.Count; i += 2)
+            {
+                path.LineTo(AnnotationNumber(points, i), AnnotationNumber(points, i + 1));
+            }
+
+            _context.StrokePath(path.Build(), stroke, paint);
+        }
+    }
+
+    /// <summary>
+    /// FreeText without an appearance: build the text run from /DA (font name, size and colour
+    /// operators) and /Contents, clipped to the annotation rectangle, with the box border PDFium draws.
+    /// Characters the default font cannot encode are dropped, which is what PDFium does with the
+    /// Polish letters in pdf.js bug1865341.pdf ("Załącznik" renders as "Zacznik").
+    /// </summary>
+    private void RenderFreeTextFallback(PdfDictionary annot, RectF rect, float opacity)
+    {
+        string appearance = (_document.Resolve(annot.Get("DA")) as PdfString)?.AsTextString() ?? "/Helv 10 Tf 0 g";
+        string text = DecodeAnnotationText(_document.Resolve(annot.Get("Contents")) as PdfString);
+
+        string fontName = "Helv";
+        float fontSize = 10f;
+        string colorOperators = "0 g";
+        string[] tokens = appearance.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        for (int i = 0; i < tokens.Length; i++)
+        {
+            if (tokens[i] != "Tf" || i < 2)
+            {
+                continue;
+            }
+
+            fontName = tokens[i - 2].TrimStart('/');
+            float.TryParse(tokens[i - 1], System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out fontSize);
+            colorOperators = string.Join(' ', tokens[(i + 1)..]);
+            break;
+        }
+
+        if (fontSize <= 0f)
+        {
+            fontSize = 10f;
+        }
+
+        var builder = new StringBuilder();
+        builder.Append("q\n");
+        builder.Append(Format(rect.X)).Append(' ').Append(Format(rect.Y)).Append(' ')
+            .Append(Format(rect.Width)).Append(' ').Append(Format(rect.Height)).Append(" re W n\n");
+        builder.Append("BT\n/").Append(fontName).Append(' ').Append(Format(fontSize)).Append(" Tf\n");
+        builder.Append(colorOperators).Append('\n');
+        float baseline = rect.Y + rect.Height - (fontSize * 1.35f);
+        builder.Append("1 0 0 1 ").Append(Format(rect.X + 1f)).Append(' ').Append(Format(baseline)).Append(" Tm\n");
+        builder.Append('(');
+        foreach (char c in text)
+        {
+            if (c < 0x20 || c > 0x7E)
+            {
+                continue; // the default font encodes none of these
+            }
+
+            if (c is '(' or ')' or '\\')
+            {
+                builder.Append('\\');
+            }
+
+            builder.Append(c);
+        }
+
+        builder.Append(") Tj\nET\n");
+        builder.Append("0 G 1 w ").Append(Format(rect.X)).Append(' ').Append(Format(rect.Y)).Append(' ')
+            .Append(Format(rect.Width)).Append(' ')
+            .Append(Format(rect.Height)).Append(" re S\nQ\n");
+
+        var resources = new PdfDictionary();
+        var fonts = new PdfDictionary();
+        var font = new PdfDictionary();
+        font["Type"] = new PdfName("Font");
+        font["Subtype"] = new PdfName("Type1");
+        font["BaseFont"] = new PdfName(fontName);
+        fonts[fontName] = font;
+        resources["Font"] = fonts;
+
+        _context.Save();
+        _stateStack.Push(_state.Clone());
+        try
+        {
+            _state.Ctm = _pageBaseMatrix;
+            _streamEntryMatrix = _pageBaseMatrix;
+            _context.SetMatrix(_pageBaseMatrix);
+            ExecuteContent(Encoding.ASCII.GetBytes(builder.ToString()), resources);
+        }
+        finally
+        {
+            BalanceCanvasSaves(_context.SaveDepth);
+            _state = _stateStack.Pop();
+            _context.Restore();
+        }
+    }
+
+    private float AnnotationNumber(PdfArray array, int index) =>
+        _document.GetArrayNumber(array, index)?.AsFloat() ?? 0f;
+
+    /// <summary>A /Contents string: UTF-16 when the BOM says so, PDFDocEncoding/Latin-1 otherwise.</summary>
+    private static string DecodeAnnotationText(PdfString? text)
+    {
+        if (text is null)
+        {
+            return string.Empty;
+        }
+
+        ReadOnlySpan<byte> bytes = text.Value;
+        if (bytes.Length >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF)
+        {
+            return Encoding.BigEndianUnicode.GetString(bytes[2..].ToArray());
+        }
+
+        if (bytes.Length >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE)
+        {
+            return Encoding.Unicode.GetString(bytes[2..].ToArray());
+        }
+
+        return Encoding.Latin1.GetString(bytes.ToArray());
+    }
+
+    private static string Format(float value) =>
+        value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
 
     private static List<RectF> ParseQuadPoints(PdfArray? array)
     {

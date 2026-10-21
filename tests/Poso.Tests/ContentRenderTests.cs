@@ -806,6 +806,70 @@ public class ContentRenderTests
     }
 
     /// <summary>
+    /// pdf.js annotation-ink-without-appearance.pdf carries only /InkList geometry: strokes drawn in /C
+    /// with the /BS width. An Ink annotation was not in the markup set, so the strokes were dropped.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Render_InkAnnotationWithoutAppearance_StrokesItsInkList(bool peach)
+    {
+        IGraphicsFactory factory = peach ? PeachGraphicsFactory.Default : Factory;
+        using PdfDocument document = PdfDocument.FromArray(File.ReadAllBytes(PdfSample("ink-without-appearance.pdf")));
+        using IGraphicsContext context = factory.CreateContext(1224, 1584);
+        document.Pages[0].Render(factory, context, new PdfRenderOptions(2f, 0f, PosoColor.White));
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+
+        int ink = 0;
+        for (int i = 0; i < pixels.Length; i += 4)
+        {
+            if (pixels[i] < 200)
+            {
+                ink++;
+            }
+        }
+
+        // The six freehand strokes cover about 0.47% of the page.
+        Assert.True(ink > 4000, $"the ink strokes must paint, got {ink} dark pixels");
+    }
+
+    /// <summary>
+    /// pdf.js bug1865341.pdf's FreeText annotation has /DA (/Helv 10 Tf 0 g) and a UTF-16 /Contents but
+    /// no /AP. The appearance has to be built from those: a border box and the text inside it (PDFium
+    /// renders "Załącznik" as "Zacznik" because its default font cannot encode the Polish letters).
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Render_FreeTextWithoutAppearance_DrawsItsTextInsideTheBox(bool peach)
+    {
+        IGraphicsFactory factory = peach ? PeachGraphicsFactory.Default : Factory;
+        using PdfDocument document = PdfDocument.FromArray(File.ReadAllBytes(PdfSample("freetext-without-appearance.pdf")));
+        using IGraphicsContext context = factory.CreateContext(459, 198);
+        document.Pages[0].Render(factory, context, new PdfRenderOptions(2f, 0f, PosoColor.White));
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+
+        // The text band inside the box (device rows 33..60, columns 25..122) must carry the glyphs, not
+        // just the border.
+        int textInk = 0;
+        for (int y = 33; y < 60; y++)
+        {
+            for (int x = 25; x < 122; x++)
+            {
+                int o = ((y * image.Width) + x) * 4;
+                if (pixels[o] < 200)
+                {
+                    textInk++;
+                }
+            }
+        }
+
+        Assert.True(textInk > 150, $"the FreeText string must paint inside its box, got {textInk} dark pixels");
+    }
+
+    /// <summary>
     /// pdf.js issue13316_reduced.pdf's font names its glyphs /g5167 and friends. The Adobe Glyph List
     /// cannot resolve those, and a stripped subset has no post table; PDFium reads the number as the
     /// glyph index, and so does Poso now - before, the codes fell through to their own values and the
