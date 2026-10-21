@@ -145,6 +145,41 @@ public class OutlineFallbackTests
         Assert.True(dark > 400, "a run with an unresolvable glyph still paints what it can");
     }
 
+    /// <summary>
+    /// The TrueType side of the outline reader, on a real PDF subset: pdf.js bug1200096.pdf's Times
+    /// program, which PeachDrawing rejects. The loca/glyf walk must yield plausible on-baseline outlines
+    /// and, crucially, a different one per glyph - a flag or delta misread collapses several glyphs onto
+    /// the same shape or onto nothing.
+    /// </summary>
+    [Fact]
+    public void TrueType_OutlineReaderRecoversEmbeddedLetterforms()
+    {
+        byte[] program = FontsFile("bug1200096-times-subset.bin");
+        Assert.True(TrueTypeOutlines.TryCreate(program, out OutlineSource? outlines) && outlines is not null);
+        Assert.True(outlines!.GlyphCount > 50, $"a Times subset carries its drawn glyphs, got {outlines.GlyphCount}");
+
+        var seen = new HashSet<string>();
+        int drawn = 0;
+        for (int gid = 30; gid < 45; gid++)
+        {
+            var builder = new PathBuilder();
+            if (!outlines.TryGetOutline(gid, builder))
+            {
+                continue; // an empty glyph (a space) legitimately has no outline
+            }
+
+            RectF b = builder.Build().Bounds;
+            Assert.True(b.Width > 0.05f && b.Width < 1.5f, $"glyph {gid} width {b.Width} is not a plausible letterform");
+            Assert.True(b.Height > 0.05f && b.Height < 1.5f, $"glyph {gid} height {b.Height} is not a plausible letterform");
+            Assert.True(b.Top >= -0.4f && b.Top <= 0.4f, $"glyph {gid} sits near the baseline, got top {b.Top}");
+            seen.Add($"{b.Left:F3},{b.Bottom:F3},{b.Right:F3},{b.Top:F3}");
+            drawn++;
+        }
+
+        Assert.True(drawn >= 10, $"most glyphs of a Times subset carry outlines, got {drawn} of 15");
+        Assert.True(seen.Count >= 10, $"distinct glyphs must give distinct bounds, got {seen.Count} of {drawn}");
+    }
+
     private static byte[] FontsFile(string name) =>
         File.ReadAllBytes(IOPath.Combine(AppContext.BaseDirectory, "Samples", "Fonts", name));
 }
