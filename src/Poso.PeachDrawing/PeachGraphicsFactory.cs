@@ -129,6 +129,14 @@ public sealed class PeachGraphicsFactory : IGraphicsFactory
     /// <summary>The Peach stack decodes Adobe CMYK/YCCK JPEGs itself (see <see cref="DecodeAdobeCmykJpeg"/>).</summary>
     bool IGraphicsFactory.HandlesAdobeCmykJpeg => true;
 
+    /// <summary>
+    /// PeachContext.DrawImage blits through the current CTM, so an image can be placed on a sheared or
+    /// rotated rectangle. A tiling pattern with a non-orthogonal /Matrix needs that: pdf.js issue2177.pdf
+    /// uses [1.4 1 -.5 .7 0 0], and without the flag its cells were flattened to axis-aligned rectangles
+    /// and the pattern came out as scattered specks (19.76% of the page against Skia's 8.93%).
+    /// </summary>
+    bool IGraphicsFactory.SupportsTransformedImagePlacement => true;
+
     public IFont? CreateFont(ReadOnlySpan<byte> fontData, string baseFontName) =>
         PeachFont.Create(fontData, baseFontName);
 
