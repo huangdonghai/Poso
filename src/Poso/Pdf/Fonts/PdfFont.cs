@@ -133,6 +133,95 @@ public abstract class PdfFont
 
     private byte[]? _embeddedFontData;
 
+    /// <summary>
+    /// The embedded program exactly as the PDF stores it, before it is converted or wrapped for a back
+    /// end. Outlines are read from these bytes: a bare CFF arrives here as itself, whereas
+    /// <see cref="EmbeddedFontData"/> hands out a synthetic OpenType container built to make a back end
+    /// load it, and no outline reader addresses that.
+    /// </summary>
+    private byte[]? _rawProgram;
+
+    /// <summary>
+    /// A reader for this font's embedded program's own glyph outlines, or null when the program is one
+    /// Poso cannot read. Used only when the back end could not load the program: a substitute face draws
+    /// different letterforms, and the PDF's own outlines are what the page actually asks for.
+    /// </summary>
+    internal OutlineSource? Outlines => _outlines ??= LoadOutlines();
+
+    private OutlineSource? _outlines;
+    private bool _outlinesLoaded;
+
+    private OutlineSource? LoadOutlines()
+    {
+        if (_outlinesLoaded)
+        {
+            return _outlines;
+        }
+
+        _outlinesLoaded = true;
+
+        // Touching EmbeddedFontData fills _rawProgram as a side effect; it is the unconverted bytes that
+        // the outline readers understand.
+        _ = EmbeddedFontData;
+        if (_rawProgram is not { Length: > 4 } data)
+        {
+            return null;
+        }
+
+        // A real sfnt container's outlines live in its glyf table; a degenerate 'OTTO' that carries only
+        // a CFF and a cmap (no head) is unwrapped to the CFF inside it, which is what TryExtractCff does.
+        if (TrueTypeOutlines.TryCreate(data, out OutlineSource? truetype))
+        {
+            _outlines = truetype;
+            return _outlines;
+        }
+
+        byte[] cff = data;
+        if (CffOpenType.TryExtractCff(data, out byte[]? inner) && inner is not null)
+        {
+            cff = inner;
+        }
+        else if (data.Length > 12 && data[0] == 0x4F && data[1] == 0x54 && data[2] == 0x54 && data[3] == 0x4F &&
+                 EmbeddedCffTable(data) is { } tableCff)
+        {
+            // A finished OTTO container: the outlines live in its CFF table.
+            cff = tableCff;
+        }
+
+        if (CffOutlines.TryCreate(cff, out OutlineSource? cffOutlines))
+        {
+            _outlines = cffOutlines;
+            return _outlines;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Appends one glyph's outline to <paramref name="path"/>, in em units with y up and the origin on
+    /// the baseline. Resolution follows the same path an ordinary code-to-glyph lookup takes, so the
+    /// outline that comes out belongs to the character the PDF asked for rather than to a substitute.
+    /// Returns false when the program cannot supply it.
+    /// </summary>
+    public virtual bool TryGetGlyphOutline(int code, IPathBuilder path)
+    {
+        if (Outlines is not { } outlines)
+        {
+            return false;
+        }
+
+        return outlines.TryGetOutline(ResolveOutlineGlyph(outlines, code), path);
+    }
+
+    /// <summary>The glyph id to read out of the embedded program for a code, in the program's own order.</summary>
+    internal virtual int ResolveOutlineGlyph(OutlineSource outlines, int code) => code;
+
+    /// <summary>
+    /// True when this font's glyphs should be painted from the embedded program rather than handed to the
+    /// back end: the back end could not load the program it was given, so it is drawing a substitute.
+    /// </summary>
+    public bool NeedsOutlineFallback => GraphicsFont is { UsedFallback: true } && Outlines is not null;
+
     protected virtual IFont? CreateGraphicsFont()
     {
         if (Factory is null)
@@ -163,6 +252,10 @@ public abstract class PdfFont
         {
             return null;
         }
+
+        // Keep the bytes as the PDF stores them: the outline readers below need the program the document
+        // actually embedded, not the container built for a back end further down.
+        _rawProgram = data;
 
         if (CffOpenType.TryExtractCff(data, out byte[]? wrappedCff) && wrappedCff is not null)
         {
@@ -217,6 +310,8 @@ public abstract class PdfFont
                 if (CffProgram.TryCreate(cff, out CffProgram? program) && program is not null)
                 {
                     EmbeddedGlyphNames = program;
+                    // The converted Type 2 charstrings are the only outline form this program has.
+                    _rawProgram = cff;
                     return BuildCffContainer(cff, program);
                 }
             }
@@ -228,6 +323,7 @@ public abstract class PdfFont
                 if (CffProgram.TryCreate(cff, out CffProgram? program) && program is not null)
                 {
                     EmbeddedGlyphNames = program;
+                    _rawProgram = cff;
                     return BuildCffContainer(cff, program);
                 }
             }

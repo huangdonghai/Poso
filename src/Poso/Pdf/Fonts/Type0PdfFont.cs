@@ -207,6 +207,40 @@ public sealed class Type0PdfFont : PdfFont
     public override float GetWidthEm(int code) =>
         _cidWidthEm.TryGetValue(code, out float width) ? width : _defaultWidthEm;
 
+    /// <summary>
+    /// A CID addresses a glyph of the descendant program, which numbers its glyphs in its own order:
+    /// CIDFontType2 through the /CIDToGIDMap, CIDFontType0 through the charset of its CID-keyed CFF.
+    /// Without that step the outline of the wrong glyph would be painted at the right position.
+    /// </summary>
+    internal override int ResolveOutlineGlyph(OutlineSource outlines, int code)
+    {
+        if (_cidToGid is { } map && code >= 0 && code < map.Length)
+        {
+            return map[code];
+        }
+
+        if (_descendantFont?.GetNameValue("Subtype") == "CIDFontType0")
+        {
+            _ = EmbeddedFontData;
+            if (EmbeddedCidToGid is { } cidMap && cidMap.TryGetValue(code, out ushort gid))
+            {
+                return gid;
+            }
+
+            // A name-keyed program used as a CID font: bridge code to glyph through its Unicode value
+            // and the program's own charset, the same route GetGlyphId takes for the back end. The glyph
+            // ids agree because both readers walk the same charset.
+            if (TryGetGlyphIdByName(code, out ushort named))
+            {
+                return named;
+            }
+
+            return _toUnicode is null ? code : -1;
+        }
+
+        return code;
+    }
+
     public override uint GetUnicode(int code) => _toUnicode?.GetFirstUnit(code) ?? 0;
 
     /// <summary>Gets all Unicode code units for a code (used by text extraction).</summary>

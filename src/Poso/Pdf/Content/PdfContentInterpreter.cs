@@ -1511,6 +1511,12 @@ public sealed class PdfContentInterpreter
         Span<GlyphPosition> glyphs = codes.Count <= 512
             ? stackalloc GlyphPosition[codes.Count]
             : new GlyphPosition[codes.Count];
+        // The code each recorded glyph came from. The outline fallback reads the embedded program by
+        // code, while positions are only recorded for glyphs that survived , so the two lists have to be
+        // kept in step here rather than zipped up later.
+        Span<int> glyphCodes = codes.Count <= 512
+            ? stackalloc int[codes.Count]
+            : new int[codes.Count];
         int glyphCount = 0;
         float tx = 0f;
         // Glyph positions and the text sink are expressed in text space (em units): they are
@@ -1552,6 +1558,7 @@ public sealed class PdfContentInterpreter
                     // MuPDF's vertical position vector v = (h.w/2, DW2y): the glyph is shifted left by
                     // half its horizontal advance to centre it on the vertical baseline (v.x), and the
                     // baseline is dropped one VY so the em-cell top sits at the pen.
+                    glyphCodes[glyphCount] = code;
                     glyphs[glyphCount++] = font.IsVertical
                         ? new GlyphPosition(glyphId, -widthEm * 0.5f, -penEm - font.VerticalOriginEm)
                         : new GlyphPosition(glyphId, penEm, 0f);
@@ -1609,10 +1616,22 @@ public sealed class PdfContentInterpreter
                 };
             }
 
+            // Built before the clip so the clip and the fill share one outline.
+            IPath? fallbackOutlines = BuildOutlineRun(font, glyphCodes.Slice(0, glyphCount), glyphs.Slice(0, glyphCount));
+
             if (_state.RenderMode is TextRenderMode.FillClip or TextRenderMode.StrokeClip
                 or TextRenderMode.FillStrokeClip or TextRenderMode.Clip)
             {
-                _context.AddTextClipRun(graphicsFont, glyphs.Slice(0, glyphCount), drawMatrix);
+                // When the run is painted from the embedded program's own outlines, the clip has to
+                // follow the same shapes: asking the back end for them would clip to the substitute face.
+                if (fallbackOutlines is not null)
+                {
+                    _context.AddTextClipPath(fallbackOutlines, drawMatrix);
+                }
+                else
+                {
+                    _context.AddTextClipRun(graphicsFont, glyphs.Slice(0, glyphCount), drawMatrix);
+                }
             }
 
             // The mask covers the painted glyphs, not the clip the same text object leaves behind: a clip
@@ -1620,7 +1639,17 @@ public sealed class PdfContentInterpreter
             bool masked = BeginMaskedElement();
             try
             {
-                _context.DrawGlyphs(graphicsFont, fontSize, glyphs.Slice(0, glyphCount), FillPaintColor(), StrokePaintColor(), _state.RenderMode, textStroke);
+                // A font whose program the back end could not load is being drawn in a substitute face.
+                // Painting the program's own outlines instead keeps the letterforms the PDF asked for;
+                // the pen positions are already in the glyph list, so this stays an ordinary path fill.
+                if (fallbackOutlines is not null)
+                {
+                    PaintOutlineRun(fallbackOutlines, textStroke);
+                }
+                else
+                {
+                    _context.DrawGlyphs(graphicsFont, fontSize, glyphs.Slice(0, glyphCount), FillPaintColor(), StrokePaintColor(), _state.RenderMode, textStroke);
+                }
             }
             finally
             {
@@ -1642,6 +1671,96 @@ public sealed class PdfContentInterpreter
             _textMatrix = (font.IsVertical
                 ? Matrix3x2.CreateTranslation(0f, -tx)
                 : Matrix3x2.CreateTranslation(tx, 0f)) * _textMatrix;
+        }
+    }
+
+    /// <summary>
+    /// Builds one path holding every glyph of a run, in text space (em units, glyphs already moved to
+    /// their pen positions), or null when the run should be drawn the ordinary way.
+    ///
+    /// Only a font the back end could not load takes this route: the face it is drawing with is a
+    /// substitute, so the letterforms on the page are not the ones the PDF carries. Painting the
+    /// program's own outlines - an ordinary path fill at each glyph's own pen position - puts them back.
+    /// </summary>
+    private IPath? BuildOutlineRun(PdfFont font, ReadOnlySpan<int> codes, ReadOnlySpan<GlyphPosition> glyphs)
+    {
+        if (codes.Length != glyphs.Length || glyphs.IsEmpty || !font.NeedsOutlineFallback)
+        {
+            return null;
+        }
+
+        var builder = new PathBuilder(glyphs.Length * 32);
+        var glyphPath = new PathBuilder();
+        bool drew = false;
+
+        for (int i = 0; i < glyphs.Length; i++)
+        {
+            glyphPath = new PathBuilder();
+            if (!font.TryGetGlyphOutline(codes[i], glyphPath))
+            {
+                continue;
+            }
+
+            AppendTranslated(glyphPath.Build(), glyphs[i].X, glyphs[i].Y, builder);
+            drew = true;
+        }
+
+        return drew ? builder.Build() : null;
+    }
+
+    /// <summary>Copies a contour sequence into <paramref name="target"/>, shifted by (dx, dy) in em units.</summary>
+    private static void AppendTranslated(IPath source, float dx, float dy, IPathBuilder target)
+    {
+        for (int i = 0; i < source.SegmentCount; i++)
+        {
+            PathSegment segment = source.GetSegment(i);
+            switch (segment.Type)
+            {
+                case PathSegmentType.MoveTo:
+                    target.MoveTo(segment.X1 + dx, segment.Y1 + dy);
+                    break;
+
+                case PathSegmentType.LineTo:
+                    target.LineTo(segment.X1 + dx, segment.Y1 + dy);
+                    break;
+
+                case PathSegmentType.CubicTo:
+                    target.CubicTo(
+                        segment.X1 + dx, segment.Y1 + dy,
+                        segment.X2 + dx, segment.Y2 + dy,
+                        segment.X3 + dx, segment.Y3 + dy);
+                    break;
+
+                case PathSegmentType.Close:
+                    target.Close();
+                    break;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Paints a run's outline the way its text rendering mode asks for. One path holds every glyph, which
+    /// is what makes a nonzero fill behave: the glyphs of a run never overlap, so the union is the same
+    /// set of shapes, and the back end rasterises them in a single pass.
+    /// </summary>
+    private void PaintOutlineRun(IPath path, in StrokeStyle stroke)
+    {
+        switch (_state.RenderMode)
+        {
+            case TextRenderMode.Fill:
+                _context.FillPath(path, FillPaintColor(), false);
+                break;
+
+            case TextRenderMode.Stroke:
+                _context.StrokePath(path, stroke, StrokePaintColor());
+                break;
+
+            case TextRenderMode.FillStroke:
+                _context.FillPath(path, FillPaintColor(), false);
+                _context.StrokePath(path, stroke, StrokePaintColor());
+                break;
+
+            // Modes 4-7 leave a clip (added by the caller) and paint nothing.
         }
     }
 

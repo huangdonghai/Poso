@@ -502,6 +502,18 @@ public sealed class SkiaGraphicsContext : IGraphicsContext
         }
     }
 
+    public void AddTextClipPath(IPath path, in Matrix3x2 runMatrix)
+    {
+        if (_textClip is null || path.IsEmpty)
+        {
+            return;
+        }
+
+        _textClipRequested = true;
+        using SKPath skPath = SkiaConversions.ToSKPath(path, evenOdd: false);
+        _textClip.AddPath(skPath, SkiaConversions.ToSKMatrix(runMatrix), SKPathAddMode.Append);
+    }
+
     public void CloseTextClip()
     {
         // An empty clip paints nothing: a Tr 4-7 text object whose outlines all dropped out (an unmapped

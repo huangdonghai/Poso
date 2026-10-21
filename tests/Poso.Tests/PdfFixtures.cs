@@ -438,6 +438,38 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// A Type1C font whose embedded program some back ends reject, drawing "Con" at 40 pt: the codes
+    /// resolve through WinAnsiEncoding to the names "C", "o" and "n", which the subset's own charset
+    /// carries. Exercises the outline fallback - the page must show the embedded letterforms even where
+    /// the back end substitutes a system face.
+    /// </summary>
+    public static byte[] CreateOutlineFallbackPdf(byte[] fontProgram)
+    {
+        string font = "<< /Type /Font /Subtype /Type1 /BaseFont /AZFXBF#20Times#20New#20Roman "
+            + "/Encoding /WinAnsiEncoding /FirstChar 67 /LastChar 111 /Widths 5 0 R /FontDescriptor 6 0 R >>";
+        // One width per code 67..111; the drawn codes carry the subset's real widths (C 722, n 556, o 500).
+        var widths = new string[111 - 67 + 1];
+        Array.Fill(widths, "500");
+        widths[67 - 67] = "722";
+        widths[110 - 67] = "556";
+        widths[111 - 67] = "500";
+        string descriptor = "<< /Type /FontDescriptor /FontName /AZFXBF#20Times#20New#20Roman /Flags 34 "
+            + "/FontBBox [0 -218 963 688] /Ascent 688 /Descent -21 /ItalicAngle 0 /StemV 111 "
+            + "/FontFile3 7 0 R /Subtype /Type1C >>";
+        string content = "BT /F1 40 Tf 10 30 Td (Con) Tj ET";
+
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 220 60] /Resources << /Font << /F1 4 0 R >> >> /Contents 8 0 R >>"),
+            new PdfObjectDefinition(4, font),
+            new PdfObjectDefinition(5, $"[{string.Join(' ', widths)}]"),
+            new PdfObjectDefinition(6, descriptor),
+            Stream(7, string.Empty, fontProgram),
+            Stream(8, string.Empty, Encoding.ASCII.GetBytes(content)));
+    }
+
+    /// <summary>
     /// Like <see cref="CreateNativeType1Pdf"/> but the font is <b>symbolic</b> (/Flags 4) and its
     /// /Encoding is a dictionary carrying /Differences that do NOT cover the drawn code (120). Per
     /// PDF 32000-1 Table 122 the codes outside /Differences still fall back to StandardEncoding, so

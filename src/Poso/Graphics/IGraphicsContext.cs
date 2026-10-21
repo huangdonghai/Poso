@@ -77,6 +77,15 @@ public interface IGraphicsContext : IDisposable
     {
     }
 
+    /// <summary>
+    /// Add an already-built run outline, in em/text space, to the clip accumulator. Used when the glyphs
+    /// are painted from an outline the caller extracted itself rather than from a back-end face, so the
+    /// clip and the fill still describe the same shapes.
+    /// </summary>
+    void AddTextClipPath(IPath path, in Matrix3x2 runMatrix)
+    {
+    }
+
     /// <summary>Intersect the accumulated outline into the clip and close the accumulator.</summary>
     void CloseTextClip()
     {

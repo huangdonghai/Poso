@@ -340,6 +340,29 @@ public sealed class PeachGraphicsContext : IGraphicsContext
         }
     }
 
+    public void AddTextClipPath(IPath path, in Matrix3x2 runMatrix)
+    {
+        if (_textClip is null || path.IsEmpty)
+        {
+            return;
+        }
+
+        _textClipRequested = true;
+
+        // The run is given in text space and placed by its own matrix, matching AddTextClipRun: the
+        // accumulator holds user-space coordinates, so the placement happens on the way in.
+        using PeachCore.GraphicsPath placed = path.ToGraphicsPath(evenOdd: false, Target, runMatrix);
+        _textClip.AddPath(placed);
+
+        RectF bounds = path.Bounds.TransformAabb(runMatrix);
+        _textClipBounds = _textClipAny
+            ? RectF.FromLbrb(
+                Math.Min(_textClipBounds.Left, bounds.Left), Math.Min(_textClipBounds.Bottom, bounds.Bottom),
+                Math.Max(_textClipBounds.Right, bounds.Right), Math.Max(_textClipBounds.Top, bounds.Top))
+            : bounds;
+        _textClipAny = true;
+    }
+
     public void CloseTextClip()
     {
         PeachCore.GraphicsPath? path = _textClip;

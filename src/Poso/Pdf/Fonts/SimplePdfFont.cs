@@ -101,6 +101,28 @@ public sealed class SimplePdfFont : PdfFont
         return glyphId != 0 ? graphics.GetAdvanceWidth(glyphId) : GetMissingWidthEm();
     }
 
+    /// <summary>
+    /// A simple font addresses its glyphs by name, and the embedded program orders them by its own
+    /// charset, so a code has to go through the encoding to reach the outline.
+    /// </summary>
+    internal override int ResolveOutlineGlyph(OutlineSource outlines, int code)
+    {
+        if (code < 0 || code > 255)
+        {
+            return -1;
+        }
+
+        if (_codeToName[code] is { } name && outlines.TryGetGlyphIdForName(name, out ushort byName))
+        {
+            return byName;
+        }
+
+        // A subset that renamed its glyphs still keeps its built-in encoding in step with the codes.
+        return EmbeddedGlyphNames is { } program && program.TryGetGlyphIdForCode(code, out ushort byCode)
+            ? byCode
+            : -1;
+    }
+
     private void BuildEncoding()
     {
         PdfObject? encodingObject = Document.Resolve(Dictionary.Get("Encoding"));
