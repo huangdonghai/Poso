@@ -112,8 +112,10 @@ public sealed class PdfContentInterpreter
     private Matrix3x2 _strokeShadingMatrix = Matrix3x2.Identity;
     private PdfStream? _fillTiling;
     private Matrix3x2 _fillTilingMatrix = Matrix3x2.Identity;
+    private PosoColor? _fillTilingColor;
     private PdfStream? _strokeTiling;
     private Matrix3x2 _strokeTilingMatrix = Matrix3x2.Identity;
+    private PosoColor? _strokeTilingColor;
     private float[] _fillLabWhite = DefaultLabWhitePoint;
     private float[] _fillLabRange = DefaultLabRange;
     private float[] _strokeLabWhite = DefaultLabWhitePoint;
@@ -282,9 +284,17 @@ public sealed class PdfContentInterpreter
     /// Renders a single tiling-pattern cell into this interpreter's context using the supplied base
     /// transform (pattern space -> tile pixels). Resets local state so the cell is self-contained.
     /// </summary>
-    public void RenderCell(byte[] content, PdfDictionary? resources, Matrix3x2 baseMatrix)
+    public void RenderCell(byte[] content, PdfDictionary? resources, Matrix3x2 baseMatrix, PosoColor? cellColor = null)
     {
         _state = new GraphicsState();
+        if (cellColor is { } color)
+        {
+            // An uncoloured (PaintType 2) pattern paints its cell in the colour scn supplied, so the cell
+            // starts from that colour instead of the default black.
+            _state.FillColor = color;
+            _state.StrokeColor = color;
+        }
+
         _stateStack.Clear();
         _path = null;
         _hasCurrentPoint = false;
@@ -2040,6 +2050,7 @@ public sealed class PdfContentInterpreter
         float[] labRange = DefaultLabRange;
         CalColor cal = new();
         IccProfile? icc = null;
+        ColorSpaceKind patternBaseKind = ColorSpaceKind.Unknown;
 
         switch (resolved)
         {
@@ -2061,6 +2072,18 @@ public sealed class PdfContentInterpreter
             case PdfArray { Count: 1 } patternOnly when patternOnly[0] is PdfName { Value: "Pattern" }:
                 kind = ColorSpaceKind.Pattern;
                 components = 1;
+                break;
+
+            // [/Pattern <base>] names the space an uncoloured (PaintType 2) tiling pattern's cells are
+            // painted in, and scn carries the colour for them ahead of the pattern name. pdf.js
+            // issue16038.pdf writes [/Pattern /DeviceRGB] and then "0 0 1 /pgfpat21 scn", whose cells
+            // stroke a line: read without the base, the line came out in the default black instead of
+            // blue, and the whole page of hatching turned grey.
+            case PdfArray patternBase when patternBase.Count >= 2 && patternBase[0] is PdfName { Value: "Pattern" }:
+                kind = ColorSpaceKind.Pattern;
+                (ColorSpaceKind tileBaseKind, int tileBaseComponents) = DescribeBaseSpace(patternBase[1]);
+                patternBaseKind = tileBaseKind;
+                components = Math.Max(1, tileBaseComponents);
                 break;
 
             case PdfArray array when array.Count >= 2 && array[0] is PdfName family:
@@ -2172,6 +2195,8 @@ public sealed class PdfContentInterpreter
             _fillIcc = icc;
         }
 
+        _patternBaseKind = patternBaseKind;
+
         // Switching to a non-pattern color space clears any active shading pattern for that side.
         if (kind != ColorSpaceKind.Pattern)
         {
@@ -2185,17 +2210,67 @@ public sealed class PdfContentInterpreter
     /// colour, so the pattern must not survive it - otherwise a later solid fill paints the leftover
     /// tiling cell instead of the colour (PDF 32000-1:2008 8.6.8).
     /// </summary>
+    /// <summary>Base colour space of the active Pattern space, for an uncoloured tiling pattern's colour.</summary>
+    private ColorSpaceKind _patternBaseKind = ColorSpaceKind.Unknown;
+
+    /// <summary>
+    /// The colour an uncoloured (PaintType 2) tiling pattern's cells are painted in, taken from the operands
+    /// scn/SCN carried ahead of the pattern name. A coloured pattern (PaintType 1) paints with its own
+    /// operators and gets null here.
+    /// </summary>
+    private PosoColor? TilingCellColor(Stack<PdfObject> operands, PdfDictionary pattern, bool stroke)
+    {
+        if ((pattern.GetIntegerValue("PaintType") ?? 1) != 2)
+        {
+            return null;
+        }
+
+        // SelectPattern already popped the pattern name, so what is left is the colour, bottom-first.
+        if (operands.Count == 0 || operands.Peek() is PdfName)
+        {
+            return null;
+        }
+
+        var colorOperands = new Stack<PdfObject>(operands.ToArray().Reverse());
+        return _patternBaseKind switch
+        {
+            ColorSpaceKind.Pattern or ColorSpaceKind.Unknown => null,
+            _ => ResolveTilingCellColor(colorOperands),
+        };
+    }
+
+    private PosoColor? ResolveTilingCellColor(Stack<PdfObject> colorOperands)
+    {
+        int components = _patternBaseKind switch
+        {
+            ColorSpaceKind.DeviceGray => 1,
+            ColorSpaceKind.DeviceCmyk => 4,
+            _ => 3,
+        };
+
+        if (colorOperands.Count < components)
+        {
+            return null;
+        }
+
+        ApplyColorOperands(colorOperands, _patternBaseKind, components, null, 0, null,
+            ColorSpaceKind.Unknown, 0, null, null, null, null, out PosoColor color);
+        return color;
+    }
+
     private void ClearPatternColor(bool stroke)
     {
         if (stroke)
         {
             _strokeShading = null;
             _strokeTiling = null;
+            _strokeTilingColor = null;
         }
         else
         {
             _fillShading = null;
             _fillTiling = null;
+            _fillTilingColor = null;
         }
     }
 
@@ -2271,15 +2346,18 @@ public sealed class PdfContentInterpreter
         {
             // Tiling pattern: the cell is rasterized on demand at paint time (PaintTiling).
             Matrix3x2 matrix = ParsePatternMatrix(pattern);
+            PosoColor? cellColor = TilingCellColor(operands, pattern, stroke);
             if (stroke)
             {
                 _strokeTiling = tilingStream;
                 _strokeTilingMatrix = matrix;
+                _strokeTilingColor = cellColor;
             }
             else
             {
                 _fillTiling = tilingStream;
                 _fillTilingMatrix = matrix;
+                _fillTilingColor = cellColor;
             }
 
             return;
@@ -2465,7 +2543,8 @@ public sealed class PdfContentInterpreter
         using (IGraphicsContext cell = _factory.CreateContext(tw, th))
         {
             var nested = new PdfContentInterpreter(_document, _factory, cell, _options, _sharedForms) { OnUnsupported = OnUnsupported };
-            nested.RenderCell(stream.Decode(_diag), _document.Resolve(dict.Get("Resources")) as PdfDictionary, tileMatrix);
+            nested.RenderCell(stream.Decode(_diag), _document.Resolve(dict.Get("Resources")) as PdfDictionary, tileMatrix,
+                stroke ? _strokeTilingColor : _fillTilingColor);
             tile = cell.Snapshot();
         }
 
