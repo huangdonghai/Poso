@@ -46,6 +46,37 @@ public sealed class PdfDocument : IDisposable
 
             _xref = PdfXref.Load(_buffer, Resolve, _encryption);
         }
+
+        RebuildIfTheCatalogIsUnreachable();
+    }
+
+    /// <summary>
+    /// A table can register a handful of objects and still omit the ones the document needs: pdf.js
+    /// GHOSTSCRIPT-698804-1-fuzzed.pdf writes "xref / 0 2" while listing seven entries, so only objects 0
+    /// and 1 are indexed and the catalog is unreachable - the document then reports "missing the page tree
+    /// root" although every object sits in the file. issue9418.pdf is the same one level in: the catalog
+    /// resolves, its /Pages does not. Rebuilding by scanning is what the loader already does when the
+    /// table registers nothing, and it is the right answer here too. This has to run after _xref is
+    /// assigned, because resolving goes through it.
+    /// </summary>
+    private void RebuildIfTheCatalogIsUnreachable()
+    {
+        if (Catalog is not { } catalog)
+        {
+            if (!_xref.WasRebuilt)
+            {
+                _xref.Repair(_buffer);
+            }
+
+            return;
+        }
+
+        // One step further in: a table can index the catalog but not the /Pages it names, which is
+        // pdf.js issue9418.pdf's shape and reads the same way - "missing the page tree root".
+        if (catalog.Get("Pages") is PdfIndirectRef pages && Resolve(pages) is not PdfDictionary)
+        {
+            _xref.Repair(_buffer);
+        }
     }
 
     /// <summary>
