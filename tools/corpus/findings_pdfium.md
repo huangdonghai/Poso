@@ -910,6 +910,36 @@ images_1bit_grayscale 9.40 -> 8.79, issue6605 0.85 -> 0.72, bug1795263 0.47 -> 0
 shifts. Zero regressions across the corpus. Test: the corpus file as `inline-imagemask-ccitt.pdf`,
 which fails on either half-revert (noise 1.2%, opaque field ~13%, fixed 8.3%).
 
+## Round 41 - a font subset with a broken loca: diagnosed, not fixed
+
+**84 corpus files embed a TrueType program with no cmap** (script: `tools/corpus`, the scan is
+reproducible). A CID font with such a program addresses its glyphs by id, so the missing character
+map is legal - but a back end that has to guess a character-to-glyph mapping guesses wrong. Skia's
+`GetGlyphPath` returns an **empty path for most of such a font's glyph ids**, so the letters simply
+do not appear. The no-cmap files' median difference is 3.8x the rest of the corpus (1.17% against
+0.31%), and 26 of the 83 comparable ones differ by more than 3%.
+
+pdf.js issue11131_reduced.pdf is the clearest case: an Identity-H CIDFontType2 whose 71-glyph
+program has no cmap, of which **eight letters went missing** (the CIDs 4, 8, 9, 13, 23, 24, 28, 48 -
+exactly the ids Skia cannot reach). PDFium draws all 23 letters of that line.
+
+**The obstacle is the font, not the reader.** The embedded program is a broken subset: its `loca`
+table is not monotonic (`loca[4] = 10674`, `loca[5] = 2188`), its 69 distinct boundary values tile
+the `glyf` table, but **no pairing of them describes a glyph record** - the record lengths never
+match the intervals, the records cannot be walked (the chain breaks after two), and fontTools
+refuses the file outright ("not enough 'glyf' table data"). Every table's checksum mismatches too,
+so the subset was written without fixing anything up. FreeType's own rule (`loca[g] + 2 <=
+loca[g+1]`, else the glyph is empty) would skip 37 of the 71 glyphs, while PDFium draws 23 of
+exactly those - so PDFium is not reading this font through FreeType either, and the route it takes
+is not in the open-source tree.
+
+A fix would need the CID-to-outline mapping this particular subset encodes, and the 8 missing
+letters are 8 of 37 ids a standards-conforming reader must skip. **Recorded, not fixed** - the
+honest statement is that Poso draws the letters a conforming reader can reach and PDFium draws
+more, and the reason is a malformed font rather than a Poso semantic bug. The 84 files are the
+largest single identifiable group left in the corpus (about 200 of the 1930 total percentage points
+above 1%), and the next step is to find out how PDFium reads a subset with a broken `loca`.
+
 ## Real Poso issues, worst first
 
 1. **`issue19634` (20.95% -> 19.20%): a Type3 glyph's graphics state leaked out - fixed (`4f9d00b`);

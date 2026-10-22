@@ -44,3 +44,9 @@ POSO_DIR=<other-dir> REPORT_PREFIX=report_try python cmp_pdfium.py
 The per-round findings (root causes, before/after numbers, spec clauses) are written to this
 directory as `findings_pdfium.md` / `findings_pdfium_zh_CN.md`. Outputs under `out/` are
 gitignored.
+
+`scan_nocmap.py` lists the corpus files whose embedded TrueType program has no character map.
+A CID font with such a program addresses its glyphs by id, which is legal, but a back end that
+has to guess a character-to-glyph mapping guesses wrong - Skia's `GetGlyphPath` returns an empty
+path for most of such a font's glyph ids, so the letters do not appear. The scan is what the
+Round 41 entry in the findings is based on.
