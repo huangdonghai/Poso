@@ -914,6 +914,39 @@ public class ContentRenderTests
     }
 
     /// <summary>
+    /// pdf.js issue14462_reduced.pdf draws its title from a native binary Type 1 (PFB) program whose
+    /// charstring entries end in the binary |- trailer with no whitespace before the next /glyph name.
+    /// Stepping back over the misread token moved the stream's lookahead cursor out of step, and every
+    /// second entry then parsed as a zero-length fake glyph - the title came back as a single "2".
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Render_Type1PfbWithBinaryTrailers_DrawsTheWholeTitle(bool peach)
+    {
+        IGraphicsFactory factory = peach ? PeachGraphicsFactory.Default : Factory;
+        using PdfDocument document = PdfDocument.FromArray(File.ReadAllBytes(PdfSample("issue14462-reduced.pdf")));
+        using IGraphicsContext context = factory.CreateContext(400, 100);
+        document.Pages[0].Render(factory, context, new PdfRenderOptions(2f, 0f, PosoColor.White));
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+
+        int ink = 0;
+        for (int i = 0; i < pixels.Length; i += 4)
+        {
+            if (pixels[i] < 200)
+            {
+                ink++;
+            }
+        }
+
+        // PDFium inks 6.6% of the page. Before the fix both back ends sat at 0.6% - one digit of the
+        // title survived and the rest fell onto the fake .notdef entries.
+        double fraction = (double)ink / (image.Width * image.Height);
+        Assert.InRange(fraction, 0.05, 0.075);
+    }
+
+    /// <summary>
     /// pdf.js annotation-ink-without-appearance.pdf carries only /InkList geometry: strokes drawn in /C
     /// with the /BS width. An Ink annotation was not in the markup set, so the strokes were dropped.
     /// </summary>

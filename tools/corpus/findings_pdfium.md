@@ -1059,6 +1059,39 @@ layout was settled by reading FreeType's loader and fontTools' decoder side by s
 by replaying cmbx12's "E" operand by operand against FreeType's trace, and the Skia blindness by
 probing `GetGlyphPath` glyph by glyph inside a container that FreeType loads without complaint.
 
+## Round 43 - a Type 1 charstring entry with no ND marker does not swallow the next glyph
+
+pdf.js issue14462_reduced.pdf draws one line - "Issue 14462" - from a native binary Type 1 (a
+`FontFile`, PFB with eexec). Poso painted a single character: the whole title vanished except its
+last digit, and both back ends agreed, so the fault was in the program reader, not in either
+rasteriser.
+
+The PFB's CharStrings dictionary writes each entry as `/name length RD <binary> ND`, but this
+generator leaves the `ND` out for many entries, so the byte right after the charstring data is the
+`/` of the next entry's name. The reader handles that case - it steps the stream back over the
+token it misread - but the step-back was one byte short: it moved the cursor without consuming
+the byte it landed on, leaving the tokenizer's lookahead one byte ahead of the cursor. The next
+`GetToken` then read the `/` delimiter as a glyph name, every real glyph was followed by a fake
+entry (`/` or binary junk, zero-length charstring), and the fake entries' empty charstrings pushed
+the real ones out of the code-to-glyph table. An eexec decryption of the program and a dump of the
+decoded CharStrings showed the corruption directly: `zero`, `three`, `F`, `r`, ... interleaved with
+`/` entries and garbage names, where the encoding should have been `zero one two three ...`
+monotonic.
+
+The fix makes the step-back consume its byte, matching pdf.js's `prevChar` (`stream.skip(-2)` then
+`getChar()` - its comment names this very file): the cursor ends one byte before where the misread
+token started, and the tokenizer's next read sees the `/` again. All 84 glyph names now decode in
+program order, the CFF conversion carries them through, and the line renders whole.
+
+Files moved: issue14462_reduced 7.02% -> 2.44% (Peach 7.04% -> 2.11%; ink 0.62% -> 5.97%/6.10%
+against PDFium's 6.64%). No regression anywhere in the corpus (report28 -> report29, 977 files).
+Test: the corpus file as `issue14462-reduced.pdf`, which inks 0.6% of the page before the fix and
+6.0% after.
+
+The lesson is in the failure mode: a parser that is *almost* right about where a token ends does
+not visibly fail on the font - it silently fabricates entries, and the rendering evidence (a
+hundred missing letters) points at the rasteriser rather than at the byte cursor.
+
 ## Real Poso issues, worst first
 
 1. **`issue19634` (20.95% -> 19.20%): a Type3 glyph's graphics state leaked out - fixed (`4f9d00b`);

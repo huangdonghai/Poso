@@ -874,10 +874,16 @@ public sealed class Type1Program : IType1Program
             return bytes;
         }
 
+        /// <summary>
+        /// Steps back over the last token, the way pdf.js prevChar does: skip two bytes and re-read one,
+        /// so the byte under the cursor is the token's first byte and the stream's invariant
+        /// (currentChar is the byte before pos) holds again. Stepping back without the re-read leaves
+        /// currentChar one byte ahead of pos, and the next token then reads the delimiter as a name.
+        /// </summary>
         public void PrevChar()
         {
             pos = System.Math.Max(0, pos - 2);
-            currentChar = pos < data.Length ? data[pos] : -1;
+            currentChar = pos < data.Length ? data[pos++] : -1;
         }
 
         private int NextChar()
