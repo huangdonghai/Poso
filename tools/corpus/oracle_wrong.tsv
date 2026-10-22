@@ -1,0 +1,8 @@
+# Files where PDFium is the wrong side of a Poso-vs-PDFium diff, verified one by one.
+# tag <TAB> reason. Read by cmp_pdfium.py; these rows are kept out of the triage worklist exactly
+# like the automatically detected caveats (UserUnit, annotation appearances, an all-blank PDFium
+# page). Add a row only with the evidence in hand - "Poso differs from PDFium" is not a reason.
+calgray-6a6a83	PDFium writes g*255 and skips the transfer function; pdf.js's reference formula 295.8*L^(1/3)-40.8 is what calgray.pdf expects
+jpx_smaskindata-a852eb	PDFium paints stored premultiplied samples opaquely and ignores /SMaskInData for 1 and 2; pdf.js un-premultiplies with /Matte
+knockout_inner_backdrop-946fca	PDFium blends the nested non-isolated subgroup against the parent's blue (red*blue, green*blue = black); the group has to blend against its own initial backdrop
+issue19634-f3848a	PDFium paints the d1-stencil shadow neutral grey; a d1 glyph is filled in the text colour (red, ISO 32000-1 9.5.5) and MuPDF renders it red on 92% of those pixels, siding with Poso

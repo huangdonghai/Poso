@@ -124,6 +124,24 @@ dotnet test tests/Poso.Tests
 dotnet run --project samples/Sample.Avalonia/Sample.Avalonia.Desktop
 ```
 
+## Rendering fidelity
+
+Poso's rendering is validated against **PDFium** (Chrome's engine) on the pdf.js corpus
+(`pdfjs/test/pdfs`, 977 PDFs, first page, scale 2.0). The tooling lives in
+[`tools/corpus`](tools/corpus) and its findings in
+[`tools/corpus/findings_pdfium.md`](tools/corpus/findings_pdfium.md).
+
+| vs PDFium (953 comparable files) | Skia | Peach |
+| --- | --- | --- |
+| within 1% pixel diff | 550 | 555 |
+| within 5% | 816 (85.6%) | 818 (85.8%) |
+| pages Poso cannot open | 10 | 10 |
+
+After excluding the files where PDFium itself is known to be the wrong side (it ignores `/UserUnit`
+and does not paint annotation appearances), no comparable file differs from the oracle by more than
+50%, and the only remaining blank-vs-ink gap is one annotation-chrome page. The pipeline renders the
+whole corpus in about four minutes per back end and diffs every page pixel-for-pixel.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

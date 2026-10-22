@@ -426,3 +426,7 @@ FodyWeavers.xsd
 _scratch/
 .codebuddy/
 .zcode/
+
+# Corpus sweep outputs and generated manifests (tools/corpus)
+tools/corpus/out/
+tools/corpus/manifest.tsv

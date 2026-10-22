@@ -122,6 +122,22 @@ dotnet test tests/Poso.Tests
 dotnet run --project samples/Sample.Avalonia/Sample.Avalonia.Desktop
 ```
 
+## 渲染保真度
+
+Poso 的渲染结果以 **PDFium**（Chrome 的引擎）为基准，在 pdf.js 语料库（`pdfjs/test/pdfs`，
+977 个 PDF，第 0 页，scale 2.0）上验证。工具在 [`tools/corpus`](tools/corpus)，结论记录在
+[`tools/corpus/findings_pdfium_zh_CN.md`](tools/corpus/findings_pdfium_zh_CN.md)。
+
+| 与 PDFium 对比（953 个可比文件） | Skia | Peach |
+| --- | --- | --- |
+| 像素差 1% 以内 | 550 | 555 |
+| 像素差 5% 以内 | 816（85.6%） | 818（85.8%） |
+| Poso 打不开的文件 | 10 | 10 |
+
+排除 PDFium 自身不可靠的文件（它忽略 `/UserUnit`，也不画注释外观流）后，没有任何可比文件与
+基准的差异超过 50%；「Poso 全白、PDFium 有内容」只剩一页注释 chrome。整条流水线每个后端约
+四分钟渲染完全部语料，并逐像素对比每一页。
+
 ## 许可证
 
 MIT 协议，详见 [LICENSE](LICENSE)。
