@@ -810,6 +810,40 @@ public class ContentRenderTests
     }
 
     /// <summary>
+    /// pdf.js issue14999_reduced.pdf sets its Type 3 glyphs from inline 1-bit CCITT image masks: the
+    /// dictionary spells /IM true as a keyword and puts /K -1 and /Columns in an inline /DP
+    /// dictionary. ReadInlineValue kept neither — the keyword value fell through and &lt;&lt; could not
+    /// start a value — so the masks decoded with default Group 3 2-D parameters and painted as opaque
+    /// grayscale fields instead of stencils in the text colour.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Render_InlineImageMaskWithKeywordAndDecodeParms_StencilstheGlyphs(bool peach)
+    {
+        IGraphicsFactory factory = peach ? PeachGraphicsFactory.Default : Factory;
+        using PdfDocument document = PdfDocument.FromArray(File.ReadAllBytes(PdfSample("inline-imagemask-ccitt.pdf")));
+        using IGraphicsContext context = factory.CreateContext(740, 120);
+        document.Pages[0].Render(factory, context, new PdfRenderOptions(2f, 0f, PosoColor.White));
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+
+        int ink = 0;
+        for (int i = 0; i < pixels.Length; i += 4)
+        {
+            if (pixels[i] < 200)
+            {
+                ink++;
+            }
+        }
+
+        // PDFium's glyph run inks 8.4% of the page with this metric; the noise of a mis-decoded mask
+        // (1.2%) or the dropped /IM flag lands outside the band.
+        double fraction = (double)ink / (image.Width * image.Height);
+        Assert.InRange(fraction, 0.07, 0.10);
+    }
+
+    /// <summary>
     /// pdf.js annotation-ink-without-appearance.pdf carries only /InkList geometry: strokes drawn in /C
     /// with the /BS width. An Ink annotation was not in the markup set, so the strokes were dropped.
     /// </summary>

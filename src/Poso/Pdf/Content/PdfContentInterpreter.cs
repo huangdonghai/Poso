@@ -4076,11 +4076,35 @@ public sealed class PdfContentInterpreter
                 return new PdfString(PdfString.DecodeHex(lexer.Data, token.Start, token.Length));
 
             case PdfTokenKind.ArrayOpen:
+            case PdfTokenKind.DictOpen:
             {
-                var parser = new PdfParser(lexer.Data, lexer.Position - 1);
+                // Rewind to the token's own start: `[` is one byte but `<<` is two, so Position-1
+                // would land on the second `<` of a dictionary and parse garbage from it.
+                var parser = new PdfParser(lexer.Data, token.Start);
                 PdfObject value = parser.ParseObject();
                 lexer.Position = parser.Position;
                 return value;
+            }
+
+            case PdfTokenKind.Keyword:
+            {
+                // Inline dictionaries carry keyword values: /IM true is an image mask, and /I false
+                // or /Decode null are legal too. Returning null here dropped the flag, and pdf.js
+                // issue14999_reduced's Type 3 glyph masks painted as opaque black fields instead of
+                // stencils.
+                if (lexer.Match(token, "true"u8))
+                {
+                    return PdfBoolean.True;
+                }
+                if (lexer.Match(token, "false"u8))
+                {
+                    return PdfBoolean.False;
+                }
+                if (lexer.Match(token, "null"u8))
+                {
+                    return PdfNull.Instance;
+                }
+                return null;
             }
 
             default:
