@@ -775,14 +775,18 @@ public class ContentRenderTests
 
     /// <summary>
     /// A Huffman symbol dictionary can encode a symbol as a refinement of another one (pdf.js
-    /// bitmap-symbol-symhuffrefineone.pdf) or as an aggregate of several (symhuffrefineseveral.pdf).
-    /// Both used to return null, so the page carried no image at all; the rendered page is 7.1% ink.
+    /// bitmap-symbol-symhuffrefineone.pdf), as an aggregate of several (symhuffrefineseveral.pdf),
+    /// or as an empty entry (symhuffrefine-textrefine.pdf, where REFAGGNINST == 0 leaves the glyph
+    /// null and its text region refines every instance). All three used to return null or abort the
+    /// segment, so the page carried no image at all; PDFium renders them identically at 7.1% ink.
     /// </summary>
     [Theory]
     [InlineData(false, "jbig2-huffman-refine.pdf")]
     [InlineData(true, "jbig2-huffman-refine.pdf")]
     [InlineData(false, "jbig2-huffman-aggregate.pdf")]
     [InlineData(true, "jbig2-huffman-aggregate.pdf")]
+    [InlineData(false, "jbig2-huffman-textrefine.pdf")]
+    [InlineData(true, "jbig2-huffman-textrefine.pdf")]
     public void Render_HuffmanSymbolDictionaryWithRefinement_PaintsTheImage(bool peach, string sample)
     {
         IGraphicsFactory factory = peach ? PeachGraphicsFactory.Default : Factory;

@@ -5,9 +5,20 @@ namespace Poso.Pdf.Filters.Codecs;
 /// <summary>
 /// Represents a decoded JBIG2 symbol (a glyph bitmap) from a symbol dictionary segment.
 /// The pixel data is row-major, MSB-first bit-packed, 1 = black.
+///
+/// A symbol may be <em>empty</em>: T.88 §6.5.8.2 lets a refinement/aggregate dictionary entry
+/// carry no bitmap at all, and PDFium stores that as a null image which every consumer then
+/// skips when placing instances. <see cref="IsEmpty"/> marks such a symbol; its
+/// <see cref="Packed"/> is an empty array and its width/height are zero.
 /// </summary>
 internal readonly record struct Jbig2Symbol(int Width, int Height, byte[] Packed)
 {
+    /// <summary>A symbol with no bitmap: PDFium's null image.</summary>
+    public static Jbig2Symbol Empty => new(0, 0, []);
+
+    /// <summary>Whether this symbol carries no bitmap.</summary>
+    public bool IsEmpty => Width <= 0 || Height <= 0 || Packed.Length == 0;
+
     public int Stride => (Width + 7) / 8;
 }
 
@@ -25,6 +36,15 @@ internal readonly record struct Jbig2Symbol(int Width, int Height, byte[] Packed
 /// </summary>
 internal static class Jbig2SymbolDict
 {
+    // Reference-corner values as PDFium numbers them (JBig2_TrdProc.h, `enum JBig2Corner`).
+    // Note that the spec's own numbering differs: T.88 lists the corners with the bottom edge
+    // first, while PDFium (and jbig2dec) put BOTTOMLEFT at 0 and TOPLEFT at 1. The decoder uses
+    // PDFium's numbering throughout, matching `REFCORNER = (flags >> 4) & 3`.
+    private const int RefCornerBottomLeft = 0;
+    private const int RefCornerTopLeft = 1;
+    private const int RefCornerBottomRight = 2;
+    private const int RefCornerTopRight = 3;
+
     /// <summary>
     /// Decodes an arithmetic symbol dictionary segment body (after the segment header).
     /// Returns the exported symbol array, or null if the segment uses unsupported features (Huffman/refinement).
@@ -217,11 +237,18 @@ internal static class Jbig2SymbolDict
                 {
                     // 6.5.8.2: refinement/aggregate path
                     code = iaai!.Decode(mq, out int refAggNInst);
-                    if (code != 0 || refAggNInst <= 0)
+                    if (code != 0)
                     {
                         return null;
                     }
-                    if (refAggNInst > 1)
+                    if (refAggNInst == 0)
+                    {
+                        // T.88 §6.5.8.2 with IAAI==0: the entry carries no bitmap. PDFium stores a
+                        // null image for it (the BS = nullptr before the REFAGGNINST dispatch) and the
+                        // entry is exported as an empty glyph.
+                        sdNewSyms[nSymsDecoded] = Jbig2Symbol.Empty;
+                    }
+                    else if (refAggNInst > 1)
                     {
                         // Multi-instance aggregation: compose refAggNInst symbols as a text region (with
                         // per-instance refinement, mirroring jbig2 running the text region with SBREFINE=1).
@@ -254,6 +281,13 @@ internal static class Jbig2SymbolDict
                         else
                         {
                             return null; // invalid reference
+                        }
+
+                        // PDFium refuses to refine a symbol that has no bitmap
+                        // (`if (!sbsyms_idi) return nullptr` in CJBig2_SDDProc::DecodeArith).
+                        if (refSym.IsEmpty)
+                        {
+                            return null;
                         }
 
                         byte[]? refBits = Jbig2Refinement.Decode(
@@ -415,12 +449,17 @@ internal static class Jbig2SymbolDict
             }
         }
 
-        // SBSYMCODELEN = ceil(log2(SDNUMINSYMS + SDNUMNEWSYMS)); a single refinement names its reference
-        // symbol with that many raw bits rather than through a table.
+        // SBSYMCODELEN = max(1, ceil(log2(SDNUMINSYMS + SDNUMNEWSYMS))); a single refinement names its
+        // reference symbol with that many raw bits rather than through a table (PDFium's
+        // JBig2_SddProc.cpp).
         int sbSymCodeLen = 0;
         while ((1L << sbSymCodeLen) < (long)sdNumInSyms + sdNumNewSyms)
         {
             sbSymCodeLen++;
+        }
+        if (sbSymCodeLen < 1)
+        {
+            sbSymCodeLen = 1;
         }
 
         // Arithmetic stats for the refinement bitmaps (one context set per dictionary, as in the
@@ -489,15 +528,15 @@ internal static class Jbig2SymbolDict
                 {
                     // 6.5.8.2: refinement/aggregate symbol. Its data follows the width inside the
                     // Huffman stream, so it is decoded here rather than after the height class.
-                    byte[]? symbolBits = DecodeHuffmanRefinedSymbol(
+                    Jbig2Symbol? symbol = DecodeHuffmanRefinedSymbol(
                         hs, data, bodyStart, bodyEnd, aggInstTable!, sdrat, grStats, sdRTemplate,
                         sdInSyms, sdNewSyms, nsymsDecoded, sdNumInSyms, sbSymCodeLen, symWidth, hcHeight);
-                    if (symbolBits is null)
+                    if (symbol is null)
                     {
                         return null;
                     }
 
-                    sdNewSyms[nsymsDecoded] = new Jbig2Symbol(symWidth, hcHeight, symbolBits);
+                    sdNewSyms[nsymsDecoded] = symbol.Value;
                     nsymsDecoded++;
                 }
             }
@@ -833,19 +872,22 @@ internal static class Jbig2SymbolDict
                     return false;
                 }
 
-                // (3c.v) look up symbol bitmap
-                Jbig2Symbol ib;
-                if (id >= sbNumSyms)
+                // (3c.v) look up symbol bitmap. The arithmetic text region treats an out-of-range id or
+                // a null symbol as a decode failure, exactly like PDFium's CJBig2_TRDProc::DecodeArith
+                // (`if (IDI >= SBNUMSYMS) return nullptr` / `if (!pIBI) return nullptr`) — a stricter
+                // contract than the Huffman path, which skips an instance with no bitmap.
+                if (id >= sbNumSyms || id < 0)
                 {
-                    ib = default; // invalid, skip placement
-                }
-                else
-                {
-                    ib = referredSymbols[id];
+                    return false;
                 }
 
-                // 6.4.11: refinement indicator (IARI) and apply refinement
-                if (sbRefine && ib.Width > 0 && ib.Height > 0)
+                Jbig2Symbol ib = referredSymbols[id];
+
+                // 6.4.11: refinement indicator (IARI) and apply refinement. PDFium decodes IARI
+                // whenever SBREFINE is set — even for an instance whose symbol is null — then fails
+                // the region if the placed image would be null, so the bit position must not depend
+                // on the symbol's emptiness.
+                if (sbRefine)
                 {
                     code = iari!.Decode(mq, out int ri);
                     if (code != 0) { return false; }
@@ -859,6 +901,10 @@ internal static class Jbig2SymbolDict
                         if (code != 0) { return false; }
                         code = iardy!.Decode(mq, out int rdy2);
                         if (code != 0) { return false; }
+                        if (ib.IsEmpty)
+                        {
+                            return false; // PDFium: `if (!IBOI) return nullptr`
+                        }
                         int newW = ib.Width + rdw;
                         int newH = ib.Height + rdh;
                         if (newW <= 0 || newH <= 0 || newW > 100000 || newH > 100000) { return false; }
@@ -871,13 +917,17 @@ internal static class Jbig2SymbolDict
                     }
                 }
 
+                if (ib.IsEmpty)
+                {
+                    return false; // PDFium: `if (!pIBI) return nullptr`
+                }
+
                 // (3c.vi) adjust CURS for reference corner
-                // jbig2dec enum: 0=BOTTOMLEFT, 1=TOPLEFT, 2=BOTTOMRIGHT, 3=TOPRIGHT
-                if (!transposed && (refCorner == 2 || refCorner == 3) && ib.Width > 0)
+                if (!transposed && (refCorner == RefCornerBottomRight || refCorner == RefCornerTopRight) && ib.Width > 0)
                 {
                     curs += ib.Width - 1;
                 }
-                else if (transposed && (refCorner == 0 || refCorner == 2) && ib.Height > 0)
+                else if (transposed && (refCorner == RefCornerBottomLeft || refCorner == RefCornerBottomRight) && ib.Height > 0)
                 {
                     curs += ib.Height - 1;
                 }
@@ -886,15 +936,14 @@ internal static class Jbig2SymbolDict
                 int s = curs;
 
                 // (3c.viii) compute x,y from corner + transposition
-                // jbig2dec: 0=BOTTOMLEFT, 1=TOPLEFT, 2=BOTTOMRIGHT, 3=TOPRIGHT
                 int x, y;
                 if (!transposed)
                 {
                     switch (refCorner)
                     {
-                        case 0: x = s; y = ib.Height > 0 ? t - ib.Height + 1 : t + 1; break; // BOTTOMLEFT
-                        case 1: x = s; y = t; break; // TOPLEFT
-                        case 2: x = ib.Width > 0 ? s - ib.Width + 1 : s + 1; y = ib.Height > 0 ? t - ib.Height + 1 : t + 1; break; // BOTTOMRIGHT
+                        case RefCornerBottomLeft: x = s; y = ib.Height > 0 ? t - ib.Height + 1 : t + 1; break;
+                        case RefCornerTopLeft: x = s; y = t; break;
+                        case RefCornerBottomRight: x = ib.Width > 0 ? s - ib.Width + 1 : s + 1; y = ib.Height > 0 ? t - ib.Height + 1 : t + 1; break;
                         default: x = ib.Width > 0 ? s - ib.Width + 1 : s + 1; y = t; break; // TOPRIGHT
                     }
                 }
@@ -904,9 +953,9 @@ internal static class Jbig2SymbolDict
                     // x derives from T, y derives from S (jbig2dec 6.4.12).
                     switch (refCorner)
                     {
-                        case 0: x = t; y = ib.Height > 0 ? s - ib.Height + 1 : s + 1; break; // BOTTOMLEFT
-                        case 1: x = t; y = s; break; // TOPLEFT
-                        case 2: x = ib.Width > 0 ? t - ib.Width + 1 : t + 1; y = ib.Height > 0 ? s - ib.Height + 1 : s + 1; break; // BOTTOMRIGHT
+                        case RefCornerBottomLeft: x = t; y = ib.Height > 0 ? s - ib.Height + 1 : s + 1; break;
+                        case RefCornerTopLeft: x = t; y = s; break;
+                        case RefCornerBottomRight: x = ib.Width > 0 ? t - ib.Width + 1 : t + 1; y = ib.Height > 0 ? s - ib.Height + 1 : s + 1; break;
                         default: x = ib.Width > 0 ? t - ib.Width + 1 : t + 1; y = s; break; // TOPRIGHT
                     }
                 }
@@ -920,11 +969,11 @@ internal static class Jbig2SymbolDict
                 // (3c.x) advance CURS
                 if (ib.Width > 0)
                 {
-                    if (!transposed && (refCorner == 0 || refCorner == 1))
+                    if (!transposed && (refCorner == RefCornerBottomLeft || refCorner == RefCornerTopLeft))
                     {
                         curs += ib.Width - 1;
                     }
-                    else if (transposed && (refCorner == 1 || refCorner == 3))
+                    else if (transposed && (refCorner == RefCornerTopLeft || refCorner == RefCornerTopRight))
                     {
                         curs += ib.Height - 1;
                     }
@@ -961,10 +1010,14 @@ internal static class Jbig2SymbolDict
     /// One refinement/aggregate-coded symbol of a Huffman dictionary (§6.5.8.2). A single instance names
     /// a reference symbol with raw bits, then RDX/RDY (Table B.15) and the arithmetic-coded refinement
     /// bitmap's byte size (Table B.1); the bitmap itself is decoded with the refinement context and the
-    /// Huffman stream is advanced past it. Multi-instance aggregates are a nested text region and are not
-    /// handled here (they return null, which the caller treats as an undecodable segment).
+    /// Huffman stream is advanced past it. Multi-instance aggregates are a nested text region.
+    ///
+    /// Returns <see cref="Jbig2Symbol.Empty"/> for a dictionary entry that carries no bitmap at all
+    /// (REFAGGNINST == 0): PDFium stores a null image for it and every later consumer skips it when
+    /// placing instances. The entry still occupies a slot in the dictionary, so the stream stays in
+    /// sync.
     /// </summary>
-    private static byte[]? DecodeHuffmanRefinedSymbol(
+    private static Jbig2Symbol? DecodeHuffmanRefinedSymbol(
         Jbig2Huffman.State hs, byte[] data, int bodyStart, int bodyEnd,
         Jbig2Huffman.Table aggInstTable, sbyte[] sdrat, byte[] grStats, bool sdRTemplate,
         Jbig2Symbol[]? sdInSyms, Jbig2Symbol[] sdNewSyms, int nsymsDecoded, int sdNumInSyms,
@@ -972,9 +1025,18 @@ internal static class Jbig2SymbolDict
     {
         int code;
         int refAggNInst = hs.Get(aggInstTable, out code);
-        if (code != 0 || refAggNInst <= 0)
+        if (code != 0)
         {
             return null;
+        }
+
+        if (refAggNInst == 0)
+        {
+            // T.88 §6.5.8.2: a zero instance count means the dictionary entry has no bitmap of its
+            // own. PDFium leaves the image null (`BS = nullptr` before the REFAGGNINST dispatch in
+            // JBig2_SddProc.cpp) and stores that null as the symbol, so the entry is exported as an
+            // empty glyph that is skipped at placement time.
+            return Jbig2Symbol.Empty;
         }
 
         if (refAggNInst > 1)
@@ -995,19 +1057,19 @@ internal static class Jbig2SymbolDict
 
             if (!DecodeTextRegionBodyHuffman(
                     hs, data, bodyEnd, symbols.ToArray(), symWidth, hcHeight,
-                    sbStrips: 1, refCorner: 0, transposed: false,
+                    sbStrips: 1, refCorner: RefCornerTopLeft, transposed: false,
                     sbCombOp: 0, sbDefPixel: false, sbDsOffset: 0, sbNumInstances: refAggNInst,
                     fs: Jbig2Huffman.Standard(6), ds: Jbig2Huffman.Standard(8), dt: Jbig2Huffman.Standard(11),
                     rdw: Jbig2Huffman.Standard(15), rdh: Jbig2Huffman.Standard(15),
                     rdx: Jbig2Huffman.Standard(15), rdy: Jbig2Huffman.Standard(15),
                     rsize: Jbig2Huffman.Standard(1),
                     sbRefine: true, sbRTemplate: sdRTemplate, sbrat: sdrat,
-                    fixedWidthSymbolIds: true, out byte[]? aggregate) || aggregate is null)
+                    fixedWidthSymbolIds: true, fixedSymbolIdBits: sbSymCodeLen, out byte[]? aggregate) || aggregate is null)
             {
                 return null;
             }
 
-            return aggregate;
+            return new Jbig2Symbol(symWidth, hcHeight, aggregate);
         }
 
         int symbolId = hs.GetBits(sbSymCodeLen, out code);
@@ -1040,6 +1102,13 @@ internal static class Jbig2SymbolDict
             return null;
         }
 
+        // PDFium refuses to refine a symbol that has no bitmap (JBig2_SddProc.cpp's
+        // `if (!sbsyms_idi) return nullptr`), which fails the whole dictionary segment.
+        if (refSym.IsEmpty)
+        {
+            return null;
+        }
+
         hs.SkipToByteBoundary();
         int start = hs.Offset();
         int stride = (symWidth + 7) / 8;
@@ -1063,7 +1132,7 @@ internal static class Jbig2SymbolDict
         }
 
         hs.Advance(bmSize);
-        return bits;
+        return new Jbig2Symbol(symWidth, hcHeight, bits);
     }
 
     /// <summary>
@@ -1155,7 +1224,7 @@ internal static class Jbig2SymbolDict
             hs, data, bodyEnd, referredSymbols, regionWidth, regionHeight,
             sbStrips, refCorner, transposed, sbCombOp, sbDefPixel, sbDsOffset, sbNumInstances,
             fs, ds, dt, rdw, rdh, rdx, rdy, rsize, sbRefine, sbRTemplate, sbrat,
-            fixedWidthSymbolIds: false, out regionResult);
+            fixedWidthSymbolIds: false, fixedSymbolIdBits: 0, out regionResult);
     }
 
     /// <summary>
@@ -1190,6 +1259,7 @@ internal static class Jbig2SymbolDict
         bool sbRTemplate,
         sbyte[] sbrat,
         bool fixedWidthSymbolIds,
+        int fixedSymbolIdBits,
         out byte[]? regionResult)
     {
         regionResult = null;
@@ -1201,16 +1271,14 @@ internal static class Jbig2SymbolDict
 
         int sbNumSyms = referredSymbols.Length;
         Jbig2Huffman.Table? symCodes = null;
-        int symIdBits = 0;
+        int symIdBits = fixedSymbolIdBits;
         if (fixedWidthSymbolIds)
         {
-            // An aggregate inside a symbol dictionary numbers its instances with plain fixed-width bits;
-            // the text region segment's run-coded table is not in the stream (PDFium builds the identity
-            // table with codelen = ceil(log2(SBNUMSYMS))).
-            while ((1 << symIdBits) < sbNumSyms)
-            {
-                symIdBits++;
-            }
+            // An aggregate inside a symbol dictionary numbers its instances with plain fixed-width
+            // bits; the text region segment's run-coded table is not in the stream. PDFium builds the
+            // identity table with codelen = max(1, CeilLog2(SDNUMINSYMS + SDNUMNEWSYMS)) — the width
+            // of the dictionary's full declared symbol count, not the number currently available
+            // (JBig2_SddProc.cpp, the REFAGGNINST > 1 branch). |fixedSymbolIdBits| carries that.
         }
         else
         {
@@ -1278,7 +1346,7 @@ internal static class Jbig2SymbolDict
                     return false;
                 }
 
-                Jbig2Symbol ib = id >= sbNumSyms || id < 0 ? default : referredSymbols[id];
+                Jbig2Symbol ib = id >= sbNumSyms || id < 0 ? Jbig2Symbol.Empty : referredSymbols[id];
 
                 // §6.4.11: SBREFINE interleave — one RI bit decides whether this instance is placed as-is
                 // or refined. When refined: RDW/RDH/RDX/RDY/BMSIZE come from Huffman tables, then BMSIZE
@@ -1305,6 +1373,13 @@ internal static class Jbig2SymbolDict
                         int bmSize = hs.Get(rsize!, out code);
                         if (code != 0) { return false; }
                         hs.SkipToByteBoundary();
+
+                        // PDFium refuses to refine an instance whose reference glyph is null
+                        // (CJBig2_TRDProc::DecodeHuffman's `if (!IBOI) return nullptr`).
+                        if (ib.IsEmpty)
+                        {
+                            return false;
+                        }
 
                         int newW = ib.Width + rdwVal;
                         int newH = ib.Height + rdhVal;
@@ -1339,11 +1414,17 @@ internal static class Jbig2SymbolDict
                     }
                 }
 
-                if (!transposed && (refCorner == 2 || refCorner == 3) && ib.Width > 0)
+                // A dictionary entry that carries no bitmap (PDFium's null image) is skipped: the
+                // instance contributes nothing and does not count towards SBNUMINSTANCES, but the
+                // strip's next coordinate delta is still read (PDFium's `continue` lands on the loop
+                // head, where bFirst is false and IADS/IDS is decoded).
+                bool place = !ib.IsEmpty;
+
+                if (place && !transposed && (refCorner == RefCornerBottomRight || refCorner == RefCornerTopRight) && ib.Width > 0)
                 {
                     curs += ib.Width - 1;
                 }
-                else if (transposed && (refCorner == 0 || refCorner == 2) && ib.Height > 0)
+                else if (place && transposed && (refCorner == RefCornerBottomLeft || refCorner == RefCornerBottomRight) && ib.Height > 0)
                 {
                     curs += ib.Height - 1;
                 }
@@ -1354,41 +1435,41 @@ internal static class Jbig2SymbolDict
                 {
                     switch (refCorner)
                     {
-                        case 0: x = s; y = ib.Height > 0 ? t - ib.Height + 1 : t + 1; break;
-                        case 1: x = s; y = t; break;
-                        case 2: x = ib.Width > 0 ? s - ib.Width + 1 : s + 1; y = ib.Height > 0 ? t - ib.Height + 1 : t + 1; break;
-                        default: x = ib.Width > 0 ? s - ib.Width + 1 : s + 1; y = t; break;
+                        case RefCornerBottomLeft: x = s; y = ib.Height > 0 ? t - ib.Height + 1 : t + 1; break;
+                        case RefCornerTopLeft: x = s; y = t; break;
+                        case RefCornerBottomRight: x = ib.Width > 0 ? s - ib.Width + 1 : s + 1; y = ib.Height > 0 ? t - ib.Height + 1 : t + 1; break;
+                        default: x = ib.Width > 0 ? s - ib.Width + 1 : s + 1; y = t; break; // TOPRIGHT
                     }
                 }
                 else
                 {
                     switch (refCorner)
                     {
-                        case 0: x = t; y = ib.Height > 0 ? s - ib.Height + 1 : s + 1; break;
-                        case 1: x = t; y = s; break;
-                        case 2: x = ib.Width > 0 ? t - ib.Width + 1 : t + 1; y = ib.Height > 0 ? s - ib.Height + 1 : s + 1; break;
-                        default: x = ib.Width > 0 ? t - ib.Width + 1 : t + 1; y = s; break;
+                        case RefCornerBottomLeft: x = t; y = ib.Height > 0 ? s - ib.Height + 1 : s + 1; break;
+                        case RefCornerTopLeft: x = t; y = s; break;
+                        case RefCornerBottomRight: x = ib.Width > 0 ? t - ib.Width + 1 : t + 1; y = ib.Height > 0 ? s - ib.Height + 1 : s + 1; break;
+                        default: x = ib.Width > 0 ? t - ib.Width + 1 : t + 1; y = s; break; // TOPRIGHT
                     }
                 }
 
-                if (ib.Width > 0 && ib.Height > 0)
+                if (place && ib.Width > 0 && ib.Height > 0)
                 {
                     ComposeSymbol(textImage, regionWidth, regionHeight, textStride, ib, x, y, sbCombOp);
                 }
 
-                if (ib.Width > 0)
+                if (place && ib.Width > 0)
                 {
-                    if (!transposed && (refCorner == 0 || refCorner == 1))
+                    if (!transposed && (refCorner == RefCornerBottomLeft || refCorner == RefCornerTopLeft))
                     {
                         curs += ib.Width - 1;
                     }
-                    else if (transposed && (refCorner == 1 || refCorner == 3))
+                    else if (transposed && (refCorner == RefCornerTopLeft || refCorner == RefCornerTopRight))
                     {
                         curs += ib.Height - 1;
                     }
-                }
 
-                nInstances++;
+                    nInstances++;
+                }
 
                 // The strip carries one more IDS after its last instance (PDFium reads it and expects
                 // OOB); that trailing symbol is what closes the strip.
@@ -1716,7 +1797,9 @@ internal static class Jbig2SymbolDict
                 code = iaId.Decode(mq, out int id);
                 if (code != 0) { return nPlaced > 0 ? image : null; }
 
-                // Look up symbol
+                // Look up symbol. PDFium's DecodeArith fails the whole aggregate on an
+                // out-of-range id or an instance that resolves to no bitmap, so the empty
+                // dictionary entries of the refinement/aggregate path cannot be referenced.
                 Jbig2Symbol ib;
                 if (id < numInSyms && inSyms != null && id < inSyms.Length)
                 {
@@ -1728,7 +1811,7 @@ internal static class Jbig2SymbolDict
                 }
                 else
                 {
-                    ib = default;
+                    return null;
                 }
 
                 // SBREFINE (jbig2 tparams.SBREFINE=1): IARI, and when set RDW/RDH/RDX/RDY + arithmetic
@@ -1747,18 +1830,23 @@ internal static class Jbig2SymbolDict
                     if (code != 0) { return null; }
                     code = iardy.Decode(mq, out int rdy);
                     if (code != 0) { return null; }
-                    if (ib.Width > 0 && ib.Height > 0)
+                    if (ib.IsEmpty)
                     {
-                        int newW = ib.Width + rdw;
-                        int newH = ib.Height + rdh;
-                        if (newW <= 0 || newH <= 0 || newW > 100000 || newH > 100000) { return null; }
-                        byte[]? refined = Jbig2Refinement.Decode(
-                            sbrTemplate ? 1 : 0, false, grat, mq, grStats,
-                            newW, newH, ib.Packed, ib.Width, ib.Height,
-                            (rdw >> 1) + rdx, (rdh >> 1) + rdy);
-                        if (refined is null) { return null; }
-                        ib = new Jbig2Symbol(newW, newH, refined);
+                        return null; // PDFium: `if (!IBOI) return nullptr`
                     }
+                    int newW = ib.Width + rdw;
+                    int newH = ib.Height + rdh;
+                    if (newW <= 0 || newH <= 0 || newW > 100000 || newH > 100000) { return null; }
+                    byte[]? refined = Jbig2Refinement.Decode(
+                        sbrTemplate ? 1 : 0, false, grat, mq, grStats,
+                        newW, newH, ib.Packed, ib.Width, ib.Height,
+                        (rdw >> 1) + rdx, (rdh >> 1) + rdy);
+                    if (refined is null) { return null; }
+                    ib = new Jbig2Symbol(newW, newH, refined);
+                }
+                if (ib.IsEmpty)
+                {
+                    return null; // PDFium: `if (!pIBI) return nullptr`
                 }
 
                 // TOPLEFT: x=curs, y=t
