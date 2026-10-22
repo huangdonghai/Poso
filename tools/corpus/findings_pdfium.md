@@ -948,6 +948,25 @@ regression anywhere in the corpus. The residual on the first is stroke weight. T
 file as `cidfont-nocmap-loca.pdf`, which fails without the loca fix (1.9% of the page inked against
 4.6% with it).
 
+**The letterforms were still polygons.** With the glyphs found at last, they came out with straight
+stems and square shoulders, and a TrueType contour is not made of straight lines: an off-curve point
+is the *control point* of the quadratic curve that ends at the next on-curve point. The reader
+emitted that control point as both cubic control points, which collapses the curve onto a straight
+line. Each quadratic is now elevated to the cubic that traces the same curve - its control points
+two thirds of the way from the ends towards the quadratic's control point, the same conversion the
+Skia back end already applies to the outlines Skia hands it.
+
+The walk also had to count the points a curve consumes. Two off-curve points in a row imply an
+on-curve point halfway between them, and the second of them is the control point of the curve that
+*leaves* that implied point, so the pair is walked as two curves and consumes both points; the old
+count used the second one twice.
+
+The letterforms are right now - the letter's shoulders taper, the strokes bow. The page's number
+against PDFium moves by 0.15 percentage points (3.85% -> 4.00%), which is the sub-pixel
+rasterisation landing differently than the polygons did rather than a shape that is still wrong: the
+glyphs' positions, sizes and ink totals all match, and PDFium's own rendering of that line is a
+curve.
+
 **What the diagnosis cost.** The first reading of this font - the unordered `loca`, the record
 lengths that never matched the intervals, the chain that broke after two records, fontTools
 refusing the file - all said "the font is corrupt". It is not: FreeType reads all 71 glyphs from
