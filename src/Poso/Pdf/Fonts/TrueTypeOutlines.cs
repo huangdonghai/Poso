@@ -329,9 +329,19 @@ internal sealed class TrueTypeOutlines : OutlineSource
     }
 
     /// <summary>
-    /// Emits one contour. A TrueType contour may begin on an off-curve point, and consecutive off-curve
-    /// points imply an on-curve point midway between them; both are resolved here so the path only ever
-    /// carries explicit on-curve endpoints.
+    /// Emits one contour.
+    ///
+    /// A TrueType contour is a circular sequence of points: on-curve points are the curve's ends,
+    /// off-curve points are the control points of the curve that ends at the next on-curve point,
+    /// and two off-curve points in a row imply an on-curve point halfway between them. The contour
+    /// may also *start* on an off-curve point, in which case the implied point between the last
+    /// point and the first is where the contour begins.
+    ///
+    /// TrueType curves are quadratic, and the path interface carries cubics, so each quadratic is
+    /// elevated to the cubic that traces the same curve: its two control points sit two thirds of
+    /// the way from the ends towards the quadratic's control point. Emitting the control point as
+    /// both cubic controls instead (as this used to) collapses the curve onto a straight line, which
+    /// turned every letter of pdf.js issue11131_reduced.pdf into a polygon.
     /// </summary>
     private static void EmitContour(
         byte[] flags, int[] xs, int[] ys, int first, int last, float dx, float dy, float scale, IPathBuilder path)
@@ -346,59 +356,107 @@ internal sealed class TrueTypeOutlines : OutlineSource
         float Px(int index) => (xs[first + (index % count)] * scale) + dx;
         float Py(int index) => (ys[first + (index % count)] * scale) + dy;
 
+        // The contour starts on an on-curve point. When the first point is off-curve, the implied
+        // point between the last point and the first is the real start.
         int startIndex = 0;
         while (startIndex < count && !OnCurve(startIndex))
         {
             startIndex++;
         }
 
+        float startX;
+        float startY;
         if (startIndex == count)
         {
             // An all-off-curve contour is degenerate; treat its first point as the start.
-            path.MoveTo(Px(0), Py(0));
-            path.Close();
-            return;
+            startX = Px(0);
+            startY = Py(0);
+        }
+        else
+        {
+            startX = Px(startIndex);
+            startY = Py(startIndex);
         }
 
-        path.MoveTo(Px(startIndex), Py(startIndex));
+        path.MoveTo(startX, startY);
 
+        // The curve leaves the point the path is currently at, so the elevation needs it.
+        float currentX = startX;
+        float currentY = startY;
+
+        // The points are walked in circular order from the start. `consumed` counts the points the
+        // walk has been through, which is what ends it: a contour of n points is closed once the
+        // walk has come back to where it began.
+        //
+        // A curve consumes the points it uses: an on-curve point is one, an off-curve point is a
+        // control point of the curve that ends at the next on-curve point. Two off-curve points in a
+        // row imply an on-curve point halfway between them, and the *second* of them is the control
+        // point of the curve that leaves that implied point - so the pair is walked as two curves
+        // and consumes both points.
         int index = startIndex + 1;
-        int steps = 0;
-        while (steps < count)
+        int consumed = 0;
+        while (consumed < count)
         {
             int current = index % count;
             if (OnCurve(current))
             {
+                if (current == startIndex)
+                {
+                    // Back at the start: the contour is closed by the path's Close, and the segment
+                    // that leads here has already been drawn as a curve.
+                    break;
+                }
+
                 path.LineTo(Px(current), Py(current));
+                currentX = Px(current);
+                currentY = Py(current);
                 index++;
-                steps++;
+                consumed++;
                 continue;
             }
 
             int next = (index + 1) % count;
             if (OnCurve(next))
             {
-                path.CubicTo(
-                    Px(current), Py(current),
-                    Px(current), Py(current),
-                    Px(next), Py(next));
+                // One off-curve point: it is the control point of the curve ending at the next
+                // on-curve point.
+                EmitQuadratic(path, currentX, currentY, Px(current), Py(current), Px(next), Py(next));
+                currentX = Px(next);
+                currentY = Py(next);
                 index += 2;
-                steps += 2;
+                consumed += 2;
                 continue;
             }
 
             // Two off-curve points in a row: the implied on-curve point sits halfway between them.
+            // The first controls the curve that ends at the implied point, the second the curve
+            // that leaves it.
             float midX = (Px(current) + Px(next)) * 0.5f;
             float midY = (Py(current) + Py(next)) * 0.5f;
-            path.CubicTo(
-                Px(current), Py(current),
-                Px(current), Py(current),
-                midX, midY);
+            EmitQuadratic(path, currentX, currentY, Px(current), Py(current), midX, midY);
+            currentX = midX;
+            currentY = midY;
             index++;
-            steps++;
+            consumed++;
         }
 
         path.Close();
+    }
+
+    /// <summary>
+    /// Emits a quadratic curve as the cubic that traces the same curve: the cubic's control points
+    /// sit two thirds of the way from the ends towards the quadratic's control point.
+    /// </summary>
+    private static void EmitQuadratic(
+        IPathBuilder path, float fromX, float fromY, float controlX, float controlY, float toX, float toY)
+    {
+        path.CubicTo(
+            fromX + ((2f / 3f) * (controlX - fromX)),
+            fromY + ((2f / 3f) * (controlY - fromY)),
+            toX + ((2f / 3f) * (controlX - toX)),
+            toY + ((2f / 3f) * (controlY - toY)),
+            toX,
+            toY);
     }
 
     private bool AppendCompositeGlyph(int start, float dx, float dy, IPathBuilder path, int depth)
