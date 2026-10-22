@@ -910,35 +910,50 @@ images_1bit_grayscale 9.40 -> 8.79, issue6605 0.85 -> 0.72, bug1795263 0.47 -> 0
 shifts. Zero regressions across the corpus. Test: the corpus file as `inline-imagemask-ccitt.pdf`,
 which fails on either half-revert (noise 1.2%, opaque field ~13%, fixed 8.3%).
 
-## Round 41 - a font subset with a broken loca: diagnosed, not fixed
+## Round 41 - a font subset with an unordered loca, and a CID font with no character map
 
-**84 corpus files embed a TrueType program with no cmap** (script: `tools/corpus`, the scan is
-reproducible). A CID font with such a program addresses its glyphs by id, so the missing character
-map is legal - but a back end that has to guess a character-to-glyph mapping guesses wrong. Skia's
-`GetGlyphPath` returns an **empty path for most of such a font's glyph ids**, so the letters simply
-do not appear. The no-cmap files' median difference is 3.8x the rest of the corpus (1.17% against
-0.31%), and 26 of the 83 comparable ones differ by more than 3%.
+**84 corpus files embed a TrueType program with no cmap** (the scan is in `tools/corpus`). A CID font
+with such a program addresses its glyphs by id, so the missing character map is legal - but a back
+end that has to guess a character-to-glyph mapping guesses wrong. Skia's `GetGlyphPath` returns an
+**empty path for most of such a font's glyph ids**, so the letters simply do not appear. The no-cmap
+files' median difference is 3.8x the rest of the corpus (1.17% against 0.31%), and 26 of the 83
+comparable ones differ by more than 3%.
 
 pdf.js issue11131_reduced.pdf is the clearest case: an Identity-H CIDFontType2 whose 71-glyph
 program has no cmap, of which **eight letters went missing** (the CIDs 4, 8, 9, 13, 23, 24, 28, 48 -
 exactly the ids Skia cannot reach). PDFium draws all 23 letters of that line.
 
-**The obstacle is the font, not the reader.** The embedded program is a broken subset: its `loca`
-table is not monotonic (`loca[4] = 10674`, `loca[5] = 2188`), its 69 distinct boundary values tile
-the `glyf` table, but **no pairing of them describes a glyph record** - the record lengths never
-match the intervals, the records cannot be walked (the chain breaks after two), and fontTools
-refuses the file outright ("not enough 'glyf' table data"). Every table's checksum mismatches too,
-so the subset was written without fixing anything up. FreeType's own rule (`loca[g] + 2 <=
-loca[g+1]`, else the glyph is empty) would skip 37 of the 71 glyphs, while PDFium draws 23 of
-exactly those - so PDFium is not reading this font through FreeType either, and the route it takes
-is not in the open-source tree.
+**Two separate faults, both fixed.**
 
-A fix would need the CID-to-outline mapping this particular subset encodes, and the 8 missing
-letters are 8 of 37 ids a standards-conforming reader must skip. **Recorded, not fixed** - the
-honest statement is that Poso draws the letters a conforming reader can reach and PDFium draws
-more, and the reason is a malformed font rather than a Poso semantic bug. The 84 files are the
-largest single identifiable group left in the corpus (about 200 of the 1930 total percentage points
-above 1%), and the next step is to find out how PDFium reads a subset with a broken `loca`.
+*The loca table may be unordered.* This subset's `loca` is not monotonic (`loca[4] = 10674`,
+`loca[5] = 2188`), and its 69 distinct boundary values tile the `glyf` table - but the intervals
+run backwards for 37 of the 71 glyphs. A reader that takes the interval's length for the glyph's
+size then computes a negative length and finds nothing there. **The length is only an upper bound:
+the record carries its own size in its header.** FreeType says so explicitly (ttpload.c):
+`if (pos2 >= pos1) *asize = pos2 - pos1; else *asize = glyf_len - pos1;` - the glyph is kept and
+its length widened to the end of the table. Poso now does the same, and the eight letters come
+back. An *empty* glyph (`loca[g] == loca[g+1]`) is a different case and must stay empty: its
+offset points at whatever follows it, and reading there paints the next glyph.
+
+*The back end cannot reach the glyphs it cannot map.* A CID font's codes are glyph ids, so the
+glyphs are not looked up by character at all - but Skia's `GetGlyphPath` goes through its own
+character-to-glyph path, and for a face it could not map it returns nothing for most ids. So a CID
+font whose program has no cmap is painted from the program's own outlines, **per glyph**: the ones
+the back end can reach stay with it (it draws them better), and only the ones it cannot reach come
+from the program. Routing the whole font through the program instead was measurably worse - it cost
+2 percentage points on issue4402_reduced, whose letters the back end draws well.
+
+Files moved: issue11131_reduced 5.32% -> 3.85% and bug1650302_reduced 3.59% -> 3.10%, with no
+regression anywhere in the corpus. The residual on the first is stroke weight. Test: the corpus
+file as `cidfont-nocmap-loca.pdf`, which fails without the loca fix (1.9% of the page inked against
+4.6% with it).
+
+**What the diagnosis cost.** The first reading of this font - the unordered `loca`, the record
+lengths that never matched the intervals, the chain that broke after two records, fontTools
+refusing the file - all said "the font is corrupt". It is not: FreeType reads all 71 glyphs from
+it, and so does Acrobat. The evidence that settled it was not more analysis of the bytes but
+asking a real TrueType implementation, which is the lesson worth keeping - a reference
+implementation answers in minutes what reverse-engineering did not answer in an hour.
 
 ## Real Poso issues, worst first
 

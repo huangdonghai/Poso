@@ -16,13 +16,15 @@ internal sealed class TrueTypeOutlines : OutlineSource
     private readonly int[] _offsets;
     private readonly int _glyphCount;
     private readonly int _unitsPerEm;
+    private readonly int _glyfEnd;
 
-    private TrueTypeOutlines(byte[] font, int[] offsets, int glyphCount, int unitsPerEm)
+    private TrueTypeOutlines(byte[] font, int[] offsets, int glyphCount, int unitsPerEm, int glyfEnd)
     {
         _font = font;
         _offsets = offsets;
         _glyphCount = glyphCount;
         _unitsPerEm = unitsPerEm;
+        _glyfEnd = glyfEnd;
     }
 
     public override int GlyphCount => _glyphCount;
@@ -92,13 +94,13 @@ internal sealed class TrueTypeOutlines : OutlineSource
         }
 
         // Every offset is relative to the glyf table, so the table's own start has to be added back.
-        TryFindTable(data, "glyf", out int glyfOffset, out _);
+        TryFindTable(data, "glyf", out int glyfOffset, out int glyfLength);
         for (int i = 0; i <= glyphCount; i++)
         {
             offsets[i] += glyfOffset;
         }
 
-        source = new TrueTypeOutlines(data, offsets, glyphCount, unitsPerEm);
+        source = new TrueTypeOutlines(data, offsets, glyphCount, unitsPerEm, glyfOffset + glyfLength);
         return true;
     }
 
@@ -163,7 +165,32 @@ internal sealed class TrueTypeOutlines : OutlineSource
 
         int start = _offsets[glyphId];
         int end = _offsets[glyphId + 1];
-        if (start < 0 || end <= start || end > _font.Length || end - start < 10)
+
+        // The loca table gives a glyph's extent, but a subset writer can leave it unordered: the
+        // interval then runs backwards (loca[g+1] < loca[g]) even though the record at loca[g] is
+        // perfectly good. FreeType keeps such a glyph and only widens the length to the end of the
+        // glyf table, because the length is an upper bound and the record carries its own size.
+        // pdf.js issue11131_reduced.pdf embeds such a font, and the eight letters whose loca entries
+        // run backwards were missing from the page.
+        //
+        // An *empty* glyph (loca[g] == loca[g+1]) is a different case: it has no record of its own,
+        // and its offset points at whatever follows it. Reading there would paint the next glyph.
+        if (start < 0 || start >= _font.Length)
+        {
+            return false;
+        }
+
+        if (end == start)
+        {
+            return false;
+        }
+
+        if (end < start)
+        {
+            end = _glyfEnd;
+        }
+
+        if (end > _font.Length || end - start < 10)
         {
             return false;
         }

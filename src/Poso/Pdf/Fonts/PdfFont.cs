@@ -274,6 +274,58 @@ public abstract class PdfFont
     /// </summary>
     public bool NeedsOutlineFallback => GraphicsFont is { UsedFallback: true } && Outlines is not null;
 
+    /// <summary>
+    /// True when the back end cannot draw this code's glyph and the program's own outlines have to
+    /// stand in for it.
+    ///
+    /// A program with no character-map cannot be addressed by character, and a back end that has to
+    /// guess a character-to-glyph mapping guesses wrong: Skia's <c>GetGlyphPath</c> returns an empty
+    /// path for most of such a font's glyph ids, so the letters simply do not appear. A CID font does
+    /// not go by character - its codes are glyph ids - but that only helps a back end that can look a
+    /// glyph id up in the <c>glyf</c> table, and Skia cannot for a face it could not map.
+    ///
+    /// This is per code, not per font: a back end that can reach some of a program's glyphs draws
+    /// those better than the program's own outlines do, and only the ones it cannot reach are taken
+    /// from the program. pdf.js issue11131_reduced.pdf is one: an Identity-H CIDFontType2 with a
+    /// 71-glyph program and no cmap, of which eight letters went missing.
+    /// </summary>
+    public bool NeedsOutlineForCode(int code)
+    {
+        if (Outlines is not { } outlines)
+        {
+            return false;
+        }
+
+        // A substitute face cannot draw the program's glyphs at all.
+        if (GraphicsFont is { UsedFallback: true })
+        {
+            return true;
+        }
+
+        if (IsSimpleFont || GraphicsFont is not { MapsCodePointsToGlyphs: false })
+        {
+            return false;
+        }
+        // The back end draws the glyph by id; when it has no outline for that id, the program's own
+        // reader supplies it.
+        if (GraphicsFont is { } face)
+        {
+            int glyphId = ResolveOutlineGlyph(outlines, code);
+            if (glyphId >= 0 && glyphId <= ushort.MaxValue)
+            {
+                var builder = new PathBuilder();
+                if (face.TryGetGlyphOutline((ushort)glyphId, builder) &&
+                    builder.Build() is { } path &&
+                    path.SegmentCount > 0)
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
     protected virtual IFont? CreateGraphicsFont()
     {
         if (Factory is null)

@@ -844,6 +844,40 @@ public class ContentRenderTests
     }
 
     /// <summary>
+    /// pdf.js issue11131_reduced.pdf embeds an Identity-H CIDFontType2 whose program has no cmap, and
+    /// whose loca table is not ordered: eight of the glyphs' intervals run backwards, so a reader
+    /// that takes the interval's length for the glyph's size finds nothing there and the letters go
+    /// missing. FreeType keeps such a glyph and widens the length to the end of the glyf table,
+    /// because the length is only an upper bound and the record carries its own size.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Render_CidFontWithoutCmapAndUnorderedLoca_DrawsEveryLetter(bool peach)
+    {
+        IGraphicsFactory factory = peach ? PeachGraphicsFactory.Default : Factory;
+        using PdfDocument document = PdfDocument.FromArray(File.ReadAllBytes(PdfSample("cidfont-nocmap-loca.pdf")));
+        using IGraphicsContext context = factory.CreateContext(415, 82);
+        document.Pages[0].Render(factory, context, new PdfRenderOptions(2f, 0f, PosoColor.White));
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+
+        int ink = 0;
+        for (int i = 0; i < pixels.Length; i += 4)
+        {
+            if (pixels[i] < 200)
+            {
+                ink++;
+            }
+        }
+
+        // PDFium inks 4.9% of the page and the fixed reader 4.6%; with the eight letters gone
+        // only 1.9% is left.
+        double fraction = (double)ink / (image.Width * image.Height);
+        Assert.InRange(fraction, 0.035, 0.055);
+    }
+
+    /// <summary>
     /// pdf.js annotation-ink-without-appearance.pdf carries only /InkList geometry: strokes drawn in /C
     /// with the /BS width. An Ink annotation was not in the markup set, so the strokes were dropped.
     /// </summary>

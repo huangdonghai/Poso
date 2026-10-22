@@ -1804,6 +1804,17 @@ public sealed class PdfContentInterpreter
             // Built before the clip so the clip and the fill share one outline.
             IPath? fallbackOutlines = BuildOutlineRun(font, glyphCodes.Slice(0, glyphCount), glyphs.Slice(0, glyphCount));
 
+            // The glyphs the back end draws itself: the whole run, unless some of them come from the
+            // embedded program because the back end cannot reach them. A font the back end could not
+            // load at all is drawn entirely from the program, so the back end gets nothing.
+            ReadOnlySpan<GlyphPosition> backendGlyphs = glyphs.Slice(0, glyphCount);
+            if (fallbackOutlines is not null)
+            {
+                backendGlyphs = font.NeedsOutlineFallback
+                    ? []
+                    : GlyphsTheBackendDraws(font, glyphCodes.Slice(0, glyphCount), glyphs.Slice(0, glyphCount));
+            }
+
             if (_state.RenderMode is TextRenderMode.FillClip or TextRenderMode.StrokeClip
                 or TextRenderMode.FillStrokeClip or TextRenderMode.Clip)
             {
@@ -1815,7 +1826,7 @@ public sealed class PdfContentInterpreter
                 }
                 else
                 {
-                    _context.AddTextClipRun(graphicsFont, glyphs.Slice(0, glyphCount), drawMatrix);
+                    _context.AddTextClipRun(graphicsFont, backendGlyphs, drawMatrix);
                 }
             }
 
@@ -1831,9 +1842,10 @@ public sealed class PdfContentInterpreter
                 {
                     PaintOutlineRun(fallbackOutlines, textStroke);
                 }
-                else
+
+                if (!backendGlyphs.IsEmpty)
                 {
-                    _context.DrawGlyphs(graphicsFont, fontSize, glyphs.Slice(0, glyphCount), FillPaintColor(), StrokePaintColor(), _state.RenderMode, textStroke);
+                    _context.DrawGlyphs(graphicsFont, fontSize, backendGlyphs, FillPaintColor(), StrokePaintColor(), _state.RenderMode, textStroke);
                 }
             }
             finally
@@ -1860,25 +1872,37 @@ public sealed class PdfContentInterpreter
     }
 
     /// <summary>
-    /// Builds one path holding every glyph of a run, in text space (em units, glyphs already moved to
-    /// their pen positions), or null when the run should be drawn the ordinary way.
+    /// Builds one path holding the glyphs of a run that the back end cannot draw, in text space (em
+    /// units, glyphs already moved to their pen positions), or null when the back end draws them all.
     ///
-    /// Only a font the back end could not load takes this route: the face it is drawing with is a
-    /// substitute, so the letterforms on the page are not the ones the PDF carries. Painting the
-    /// program's own outlines - an ordinary path fill at each glyph's own pen position - puts them back.
+    /// A font the back end could not load takes this route wholesale: the face it is drawing with is
+    /// a substitute, so the letterforms on the page are not the ones the PDF carries. Painting the
+    /// program's own outlines - an ordinary path fill at each glyph's own pen position - puts them
+    /// back.
+    ///
+    /// A font the back end loaded but cannot reach some of the glyphs of takes it per glyph: a CID
+    /// font whose program has no character-map is addressed by glyph id, and Skia returns an empty
+    /// path for the ids it cannot map. Those glyphs come from the program, the rest stay with the back
+    /// end, which draws them better.
     /// </summary>
     private IPath? BuildOutlineRun(PdfFont font, ReadOnlySpan<int> codes, ReadOnlySpan<GlyphPosition> glyphs)
     {
-        if (codes.Length != glyphs.Length || glyphs.IsEmpty || !font.NeedsOutlineFallback)
+        if (codes.Length != glyphs.Length || glyphs.IsEmpty)
         {
             return null;
         }
 
+        bool all = font.NeedsOutlineFallback;
         var builder = new PathBuilder(glyphs.Length * 32);
         bool drew = false;
 
         for (int i = 0; i < glyphs.Length; i++)
         {
+            if (!all && !font.NeedsOutlineForCode(codes[i]))
+            {
+                continue;
+            }
+
             // The cached outline is in em units with the glyph origin at zero; the pen position places it.
             if (!font.TryGetGlyphOutlinePath(codes[i], out IPath? outline) || outline is null)
             {
@@ -1890,6 +1914,45 @@ public sealed class PdfContentInterpreter
         }
 
         return drew ? builder.Build() : null;
+    }
+
+    /// <summary>
+    /// The glyphs of a run the back end draws itself: those whose outlines it can reach. The rest
+    /// come from the embedded program and are painted as a path.
+    /// </summary>
+    private static ReadOnlySpan<GlyphPosition> GlyphsTheBackendDraws(
+        PdfFont font, ReadOnlySpan<int> codes, ReadOnlySpan<GlyphPosition> glyphs)
+    {
+        int count = 0;
+        for (int i = 0; i < codes.Length; i++)
+        {
+            if (!font.NeedsOutlineForCode(codes[i]))
+            {
+                count++;
+            }
+        }
+
+        if (count == codes.Length)
+        {
+            return glyphs;
+        }
+
+        if (count == 0)
+        {
+            return [];
+        }
+
+        var kept = new GlyphPosition[count];
+        int at = 0;
+        for (int i = 0; i < codes.Length; i++)
+        {
+            if (!font.NeedsOutlineForCode(codes[i]))
+            {
+                kept[at++] = glyphs[i];
+            }
+        }
+
+        return kept;
     }
 
     /// <summary>Copies a contour sequence into <paramref name="target"/>, shifted by (dx, dy) in em units.</summary>
