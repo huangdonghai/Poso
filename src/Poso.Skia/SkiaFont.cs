@@ -24,6 +24,10 @@ public sealed class SkiaFont : IFont
     {
         _typeface = typeface;
         _font = new SKFont(typeface, 1f);
+
+        // No hinting: a PDF viewer must not snap glyphs to the pixel grid (ISO 32000-1 9.7.3.3), and
+        // the outline this font hands out is the one the rasteriser would have hinted.
+        _font.Hinting = SKFontHinting.None;
         UsedFallback = usedFallback;
         _extraCmap = extraCmap;
         _hasCmapTable = hasCmapTable;
@@ -135,10 +139,13 @@ public sealed class SkiaFont : IFont
     public SKPath? GetGlyphOutlinePath(ushort glyphId)
     {
         SKPath? outline = _font.GetGlyphPath(glyphId);
+        if (outline is null)
+        {
+            return null;
+        }
 
         // y-down to y-up: negate y; x and the advance direction stay as they are
-        outline?.Transform(new SKMatrix(1f, 0f, 0f, 0f, -1f, 0f, 0f, 0f, 1f));
-
+        outline.Transform(new SKMatrix(1f, 0f, 0f, 0f, -1f, 0f, 0f, 0f, 1f));
         return outline;
     }
 
