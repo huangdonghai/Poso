@@ -974,6 +974,34 @@ it, and so does Acrobat. The evidence that settled it was not more analysis of t
 asking a real TrueType implementation, which is the lesson worth keeping - a reference
 implementation answers in minutes what reverse-engineering did not answer in an hour.
 
+**An audit of the other outline paths** (the four rounds of fixes all touched `TrueTypeOutlines`,
+so the CFF and Type 1 routes were checked the same way). Poso has three outline readers:
+`TrueTypeOutlines` (quadratics elevated to cubics), `CffOutlines` and the Type 1 path, which
+converts to CFF and then goes through `CffOutlines`. Both of the latter work in *native cubic*
+Béziers - Type 2 charstrings carry `curveto`/`flex` as cubics - so neither has the class of bug
+that turned TrueType curves into straight lines. That was confirmed by reading the code, not by
+another render.
+
+The audit also cross-checked our reader against FreeType across **586 embedded programs and
+32,517 glyphs**, comparing the bounding box each produces in em space (`_scratch/corpus_cmp/
+crosscheck_outlines.py`, using a small FreeType dumper). **95.2% agree exactly.** The rest fall
+into three buckets, none of which is a drawing fault:
+
+* **729 glyphs differ by at most 0.005 em.** The quadratic-to-cubic elevation is exact as a
+  curve but moves the control points, and our bounds are computed from control points - so the
+  numbers move slightly while the shape does not.
+* **513 glyphs differ by a pure translation of the same-sized box.** FreeType folds `hmtx`'s
+  left side bearing into its metrics via phantom points (`ttgload.c`: `pp1 = xmin - lsb`);
+  we report the glyph record's own extent. Confirmed not to affect the render: the ink centroid
+  of a page built from such glyphs lands within a pixel of PDFium's.
+* **327 glyphs differ otherwise**, mostly a contour of a *single* point that we drop
+  (`count < 2`) and FreeType keeps. A one-point contour has no area, so it draws nothing; it
+  only shows up in the bounds. An annotation font's `.notdef` is the clearest case - its fifth
+  contour is one point at the descender, and that is the whole of the difference.
+
+So the TrueType curve fix was the only real defect of its kind, and the remaining numbers are
+measurement conventions rather than shapes that are wrong.
+
 ## Real Poso issues, worst first
 
 1. **`issue19634` (20.95% -> 19.20%): a Type3 glyph's graphics state leaked out - fixed (`4f9d00b`);

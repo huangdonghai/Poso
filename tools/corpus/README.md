@@ -50,3 +50,20 @@ A CID font with such a program addresses its glyphs by id, which is legal, but a
 has to guess a character-to-glyph mapping guesses wrong - Skia's `GetGlyphPath` returns an empty
 path for most of such a font's glyph ids, so the letters do not appear. The scan is what the
 Round 41 entry in the findings is based on.
+
+`crosscheck_outlines.py` compares Poso's TrueType outline reader against FreeType's, glyph by
+glyph, across every sfnt program embedded in the corpus. It needs a small FreeType dumper
+(`ftdump`, which prints each glyph's point count, contour count and bounding box in em space -
+build it against FreeType with `include/freetype` and link `freetype`), and it drives the outline
+probe in the test project. Set `POSO_FTDUMP` to the dumper and `POSO_CORPUS` to the corpus.
+
+The comparison is on bounds, not on point counts: a quadratic becomes a cubic in Poso's path
+interface, so the counts differ while the curve is the same. Bounds are the shape's extent, so a
+misread point, a mishandled off-curve point or a mis-walked contour shows up there. Differences
+should be read with care - two of the three buckets the run reports are measurement conventions
+(FreeType folds `hmtx`'s left side bearing into its metrics, and it keeps one-point contours we
+drop) rather than shapes that are wrong, and a genuine 0.005 em wobble is what exact
+quadratic-to-cubic elevation does to a control-point-derived box.
+
+The audit it supports is in the Round 41 findings: 95.2% of 32,517 glyphs agree exactly, and the
+rest are those conventions.
