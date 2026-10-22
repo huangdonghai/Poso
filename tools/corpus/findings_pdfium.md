@@ -1002,6 +1002,63 @@ into three buckets, none of which is a drawing fault:
 So the TrueType curve fix was the only real defect of its kind, and the remaining numbers are
 measurement conventions rather than shapes that are wrong.
 
+## Round 42 - a TeX font's built-in encoding, and the curves its charstrings draw
+
+pdf.js issue6132.pdf is a TeX paper whose title is set in cmbx12, a Type1C program with a private
+encoding: the PDF's /Encoding names only six glyphs (Gamma, Psi, Omega, fl, dieresis and one more),
+so every other code has to reach the program's **built-in CFF encoding table**. Two codes failed
+there - 14 (the ffi ligature in "Efficient") and 12 (fi in "Application") - and the letters E, F,
+t, a, d, e, o, p and s were missing or deformed on top of that. Three separate faults, all in the
+CFF route.
+
+*The built-in encoding table was mis-parsed.* CFF 2.24 format 0 lists one **code** per glyph, in
+glyph order; format 1 lists runs of (first code, nLeft) whose codes and glyph indexes both run
+consecutive across runs - there are no glyph bytes in the table at all. The old reader consumed one
+byte per format-0 run (the run is one byte, but the loop also had to advance the glyph counter
+per run, which it did off-by-one) and read format 1 as (code, glyph) byte pairs, which is a layout
+that does not exist. A supplement (format byte & 0x80) names its glyph by **SID**, which reaches a
+glyph index only through the charset - the old reader had no charset to consult. The fix parses
+both formats per spec, inverts the charset for the supplement, and follows FreeType's
+`cff_encoding_load` (which is what PDFium uses through its bundled FreeType) on the corner cases:
+glyph 0 is never coded, a code at or beyond the glyph count is dropped, and offset 0/1 (the
+predefined Standard/Expert encodings) are left to the caller's fallback.
+
+*Skia's own CFF parser returns an empty path for some of the program's charstrings.* With the
+encoding fixed, the ligatures appeared but the page still inked 3.2% against PDFium's 7.8%. The
+probe showed Skia's `GetGlyphPath` failing for exactly the missing letters (glyph ids 50, 68, 70,
+71, 98, 101, 102, 112, 113, 116, 117) while FreeType - and PeachDrawing - read every one of them
+from the same wrapped container. The cmap-less CID route from Round 41 already had the right
+shape: ask the back end per glyph, and take from the program's own reader the ones the back end
+cannot reach. That per-glyph probe now runs for simple fonts with a CFF program too (the back end's
+own id is the one probed, since that is the one it draws with).
+
+*Our charstring interpreter put the hvcurveto/vhcurveto deltas on the wrong axis.* The fallback
+drew the letters, but E had a wedge cut out of its middle arm and C was deformed. `hvcurveto`'s
+groups are (dx1, dx2, dy2, dy3) - the curve leaves horizontally, so the *third* operand belongs to
+the axis it does not leave on, and a fifth operand on the last group gives that axis its remaining
+coordinate (dx4, not dy4). The old reader assigned args[3] to dx3 and args[4] to dy3, swapping the
+two axes' shares of every alternating curve. FreeType's `cffdecode.c` is explicit about it. After
+the fix, **all 130 glyphs of cmbx12 match FreeType's on-curve points exactly** (the only difference
+is one explicit closing point per contour, which fills identically).
+
+**A regression the A/B caught.** The per-glyph probe widened to simple fonts made Peach lose ink on
+the seac composites of `glyph_accent` and `issue7101`: Peach's `TryGetGlyphOutline` reported no
+outline for a seac glyph, while its text path expands seac itself when drawing. The probe and the
+drawer must answer the same question - can this face paint this glyph - so the probe now expands
+the base-plus-accent pair the same way the drawer does. Both files returned to their baseline
+numbers, and `issue8480` (also seac composites) improved on Peach 6.68% -> 3.30% as a side effect.
+
+Files moved (Skia unless noted): issue12399_reduced 8.39% -> 3.60%, bug1308536 10.45% -> 8.02%,
+issue6132 7.20% -> 6.22% (ink 3.22% -> 6.74% against PDFium's 7.79%), issue3566 2.19% -> 1.60%
+(Peach 1.93% -> 1.34%), issue8480 Peach 6.68% -> 3.30%. No regression anywhere in the corpus
+(report27 -> report28, 977 files). Test: the title strip of issue6132 as `tex-private-encoding.pdf`
+(Skia inked 5.1% of it before the fix, 10.2% after; PDFium 11.2%).
+
+The diagnosis followed the standing rule - no guessing against the bytes. The encoding table's real
+layout was settled by reading FreeType's loader and fontTools' decoder side by side, the axis swap
+by replaying cmbx12's "E" operand by operand against FreeType's trace, and the Skia blindness by
+probing `GetGlyphPath` glyph by glyph inside a container that FreeType loads without complaint.
+
 ## Real Poso issues, worst first
 
 1. **`issue19634` (20.95% -> 19.20%): a Type3 glyph's graphics state leaked out - fixed (`4f9d00b`);

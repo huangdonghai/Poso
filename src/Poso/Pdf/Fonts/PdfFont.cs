@@ -302,24 +302,52 @@ public abstract class PdfFont
             return true;
         }
 
-        if (IsSimpleFont || GraphicsFont is not { MapsCodePointsToGlyphs: false })
+        if (GraphicsFont is not { } face)
         {
             return false;
         }
+
+        int glyphId;
+        if (IsSimpleFont)
+        {
+            // Skia carries its own CFF parser, and it hands back an empty path for some of the
+            // charstrings a PDF embeds: pdf.js issue6132.pdf's cmbx12 lost E, F, t, a, d, e, o, p and
+            // s even though the same program read by FreeType, or by our own parser, draws them. Only
+            // a CFF program asks: a TrueType one the back end loaded draws fine, and the back end's
+            // own id is the one it draws with, so that is the one probed.
+            if (EmbeddedGlyphNames is null)
+            {
+                return false;
+            }
+
+            glyphId = GetGlyphId(code);
+            if (glyphId == 0)
+            {
+                return false;
+            }
+        }
+        else
+        {
+            // A CID program with a working cmap is addressed by character and drawn whole by the back
+            // end; only a cmap-less one (whose codes are glyph ids the back end cannot reach) asks.
+            if (face.MapsCodePointsToGlyphs)
+            {
+                return false;
+            }
+
+            glyphId = ResolveOutlineGlyph(outlines, code);
+        }
+
         // The back end draws the glyph by id; when it has no outline for that id, the program's own
         // reader supplies it.
-        if (GraphicsFont is { } face)
+        if (glyphId >= 0 && glyphId <= ushort.MaxValue)
         {
-            int glyphId = ResolveOutlineGlyph(outlines, code);
-            if (glyphId >= 0 && glyphId <= ushort.MaxValue)
+            var builder = new PathBuilder();
+            if (face.TryGetGlyphOutline((ushort)glyphId, builder) &&
+                builder.Build() is { } path &&
+                path.SegmentCount > 0)
             {
-                var builder = new PathBuilder();
-                if (face.TryGetGlyphOutline((ushort)glyphId, builder) &&
-                    builder.Build() is { } path &&
-                    path.SegmentCount > 0)
-                {
-                    return false;
-                }
+                return false;
             }
         }
 

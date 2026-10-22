@@ -460,8 +460,10 @@ internal static class Type2Charstring
 
         /// <summary>
         /// hvcurveto (horizontal first) and vhcurveto (vertical first): groups of four operands that
-        /// alternate the axis the curve leaves on, with a fifth operand on the last group giving the
-        /// other coordinate of its endpoint.
+        /// alternate the axis the curve leaves on. The axis the curve does <em>not</em> leave on carries
+        /// the third operand, and a fifth operand on the last group gives that same axis its remaining
+        /// coordinate: for hvcurveto the deltas are (dx1 0) (dx2 dy2) (0 dy3) with an optional trailing
+        /// dx4, and vhcurveto mirrors them onto the other axis.
         /// </summary>
         private void AlternatingCurves(bool horizontalFirst)
         {
@@ -477,8 +479,8 @@ internal static class Type2Charstring
                     dy1 = 0f;
                     dx2 = _stack[i + 1];
                     dy2 = _stack[i + 2];
-                    dx3 = _stack[i + 3];
-                    dy3 = extra ? _stack[i + 4] : 0f;
+                    dx3 = extra ? _stack[i + 4] : 0f;
+                    dy3 = _stack[i + 3];
                 }
                 else
                 {
@@ -486,8 +488,8 @@ internal static class Type2Charstring
                     dy1 = _stack[i];
                     dx2 = _stack[i + 1];
                     dy2 = _stack[i + 2];
-                    dx3 = extra ? _stack[i + 4] : 0f;
-                    dy3 = _stack[i + 3];
+                    dx3 = _stack[i + 3];
+                    dy3 = extra ? _stack[i + 4] : 0f;
                 }
 
                 RelativeCurve(dx1, dy1, dx2, dy2, dx3, dy3);

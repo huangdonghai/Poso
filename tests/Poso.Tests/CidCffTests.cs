@@ -164,10 +164,11 @@ public class CidCffTests
         Assert.True(outlines!.TryGetOutline(24, builder), "gid 24 must yield an outline");
         RectF b = builder.Build().Bounds;
 
-        // Hand-decoded charstring extents are (66, 34)-(1265, 1349); at 1/2048 that is at most 0.66 em
-        // wide and 0.66 em tall. A 2x reading would land near 1.3.
+        // The charstring's full point extent (control points included, as fontTools reads it) is
+        // (39, 0)-(1361, 1448); at 1/2048 that is 0.65 em wide and 0.71 em tall. A 2x reading would
+        // land near 1.3.
         Assert.True(b.Width < 0.7f, $"the CharMatrix must scale the outline to em, got width {b.Width}");
-        Assert.True(b.Height < 0.7f, $"the CharMatrix must scale the outline to em, got height {b.Height}");
+        Assert.True(b.Height < 0.75f, $"the CharMatrix must scale the outline to em, got height {b.Height}");
     }
 
     private static string PdfSample(string name)

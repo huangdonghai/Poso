@@ -773,36 +773,59 @@ public sealed class PeachFont : IFont
 
     public bool TryGetGlyphOutline(ushort glyphId, IPathBuilder path)
     {
-        if (!TryGetOutline(glyphId, out PeachOutlines.GlyphOutline? outline) || outline is null || outline.IsEmpty)
+        float scale = 1f / _unitsPerEm;
+
+        if (TryGetOutline(glyphId, out PeachOutlines.GlyphOutline? outline) && outline is not null && !outline.IsEmpty)
         {
-            return false;
+            EmitOutline(outline, 0f, 0f, scale, path);
+            return true;
         }
 
-        // Outlines arrive in design units, y-up with the baseline at the origin: the IFont orientation
-        // already - only the units-per-em normalisation is applied.
-        float scale = 1f / _unitsPerEm;
+        // A seac glyph has no outline of its own and TryGetOutline says so, but the text path expands
+        // the base-plus-accent pair itself (PeachGraphicsContext.AddSeac). The probe must answer the
+        // same question the drawer does - can this face paint this glyph - or a caller that falls back
+        // to its own outlines for the ones the probe rejects would replace a glyph this face draws
+        // well. pdf.js glyph_accent.pdf's composites lost ink exactly that way.
+        if (TryGetSeacParts(glyphId, out PeachOutlines.GlyphOutline? baseOutline,
+                out PeachOutlines.GlyphOutline? accentOutline, out float accentX, out float accentY) &&
+            baseOutline is not null)
+        {
+            EmitOutline(baseOutline, 0f, 0f, scale, path);
+            if (accentOutline is not null && !accentOutline.IsEmpty)
+            {
+                EmitOutline(accentOutline, accentX * scale, accentY * scale, scale, path);
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>Emits one outline's contours into the path, in em units at the given origin offset.</summary>
+    private static void EmitOutline(
+        PeachOutlines.GlyphOutline outline, float originX, float originY, float scale, IPathBuilder path)
+    {
         foreach (PeachOutlines.OutlineContour contour in outline.Contours)
         {
-            path.MoveTo((float)contour.Start.X * scale, (float)contour.Start.Y * scale);
+            path.MoveTo((float)contour.Start.X * scale + originX, (float)contour.Start.Y * scale + originY);
             foreach (PeachOutlines.OutlineSegment segment in contour.Segments)
             {
                 if (segment.IsCubic)
                 {
                     path.CubicTo(
-                        (float)segment.Control1.X * scale, (float)segment.Control1.Y * scale,
-                        (float)segment.Control2.X * scale, (float)segment.Control2.Y * scale,
-                        (float)segment.End.X * scale, (float)segment.End.Y * scale);
+                        (float)segment.Control1.X * scale + originX, (float)segment.Control1.Y * scale + originY,
+                        (float)segment.Control2.X * scale + originX, (float)segment.Control2.Y * scale + originY,
+                        (float)segment.End.X * scale + originX, (float)segment.End.Y * scale + originY);
                 }
                 else
                 {
-                    path.LineTo((float)segment.End.X * scale, (float)segment.End.Y * scale);
+                    path.LineTo((float)segment.End.X * scale + originX, (float)segment.End.Y * scale + originY);
                 }
             }
 
             path.Close();
         }
-
-        return true;
     }
 
     /// <summary>

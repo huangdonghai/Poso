@@ -31,12 +31,13 @@ public class OutlineFallbackTests
         Assert.True(outlines.TryGetOutline(c, builder), "the Type1C subset must yield an outline");
         IPath path = builder.Build();
 
-        // The subset's FontMatrix scales by 1/1000 and the 'C' spans 722 units wide, 1006 tall. A zero
-        // y-extent means the matrix was applied wrong; the outline is y-up, whose bounds RectF records
-        // with the smallest y in Y, so the cap's baseline overshoot (-14 units) is the top edge here.
+        // The subset's FontMatrix scales by 1/1000 and the 'C' spans 605 units wide, 690 tall (the
+        // outline's full point extent, control points included, as FreeType reads it). A zero y-extent
+        // means the matrix was applied wrong; the outline is y-up, whose bounds RectF records with the
+        // smallest y in Y, so the cap's baseline overshoot (-14 units) is the top edge here.
         RectF b = path.Bounds;
-        Assert.InRange(b.Width, 0.6f, 0.75f);
-        Assert.InRange(b.Height, 0.9f, 1.1f);
+        Assert.InRange(b.Width, 0.55f, 0.65f);
+        Assert.InRange(b.Height, 0.65f, 0.75f);
         Assert.True(b.Top >= -0.1f && b.Top <= 0.1f, "the cap sits on the baseline");
     }
 

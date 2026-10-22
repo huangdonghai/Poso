@@ -878,6 +878,42 @@ public class ContentRenderTests
     }
 
     /// <summary>
+    /// pdf.js issue6132.pdf sets its title in cmbx12, a Type1C whose /Encoding names only a few TeX
+    /// private glyphs, so the codes reach the rest through the program's own built-in encoding table.
+    /// That table was mis-parsed (format 1 read as code/glyph byte pairs, no SID-through-charset map),
+    /// and the charstring interpreter put the hvcurveto/vhcurveto axis deltas on the wrong coordinate,
+    /// so E, F, t, a, d, e, o, p and s - the letters Skia's own CFF parser also returns an empty path
+    /// for - came out missing or deformed. The fixture is the title strip only.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Render_TexPrivateEncodingTitle_DrawsEveryLetter(bool peach)
+    {
+        IGraphicsFactory factory = peach ? PeachGraphicsFactory.Default : Factory;
+        using PdfDocument document = PdfDocument.FromArray(File.ReadAllBytes(PdfSample("tex-private-encoding.pdf")));
+        using IGraphicsContext context = factory.CreateContext(920, 150);
+        document.Pages[0].Render(factory, context, new PdfRenderOptions(2f, 0f, PosoColor.White));
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+
+        int ink = 0;
+        for (int i = 0; i < pixels.Length; i += 4)
+        {
+            if (pixels[i] < 200)
+            {
+                ink++;
+            }
+        }
+
+        // PDFium inks 11.2% of the title strip. Before the fix the Skia backend sat at 5.1% with a
+        // dozen letters gone, and even Peach - whose engine parsed the charstrings correctly - lost the
+        // ffi and fi ligatures and came in at 9.2%; both backends now land between 9.4% and 10.5%.
+        double fraction = (double)ink / (image.Width * image.Height);
+        Assert.InRange(fraction, 0.093, 0.115);
+    }
+
+    /// <summary>
     /// pdf.js annotation-ink-without-appearance.pdf carries only /InkList geometry: strokes drawn in /C
     /// with the /BS width. An Ink annotation was not in the markup set, so the strokes were dropped.
     /// </summary>

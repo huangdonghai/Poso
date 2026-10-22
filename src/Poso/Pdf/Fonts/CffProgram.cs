@@ -340,7 +340,7 @@ public sealed class CffProgram : ICffMetrics
         float[]? matrix = dict.GetArray(7);
         float[]? bbox = dict.GetArray(5);
         int[] sids = ReadCharset(data, (int)dict.Get(15), charStrings.Count);
-        int[] codeToGlyph = ReadEncoding(data, (int)dict.Get(16), charStrings.Count);
+        int[] codeToGlyph = ReadEncoding(data, (int)dict.Get(16), charStrings.Count, sids);
         bool hasBuiltInEncoding = dict.Get(16) > 0;
 
         program = new CffProgram(
@@ -357,56 +357,97 @@ public sealed class CffProgram : ICffMetrics
     }
 
     /// <summary>
-    /// Reads the built-in encoding: format 0 lists codes whose glyph index is their position plus one
-    /// (glyph 0 is .notdef), format 1 lists code and glyph index pairs, optionally followed by a
-    /// supplement for codes above 255 that a simple PDF font cannot address.
+    /// Reads the built-in encoding. Format 0 lists one code per run whose glyph index is the run's
+    /// position (glyph 0 is .notdef); format 1 lists a first code and the count of consecutive codes
+    /// whose glyph indexes continue across runs. A code whose high bit is set on the format byte adds
+    /// supplements that name a glyph by SID, which reaches an index only through the charset.
     /// </summary>
-    private static int[] ReadEncoding(byte[] data, int offset, int glyphCount)
+    private static int[] ReadEncoding(byte[] data, int offset, int glyphCount, int[] charsetSids)
     {
         int[] codeToGlyph = new int[256];
-        Array.Fill(codeToGlyph, -1);
 
         if (offset <= 0 || offset >= data.Length)
         {
-            // No encoding operator: the standard CFF encoding, i.e. glyph index equals the code's
-            // position in the StandardEncoding order. Leave it unused and let the caller fall back.
+            // No encoding operator: the standard CFF encoding, which a simple PDF font cannot address
+            // by name through this table anyway. Leave it empty and let the caller fall back.
             return codeToGlyph;
         }
 
         int position = offset;
-        byte format = data[position++];
+        byte formatByte = data[position++];
         if (position >= data.Length)
         {
             return codeToGlyph;
         }
 
+        bool hasSupplement = (formatByte & 0x80) != 0;
+        int format = formatByte & 0x7F;
         int count = data[position++];
+        int glyph = 1;
+
         if (format == 0)
         {
-            for (int i = 0; i < count && position < data.Length; i++, position++)
+            for (int i = 0; i < count && position < data.Length; i++)
             {
-                int code = data[position];
-                if (code < codeToGlyph.Length && i + 1 < glyphCount)
+                int code = data[position++];
+                if (code < codeToGlyph.Length && glyph < glyphCount)
                 {
-                    codeToGlyph[code] = i + 1;
+                    codeToGlyph[code] = glyph;
+                }
+
+                glyph++;
+            }
+        }
+        else if (format == 1)
+        {
+            for (int i = 0; i < count; i++)
+            {
+                if (position + 1 >= data.Length)
+                {
+                    break;
+                }
+
+                int code = data[position++];
+                int nLeft = data[position++];
+                for (int k = 0; k <= nLeft; k++)
+                {
+                    if (code + k < codeToGlyph.Length && glyph < glyphCount)
+                    {
+                        codeToGlyph[code + k] = glyph;
+                    }
+
+                    glyph++;
                 }
             }
-
+        }
+        else
+        {
             return codeToGlyph;
         }
 
-        for (int i = 0; i < count; i++)
+        if (hasSupplement && position < data.Length)
         {
-            if (position + 2 >= data.Length)
+            int supplements = data[position++];
+            for (int i = 0; i < supplements; i++)
             {
-                break;
-            }
+                if (position + 2 >= data.Length)
+                {
+                    break;
+                }
 
-            int code = data[position++];
-            int glyph = data[position++];
-            if (code < codeToGlyph.Length && glyph > 0 && glyph < glyphCount)
-            {
-                codeToGlyph[code] = glyph;
+                int code = data[position++];
+                int sid = (data[position] << 8) | data[position + 1];
+                position += 2;
+
+                // The supplement names a glyph by SID; only the charset says which index carries it.
+                for (int gid = 1; gid < glyphCount; gid++)
+                {
+                    if (charsetSids[gid] == sid)
+                    {
+                        codeToGlyph[code] = gid;
+                        break;
+                    }
+                }
             }
         }
 

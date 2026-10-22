@@ -966,6 +966,52 @@ em 空间里的包围盒（脚本在 `_scratch/corpus_cmp/crosscheck_outlines.py
 
 所以「曲线变直线」那一处是这一类里唯一的真缺陷，剩下的数字是度量约定的差别，而不是形状还不对。
 
+## 第四十二轮 —— TeX 字体的内置编码表，以及它的 charstring 画出的曲线
+
+pdf.js issue6132.pdf 是一篇 TeX 排版的论文，标题用 cmbx12 排——一个私有编码的 Type1C 程序：PDF 的
+/Encoding 只声明了六个字形名（Gamma、Psi、Omega、fl、dieresis 等），其余的码全部要走程序**自带的
+CFF 内置编码表**。两个码在那里断了——14（"Efficient" 里的 ffi 合字）和 12（"Application" 里的 fi）
+——而且 E、F、t、a、d、e、o、p、s 这些字母整页缺失或变形。CFF 这条路上有三个互相独立的缺陷。
+
+*内置编码表解析错了。* CFF 规范 2.24 的 format 0 按字形顺序每字形列一个**码**；format 1 列的是
+(首码, nLeft) 的区间，码和字形号都跨区间连续递增——表里根本没有「字形号」字节。旧读取器把
+format 0 的每区间只前进一个字节（区间确实是一字节，但字形计数器也要每区间加一，旧代码差了一），
+把 format 1 读成 (码, 字形) 字节对——这种布局根本不存在。补充表（format 字节 & 0x80）用 **SID**
+指称字形，SID 只有经过 charset 反查才能落到字形号——旧读取器手里没有 charset 可查。修复后按规范
+解析两种 format、按 charset 反查补充表，边角情况逐条对齐 FreeType 的 `cff_encoding_load`（PDFium
+正是通过它自带的 FreeType 走这条路）：字形 0 永不被编码、码数超出字形总数的丢弃、offset 0/1
+（预定义 Standard/Expert 编码）留给调用方的回退路径。
+
+*Skia 自带的 CFF 解析器对这个程序的一部分 charstring 返回空路径。* 编码修好后合字出来了，但整页
+墨迹只有 3.2%，PDFium 是 7.8%。探针显示 Skia 的 `GetGlyphPath` 恰好在缺失的那些字母上失败（字形号
+50、68、70、71、98、101、102、112、113、116、117），而 FreeType 和 PeachDrawing 从同一个包装容器
+里把每一个都读了出来。第四十一轮的无 cmap CID 路线已经有正确的形状：逐字形地问后端，后端够不着的
+才从程序自己的读取器取。现在简单字体的 CFF 程序也走这条逐字形探测（探测的是后端自己的字形号，
+因为后端就是拿它画画的）。
+
+*我们的 charstring 解释器把 hvcurveto/vhcurveto 的增量放到了错误的轴上。* 回退把字母画出来了，但
+E 的中间横臂缺一个楔、C 变形。`hvcurveto` 的每组四个操作数是 (dx1, dx2, dy2, dy3)——曲线从水平轴
+出发，所以*第三个*操作数属于它不出发的那个轴；最后一组的第五个操作数给那个轴补上剩余坐标
+（是 dx4，不是 dy4）。旧读取器把 args[3] 给了 dx3、args[4] 给了 dy3，把交替曲线每一组的两个轴
+份额对调了。FreeType 的 `cffdecode.c` 对此写得明明白白。修复后，**cmbx12 全部 130 个字形的
+在线点与 FreeType 逐点一致**（唯一差别是每轮廓一个显式闭合点，填充结果相同）。
+
+**A/B 抓出的一处回归。** 逐字形探测扩展到简单字体后，Peach 在 `glyph_accent` 和 `issue7101` 的
+seac 组合字形上丢了墨：Peach 的 `TryGetGlyphOutline` 对 seac 字形回答「没有轮廓」，而它的文字
+路径在绘制时会自己展开 seac。探测和绘制必须回答同一个问题——这张脸能不能画这个字形——于是探测
+现在和绘制一样展开「基字+重音」对。两个文件都回到基线数字，`issue8480`（同为 seac 组合）在
+Peach 上 6.68% → 3.30% 是顺带的收益。
+
+各文件变化（未注明即 Skia）：issue12399_reduced 8.39% → 3.60%，bug1308536 10.45% → 8.02%，
+issue6132 7.20% → 6.22%（墨迹 3.22% → 6.74%，PDFium 为 7.79%），issue3566 2.19% → 1.60%
+（Peach 1.93% → 1.34%），issue8480 Peach 6.68% → 3.30%。全语料 977 个文件零回归
+（report27 → report28）。测试：issue6132 的标题条作为 `tex-private-encoding.pdf`
+（修复前 Skia 在条上墨 5.1%，修复后 10.2%；PDFium 11.2%）。
+
+这一轮的取证照旧守规矩——不靠猜字节。编码表的真实布局是把 FreeType 的加载器和 fontTools 的
+解码器并排读出来的；轴对调是把 cmbx12 那个 "E" 的操作数逐个与 FreeType 的轨迹对出来的；Skia
+的失明是在一个 FreeType 加载毫无怨言的容器里逐字形探 `GetGlyphPath` 探出来的。
+
 ## Poso 的真实问题，按严重程度排列
 
 1. **`issue19634`（20.95% → 6.74%）：Type3 字形的两处变换错误，都已修**（`4f9d00b`、`683abb5`）。
