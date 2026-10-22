@@ -26,7 +26,7 @@ internal static class CffOpenType
         [
             Table("CFF ", cff),
             Table("OS/2", Metrics(upem, ascent * toUnits, descent * toUnits, postScriptName)),
-            Table("cmap", EmptyCmap()),
+            Table("cmap", Cmap(program)),
             Table("head", Head(program, upem)),
             Table("hhea", HorizontalHeader(ascent * toUnits, descent * toUnits, program, toUnits, program.GlyphCount)),
             Table("hmtx", HorizontalMetrics(program.GlyphCount, upem)),
@@ -321,6 +321,131 @@ internal static class CffOpenType
         return stream.ToArray();
     }
 
+    /// <summary>
+    /// The container's character map, built from the program's charset: every glyph whose name the
+    /// Adobe Glyph List knows is mapped from its character to the glyph.
+    ///
+    /// A back end that opens a font looks the character up in the cmap, and the glyph id it gets back
+    /// is the one it will use to draw. With no cmap at all, a CFF program leaves the back end to guess
+    /// the ids from the charset, and the guess does not match the program's own numbering: pdf.js
+    /// issue6132.pdf's cmbx12 drew every letter as the wrong one - the page came out as evenly spaced
+    /// rubbish. The ids the back end hands out are now its own, and they address the right outlines.
+    /// </summary>
+    private static byte[] Cmap(ICffMetrics program)
+    {
+        var mappings = new SortedDictionary<int, ushort>();
+        for (int gid = 0; gid < program.GlyphCount; gid++)
+        {
+            string? name = program.GetNameForGlyph(gid);
+            if (name is null)
+            {
+                continue;
+            }
+
+            uint codePoint = AdobeGlyphList.GetUnicode(name);
+            if (codePoint == 0 || codePoint > 0xFFFF)
+            {
+                continue;
+            }
+
+            mappings.TryAdd((int)codePoint, (ushort)gid);
+        }
+
+        if (mappings.Count == 0)
+        {
+            return EmptyCmap();
+        }
+
+        // A format 4 subtable addresses a range of characters with a constant offset from the
+        // character code to the glyph id, so the characters are grouped by (glyph id - code point).
+        var segments = new SortedDictionary<int, List<int>>();
+        foreach ((int codePoint, ushort gid) in mappings)
+        {
+            int delta = gid - codePoint;
+            if (!segments.TryGetValue(delta, out List<int>? list))
+            {
+                list = [];
+                segments[delta] = list;
+            }
+
+            list.Add(codePoint);
+        }
+
+        var entries = new List<(int Start, int End, int Delta)>();
+        foreach ((int delta, List<int> codePoints) in segments)
+        {
+            codePoints.Sort();
+            int start = codePoints[0];
+            int previous = start;
+            foreach (int codePoint in codePoints)
+            {
+                if (codePoint != previous + 1)
+                {
+                    entries.Add((start, previous, delta));
+                    start = codePoint;
+                }
+
+                previous = codePoint;
+            }
+
+            entries.Add((start, previous, delta));
+        }
+
+        entries.Sort((left, right) => left.Start.CompareTo(right.Start));
+        entries.Add((0xFFFF, 0xFFFF, 1));
+
+        int segCount = entries.Count;
+        int length = 16 + (segCount * 8);
+
+        using var stream = new MemoryStream();
+        BigEndian writer = new(stream);
+
+        writer.UInt16(0); // version
+        writer.UInt16(1); // numTables
+        writer.UInt16(3); // platformID: Windows
+        writer.UInt16(1); // encodingID: Unicode BMP
+        writer.UInt32(12); // subtable offset
+
+        writer.UInt16(4); // format 4
+        writer.UInt16((ushort)length);
+        writer.UInt16(0); // language
+        writer.UInt16((ushort)(segCount * 2)); // segCountX2
+        int searchRange = 2;
+        int entrySelector = 0;
+        while (searchRange * 2 <= segCount * 2)
+        {
+            searchRange *= 2;
+            entrySelector++;
+        }
+
+        writer.UInt16((ushort)searchRange);
+        writer.UInt16((ushort)entrySelector);
+        writer.UInt16((ushort)((segCount * 2) - searchRange));
+        foreach ((int start, int end, _) in entries)
+        {
+            writer.UInt16((ushort)end);
+        }
+
+        writer.UInt16(0); // reservedPad
+        foreach ((int start, _, _) in entries)
+        {
+            writer.UInt16((ushort)start);
+        }
+
+        foreach ((_, _, int delta) in entries)
+        {
+            writer.UInt16((ushort)(delta & 0xFFFF));
+        }
+
+        foreach ((_, _, _) in entries)
+        {
+            writer.UInt16(0); // idRangeOffset
+        }
+
+        return stream.ToArray();
+    }
+
+    /// <summary>A character map with no mappings: the subtable a font with no named glyphs gets.</summary>
     private static byte[] EmptyCmap()
     {
         using var stream = new MemoryStream();

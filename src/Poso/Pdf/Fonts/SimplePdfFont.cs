@@ -44,10 +44,29 @@ public sealed class SimplePdfFont : PdfFont
 
         // An embedded CFF is addressed by glyph name: the PDF encoding is authoritative, and subsetting
         // usually strips the cmap that would otherwise map code points onto glyph IDs.
+        //
+        // The program's own glyph id is not the one the back end draws with: a back end numbers the
+        // glyphs of the font it opened, and the two only agree by accident. pdf.js issue6132.pdf's cmbx12
+        // came out as evenly spaced rubbish because every letter was drawn with the wrong outline. The
+        // name is therefore resolved to a character, and the back end is asked for the glyph of that
+        // character - so the id is the back end's, and the outline it draws is the right one.
         if (EmbeddedGlyphNames is { } cff)
         {
-            if (_codeToName[code] is { } name && cff.TryGetGlyphId(name, out ushort embedded))
+            string? name = _codeToName[code];
+            if (name is not null && cff.TryGetGlyphId(name, out ushort embedded))
             {
+                uint character = AdobeGlyphList.GetUnicode(name);
+                if (character != 0)
+                {
+                    ushort byCharacter = graphics.GetGlyphId(character);
+                    if (byCharacter != 0)
+                    {
+                        return byCharacter;
+                    }
+                }
+
+                // The name is one the Adobe Glyph List does not know (a TeX private name), so the
+                // program's own numbering is the only way to say which glyph it is.
                 return embedded;
             }
 

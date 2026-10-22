@@ -32,6 +32,9 @@ internal sealed class CidCffProgram : ICffMetrics
 
     public float[] FontBBox { get; }
 
+    /// <summary>A CID-keyed program numbers its glyphs by CID and names none of them.</summary>
+    public string? GetNameForGlyph(int glyphId) => null;
+
     /// <summary>Maps a CID (from the Type 0 / Identity codes) to the glyph ID to draw, taken from the charset.</summary>
     public Dictionary<int, ushort> CidToGid { get; }
 

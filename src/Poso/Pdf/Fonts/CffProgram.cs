@@ -7,6 +7,12 @@ internal interface ICffMetrics
     int GlyphCount { get; }
     float[] FontMatrix { get; }
     float[] FontBBox { get; }
+
+    /// <summary>
+    /// The PostScript name of a glyph, from the program's charset; null when the charset names none or
+    /// the program is CID-keyed (its glyphs have no names).
+    /// </summary>
+    string? GetNameForGlyph(int glyphId);
 }
 
 /// <summary>
