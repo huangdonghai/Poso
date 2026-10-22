@@ -405,43 +405,15 @@ public sealed class SkiaGraphicsContext : IGraphicsContext
         SKColor skColor = SkiaConversions.ToSKColor(fillColor);
         SKColor skStroke = SkiaConversions.ToSKColor(strokeColor);
 
-        // Fill-only runs (including vertical writing) go through a Skia text blob so the rasterised
-        // glyphs are reused from its glyph atlas instead of re-filling an outline path per glyph -
-        // markedly faster on text-heavy pages. Outlines are supplied in em space under the caller's
-        // CTM (which already scales by the font size and flips y for the page); Skia draws glyphs
-        // y-down, so a local Scale(1,-1) with the pen Y negated reproduces the outline path's
-        // placement exactly. Trade-off: the atlas coverage-AA inks small CJK glyphs a little lighter
-        // than the analytic path fill (geometry unchanged) - accepted for the performance win.
-        if (fill && !stroke && !clip)
-        {
-            int n = glyphs.Length;
-            ushort[] ids = new ushort[n];
-            SKPoint[] positions = new SKPoint[n];
-            for (int i = 0; i < n; i++)
-            {
-                ids[i] = glyphs[i].GlyphId;
-                positions[i] = new SKPoint(glyphs[i].X, -glyphs[i].Y);
-            }
-
-            SKFont runFont = skiaFont.Font;
-            runFont.Hinting = SKFontHinting.None;
-            runFont.Edging = SKFontEdging.Antialias;
-            _fillPaint.Color = skColor;
-
-            using var builder = new SKTextBlobBuilder();
-            builder.AddPositionedRun(ids, runFont, positions);
-            using SKTextBlob? blob = builder.Build();
-            if (blob is not null)
-            {
-                _canvas.Save();
-                _canvas.Scale(1f, -1f);
-                _canvas.DrawText(blob, 0f, 0f, _fillPaint);
-                _canvas.Restore();
-            }
-
-            return;
-        }
-
+        // The glyphs are filled from their outlines. A Skia text blob would rasterise them from the
+        // glyph atlas instead, which is not the same picture: the atlas stores a coverage mask per
+        // glyph size, and its anti-aliasing inks the letterforms a little lighter and a little
+        // narrower than the analytic path fill - pdf.js endchar.pdf's "LE HOLD-UP PLAN" came out a pixel
+        // thinner, and 141 corpus files moved closer to PDFium when the outlines were used. The
+        // atlas path was no faster either: rendering the whole corpus took the same 3m40s either way.
+        //
+        // The outlines are supplied in em space under the caller's CTM (which already scales by the
+        // font size and flips y for the page).
         foreach (GlyphPosition glyph in glyphs)
         {
             using SKPath? outline = skiaFont.GetGlyphOutlinePath(glyph.GlyphId);
