@@ -73,6 +73,58 @@ public class CmapLessTrueTypeTests
     }
 
     [Fact]
+    public void RepairSubset_RenamesACompleteFontOnlyWhenAsked()
+    {
+        // A program that needs none of the descriptor repairs: without renameSelf it is left alone.
+        byte[] sfnt = StubSfnt([
+            ("OS/2", new byte[96]),
+            ("cmap", StubCmapWithWindowsRecord()),
+            ("head", new byte[54]),
+            ("name", StubNameTable("Real Font")),
+            ("post", new byte[32]),
+        ]);
+        Assert.Null(PeachFont.RepairSubset(sfnt, "poso-embedded-abc"));
+
+        byte[]? renamed = PeachFont.RepairSubset(sfnt, "poso-embedded-abc", renameSelf: true);
+
+        Assert.NotNull(renamed);
+        Assert.Equal(0x00010000u, Read(renamed!, 0));
+        Assert.Equal(0xB105u, CheckSum(renamed!));
+        List<(string Tag, int Offset, int Length)> directory = ReadDirectory(renamed!);
+        Assert.Equal(["OS/2", "cmap", "head", "name", "post"], directory.Select(e => e.Tag));
+
+        // The name table is the one table rewritten: family, subfamily, unique ID, full name and
+        // PostScript name now all say the identity, and the declared family is gone.
+        (string _, int offset, int length) = directory.First(e => e.Tag == "name");
+        string names = ReadNameStrings(renamed!, offset, length);
+        Assert.Contains("poso-embedded-abc", names);
+        Assert.DoesNotContain("Real Font", names);
+    }
+
+    [Fact]
+    public void RepairSubset_RenamesACffProgramWithoutAddingTrueTypeTables()
+    {
+        // 'OTTO' needs no cmap/post/OS/2 repairs - those are the TrueType reader's requirements - but it
+        // does carry a name table, and a CFF subset named after an installed family pollutes the same
+        // process-wide cache.
+        byte[] sfnt = StubSfnt([
+            ("CFF ", [0x01, 0x00, 0x04, 0x02]),
+            ("head", new byte[54]),
+            ("name", StubNameTable("Real Font")),
+        ]);
+        Encoding.ASCII.GetBytes("OTTO").CopyTo(sfnt, 0);
+        Assert.Null(PeachFont.RepairSubset(sfnt, "poso-embedded-cff"));
+
+        byte[]? renamed = PeachFont.RepairSubset(sfnt, "poso-embedded-cff", renameSelf: true);
+
+        Assert.NotNull(renamed);
+        Assert.Equal(0x4F54544Fu, Read(renamed!, 0));
+        List<(string Tag, int Offset, int Length)> directory = ReadDirectory(renamed!);
+        Assert.Equal(["CFF ", "head", "name"], directory.Select(e => e.Tag));
+        Assert.Contains("poso-embedded-cff", ReadNameStrings(renamed!, directory[2].Offset, directory[2].Length));
+    }
+
+    [Fact]
     public void RepairSubset_ReplacesAnIdentityFreeNameTable()
     {
         // What a subsetting tool leaves behind: one record, the unique ID, empty.
@@ -118,7 +170,12 @@ public class CmapLessTrueTypeTests
 
         using PeachFont? font = PeachFont.Create(subset, "probe");
         Assert.NotNull(font);
-        Assert.Equal("Liberation Sans", font!.Name);
+
+        // The face keeps its own program but not the name it declares: every embedded program is renamed
+        // to the generated identity so it cannot take an installed family's slot in PeachDrawing's
+        // process-wide font-source cache (see RepairSubset's renameSelf). The metrics below are what
+        // prove the embedded face, not a substitute, is loaded.
+        Assert.StartsWith("poso-embedded-", font!.Name);
 
         using PeachFont reference = PeachFont.Create(program, "probe")!;
         List<(ushort Gid, float Width)> metrics = [

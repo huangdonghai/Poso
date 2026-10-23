@@ -180,7 +180,9 @@ public sealed class PeachFont : IFont
         bool hasCmapTable = HasCmapTable(data);
         Dictionary<uint, ushort>? cmap = Poso.Pdf.Fonts.SfntCmap.Read(data);
         string familyName = "poso-embedded-" + Guid.NewGuid().ToString("n");
-        byte[]? repaired = RepairSubset(data, familyName);
+        // The program is also renamed to the identity, not only the family it is registered under: see
+        // RepairSubset's renameSelf.
+        byte[]? repaired = RepairSubset(data, familyName, renameSelf: true);
         if (repaired is not null)
         {
             data = repaired;
@@ -234,26 +236,38 @@ public sealed class PeachFont : IFont
     /// caller generated.</item>
     /// </list>
     ///
-    /// Returns null when the program needs neither repair.
+    /// <para><paramref name="renameSelf"/> adds a third repair, for fonts that are merely complete: every
+    /// program the text stack loads is filed in a process-wide cache under the full name its own name
+    /// table declares (<c>FontFactory.CacheFontSource</c> writes <c>FontSourcesByName[FontName]</c>).
+    /// A subset that calls itself "Courier New Bold" therefore takes that name slot for the rest of the
+    /// process, and the next request for the installed Courier New Bold is handed the subset's bytes -
+    /// which map only the few characters the subset kept. That is not hypothetical: pdf.js
+    /// bug900822.pdf's subsets are named after the system families, and after rendering it,
+    /// ZapfDingbats.pdf's bold text came out with .notdef boxes. Renaming the program to the unique
+    /// identity the caller generated keeps every embedded face out of the installed families' names.</para>
+    ///
+    /// Returns null when the program needs neither repair (with <paramref name="renameSelf"/> set, only
+    /// a non-sfnt, a collection or a header too short to read returns null).
     /// </summary>
-    internal static byte[]? RepairSubset(byte[] data, string identity)
+    internal static byte[]? RepairSubset(byte[] data, string identity, bool renameSelf = false)
     {
         // 0x00010000 is the TrueType (glyf) sfnt version and 'true' (0x74727565) is Apple's spelling of the
-        // same layout; 'OTTO' CFF and collection headers are left alone. The back end reads only the first,
-        // so a 'true' program is normalised to it (the sfnt header is covered by head.checkSumAdjustment,
-        // which this method recomputes whenever it rewrites the file).
+        // same layout; 'OTTO' (CFF) is read only to be renamed, and collection headers are left alone. The
+        // back end reads only the first, so a 'true' program is normalised to it (the sfnt header is
+        // covered by head.checkSumAdjustment, which this method recomputes whenever it rewrites the file).
         if (data.Length < 12)
         {
             return null;
         }
 
         uint version = BinaryPrimitives.ReadUInt32BigEndian(data);
-        if (version is not (0x00010000 or 0x74727565))
+        bool trueType = version is 0x00010000 or 0x74727565;
+        if (!trueType && !(renameSelf && version == 0x4F54544F))
         {
             return null;
         }
 
-        bool normaliseVersion = version != 0x00010000;
+        bool normaliseVersion = trueType && version != 0x00010000;
 
         int tableCount = BinaryPrimitives.ReadUInt16BigEndian(data.AsSpan(4));
         if (data.Length < 12 + (tableCount * 16))
@@ -310,13 +324,15 @@ public sealed class PeachFont : IFont
             tables.Add((tag, offset, length));
         }
 
-        if (hasUsableCmap && hasIdentity && hasPost && hasOs2 && !normaliseVersion)
+        if (!renameSelf && hasUsableCmap && hasIdentity && hasPost && hasOs2 && !normaliseVersion)
         {
             return null;
         }
 
         var synthetic = new Dictionary<string, byte[]>(StringComparer.Ordinal);
-        if (!hasUsableCmap)
+
+        // The table repairs below are TrueType's: a CFF program is only ever renamed.
+        if (trueType && !hasUsableCmap)
         {
             synthetic["cmap"] = cmapOffset < 0
                 ? BuildEmptyCmap()
@@ -325,19 +341,19 @@ public sealed class PeachFont : IFont
             tables.Add(("cmap", 0, synthetic["cmap"].Length));
         }
 
-        if (!hasPost)
+        if (trueType && !hasPost)
         {
             synthetic["post"] = BuildEmptyPost();
             tables.Add(("post", 0, synthetic["post"].Length));
         }
 
-        if (!hasOs2)
+        if (trueType && !hasOs2)
         {
             synthetic["OS/2"] = BuildOs2(data, hheaOffset);
             tables.Add(("OS/2", 0, synthetic["OS/2"].Length));
         }
 
-        if (!hasIdentity)
+        if (renameSelf || !hasIdentity)
         {
             byte[] name = BuildNameTable(identity);
             if (tables.Exists(t => t.Tag == "name"))
@@ -375,7 +391,7 @@ public sealed class PeachFont : IFont
         }
 
         var output = new byte[total];
-        BinaryPrimitives.WriteUInt32BigEndian(output.AsSpan(0), 0x00010000);
+        BinaryPrimitives.WriteUInt32BigEndian(output.AsSpan(0), normaliseVersion ? 0x00010000u : version);
         BinaryPrimitives.WriteUInt16BigEndian(output.AsSpan(4), (ushort)count);
         BinaryPrimitives.WriteUInt16BigEndian(output.AsSpan(6), (ushort)(16 << selector));
         BinaryPrimitives.WriteUInt16BigEndian(output.AsSpan(8), (ushort)selector);

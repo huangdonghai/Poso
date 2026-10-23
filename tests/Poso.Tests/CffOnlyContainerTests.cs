@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
@@ -56,7 +57,13 @@ public class CffOnlyContainerTests
         IFont font = PdfFont.Create(document, factory, fontDictionary).GraphicsFont!;
 
         Assert.False(font.UsedFallback);
-        Assert.Equal("CffOnlyTest", font.Name);
+
+        // Peach's embedded programs are renamed to a unique identity so they cannot take an installed
+        // family's name slot in its process-wide font-source cache (see PeachFont.RepairSubset); Skia
+        // keeps the program's own name.
+        bool peach = factory is Poso.PeachDrawing.PeachGraphicsFactory;
+        Assert.True(peach ? font.Name.StartsWith("poso-embedded-", StringComparison.Ordinal) : font.Name == "CffOnlyTest",
+            $"{factory.GetType().Name} reported the embedded face as '{font.Name}'");
     }
 
     private static PdfDictionary FontDictionary(PdfDocument document)

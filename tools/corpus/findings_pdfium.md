@@ -1145,9 +1145,10 @@ out. The solver now mirrors it: pdf.js radial_gradients.pdf's four circle config
 
 Files moved: issue7406 15.93% -> 7.16% (Peach 15.48% -> 7.63%), issue18956 13.57% -> 6.14%,
 issue9243 13.79% -> 1.14% (Peach 0.03%), radial_gradients 13.81% -> 0.49%. The pattern-through-text
-route carried other files with it: pattern_text_embedded_font 10.10% -> 3.28%, ZapfDingbats (Peach)
-9.03% -> 7.31%, ShowText-ShadingPattern 1.76% -> 1.08%, issue19360 1.05% -> 0.48%, issue8111
-(Peach) 0.55% -> 0.00%. No regression anywhere in the corpus (report29 -> report30, 977 files). Tests: the four corpus files as fixtures, each
+route carried other files with it: pattern_text_embedded_font 10.10% -> 3.28%,
+ShowText-ShadingPattern 1.76% -> 1.08%, issue19360 1.05% -> 0.48%, issue8111 (Peach) 0.55% ->
+0.00%. (ZapfDingbats' Peach figure also read 7.31% in that A/B where the previous one had read
+9.03%, but Round 45 shows that was order dependence, not this fix.) No regression anywhere in the corpus (report29 -> report30, 977 files). Tests: the four corpus files as fixtures, each
 asserting the property that was broken - the complement tone, the faded band, the gradient along
 the word, and the ink total of the four panels.
 
@@ -1167,18 +1168,44 @@ because the stroke is 0.3985 pt - 0.8 device pixels at 2x: PDFium snaps it onto 
 ours antialiases it across two, and the ink measure counts the pale second row. That is the
 sub-pixel-thin-line band this project does not chase.
 
-**A note on Peach's run-to-run noise.** A full re-render changes four Peach numbers that no code
-change can explain (ZapfDingbats 7.31% -> 9.03%, issue8092 0.50% -> 0.93%, issue15443 and
-issue7580 by ~0.1pp). None of those files carries an embedded CMap, and rendering ZapfDingbats
-alone reproduces 7.31% with the same binary - PeachDrawing's output for some files depends on
-which fonts were rendered before it in the process. A Peach "regression" of this size in a resumed
-versus a single-shot run is that noise, not a code change; Skia, which shares no such state, is the
-tie-breaker.
-
 **A note on measuring ink in tests.** The radial fix looked like it had failed in the unit test
 while the corpus render showed it working: the test counted a single colour channel below the
 threshold, and the gradient is red and green. Counting ink needs the darkest channel, which is
 what the corpus comparison's luminance does.
+
+## Round 45 - an embedded font may not take an installed family's name
+
+Loading pdf.js `bug900822.pdf` changed how a later `ZapfDingbats.pdf` painted: the bold Arial and
+Courier New text came out as .notdef boxes, and the Peach diff against PDFium went from 7.31% alone
+to 9.03% in a corpus run. The trigger was found by bisecting the corpus prefix (bug900822 is the
+272nd file), and instrumentation showed the failure at glyph lookup itself:
+`Typeface.TryMapRune` returned false for exactly the characters the trigger's text contains ("r",
+"t", "e" map; "C", "h", "a" do not), while the font, its glyph ids and its outlines were otherwise
+the expected ones.
+
+The state is in PeachDrawing.Text: `FontFactory.CacheFontSource` files every font it loads in a
+process-wide dictionary keyed by the full name the program's own name table declares, and nothing
+ever removes an entry. The trigger's subsets call themselves "Courier New Bold" and friends, so they
+took those name slots; the next request for the *installed* Courier New Bold - and Arial Bold - was
+handed the subset's bytes, whose cmap covers only the characters bug900822 uses. There is no reset
+API for this: `RenderContext.ClearFontCache` clears resolved typefaces, not this table. (Source:
+PeachPDF.Mod, `src/PeachDrawing.Text/Internal/Fonts/FontFactory.cs`. The NuGet package ships no
+way to inspect or clear it.)
+
+The fix on Poso's side is the name. Every embedded program is now rebuilt with a name table that
+declares the unique identity Poso generates for it (`poso-embedded-<guid>`) - complete TrueType and
+CFF programs included, not only the subsets that already needed a cmap or a name repair. No embedded
+face can occupy an installed family's slot any more. The face itself, its cmap fallback and its
+metrics are untouched; only the strings it answers to change, so the cost is a rebuilt sfnt per
+embedded font load, which the renderer already paid for most PDF subsets.
+
+A/B (report31 -> report32, 977 files): ZapfDingbats Peach 9.03% -> 7.31%, issue8092 0.93% -> 0.50%,
+issue7580 4.38% -> 4.49%, issue15443 8.68% -> 8.75%. The last two move *up* because report31 was
+the polluted render; with order dependence gone their numbers are now deterministic, and an
+isolated re-render of all four is byte-identical to the corpus run. Every other file is unchanged
+and the bucket counts are identical (Skia 552/270/120/8/3, Peach 559/265/118/8/3). Tests: the rename
+for TrueType and CFF, a complete font left alone unless asked, and the embedded face still keeping
+its own metrics.
 
 ## Real Poso issues, worst first
 
@@ -1197,9 +1224,9 @@ what the corpus comparison's luminance does.
 2. **`pr12564` (Skia 10.03% / Peach 16.48%): PeachDrawing scrambles layout under extreme scaling.**
    The page strokes 1pt hairlines with `12700 w` under `0.0000787402 cm`; Peach scatters the text into
    unreadable garbage while Skia renders it correctly. The scramble is **deterministic** (two renders in one
-   process are byte-identical), so it is not the `SharedFontSet` cross-file pollution, and A/B shows it
-   predates the font-fallback work. The fault lies inside the third-party PeachDrawing (no source access);
-   Poso cannot fix it, only record it.
+   process are byte-identical), so it is not the font-name pollution Round 45 fixed, and A/B shows it
+   predates the font-fallback work. The fault lies inside the third-party PeachDrawing (its source is the
+   separate PeachPDF repository; Poso consumes the NuGet package), so Poso can only record it.
 
 3. **`smask_alpha_oob_transfer` — fixed** (97.22% → 0.00% on both back ends). Removed from the top of the list.
 

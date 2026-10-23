@@ -1075,9 +1075,10 @@ progressive（SOF2），我们的管理解码器拒解，于是位图来自后�
 
 各文件变化：issue7406 15.93% → 7.16%（Peach 15.48% → 7.63%），issue18956 13.57% → 6.14%，
 issue9243 13.79% → 1.14%（Peach 0.03%），radial_gradients 13.81% → 0.49%。图案填文字的这条路还
-带好了别的文件：pattern_text_embedded_font 10.10% → 3.28%，ZapfDingbats（Peach）9.03% → 7.31%，
+带好了别的文件：pattern_text_embedded_font 10.10% → 3.28%，
 ShowText-ShadingPattern 1.76% → 1.08%，issue19360 1.05% → 0.48%，issue8111（Peach）
-0.55% → 0.00%。全语料 977 个文件零回归（report29 → report30）。测试：四个语料文件各作夹具，各自断言被破坏的那个性质——取补色调、
+0.55% → 0.00%。（ZapfDingbats 的 Peach 数字在那次 A/B 里也从 9.03% 变成 7.31%，但第四十五轮
+证明那是顺序依赖，不是这次修复的功劳。）全语料 977 个文件零回归（report29 → report30）。测试：四个语料文件各作夹具，各自断言被破坏的那个性质——取补色调、
 渐隐色带、词上的渐变、四个面板的墨迹总量。
 
 *编码 CMap 也可以用 bfchar 携带映射。* bfchar/bfrange 属于 ToUnicode CMap，但把两者写反的
@@ -1092,12 +1093,6 @@ bfchar 组成的 CMap，它的文字现在渲染成 "Checkliste Service"。PDFiu
 卷绕了（样本说是黄+黑的地方它画成深蓝）。记入 `oracle_wrong.tsv`。`issue16038` 的 hatch 线差异
 是因为笔画只有 0.3985pt——2 倍下 0.8 像素：PDFium 把它吸附到一行像素上，我们是跨两行抗锯齿，而
 墨迹统计把偏淡的第二行也计入。这正是本项目不追的「亚像素细线」类。
-
-**关于 Peach 逐次运行的噪声。** 整份重渲会改变四个 Peach 数字，而任何代码改动都解释不了
-（ZapfDingbats 7.31% → 9.03%，issue8092 0.50% → 0.93%，issue15443 与 issue7580 约 0.1pp）。这四个
-文件都没有内嵌 CMap，而且用同一个二进制单独渲染 ZapfDingbats 又回到 7.31%——PeachDrawing 对某些
-文件的输出取决于同一进程里此前渲染过哪些字体。断点续跑与一次性跑之间的这种量级的 Peach「回归」
-就是这类噪声，不是代码改动；Skia 不共享这类状态，是仲裁者。
 
 **关于在测试里量墨迹的一点说明。** 径向渐变的修复在单元测试里一度像失败，而语料渲染显示它是对的：
 测试只数一个颜色通道低于阈值，而这条渐变是红和绿的。数墨迹要数最暗的通道，这正是语料比较的亮度
@@ -1120,7 +1115,8 @@ bfchar 组成的 CMap，它的文字现在渲染成 "Checkliste Service"。PDFiu
 2. **`pr12564`（Skia 10.03% / Peach 16.48%）：PeachDrawing 在极端缩放下布局错乱。**
    页面用 `12700 w` 配 `0.0000787402 cm` 画 1pt 细线，Peach 把整页文字画成散落的乱码，而 Skia 正常。
    这是**确定性**的（同进程渲染两次逐字节一致），不是 `SharedFontSet` 的跨文件污染；A/B 也证明它早于
-   字体兜底改动就存在。根因在第三方 PeachDrawing 内部（无源码），Poso 侧修不动，只能记录。
+   字体兜底改动就存在。根因在第三方 PeachDrawing 内部（源码在独立的 PeachPDF 仓库，Poso 只消费
+   NuGet 包），Poso 侧只能记录。
 
 3. **`smask_alpha_oob_transfer` —— 已修**（97.22% → 0.00%，见开头第一条）。此条从榜首移除。
 
@@ -1146,6 +1142,34 @@ bfchar 组成的 CMap，它的文字现在渲染成 "Checkliste Service"。PDFiu
 
 `jpx_smaskindata`（54.38%，见第二十九轮的参照分歧）、`issue16038`（38.30%，条纹相位与 PDFium 不同，墨迹 15.6% 对 16.8%）、`issue16316`（38.16%）、`knockout_inner_backdrop`（34.50%）、`calgray`（72.76%，PDFium 直接按 g×255 输出并跳过传递函数，pdf.js 的参考公式才是文件期望的结果）、`issue19176`（62.57%，PDFium 忽略 `/UserUnit`，正确的一方是 Poso）。
 完整排序清单见 `out/report5_triage.txt`。
+
+## 第四十五轮 —— 内嵌字体不能占用系统字体的名字
+
+先渲染 pdf.js 的 `bug900822.pdf` 再渲染 `ZapfDingbats.pdf`，后者的粗体 Arial 和 Courier New
+文字会变成 .notdef 方框，对 PDFium 的 Peach 差值从单独渲染的 7.31% 变成整份语料跑出来的 9.03%。
+用前缀二分定位到了触发文件（bug900822 是第 272 个），插桩显示失败发生在字形查找本身：
+`Typeface.TryMapRune` 对触发文件正文里出现的字符恰好返回 false（"r"、"t"、"e" 能查到，
+"C"、"h"、"a" 查不到），而字体对象、字形 id 和轮廓本身都是对的。
+
+状态在 PeachDrawing.Text 里：`FontFactory.CacheFontSource` 把每个载入的字体按**程序自带
+name 表声明的全名**写进一个进程级字典，而且从不删除。触发文件的子集自报 "Courier New Bold"
+等系统字体名，于是占住了这些名字槽；下一次查询*系统* Courier New Bold（以及 Arial Bold）时
+拿到的是子集的字节——它的 cmap 只覆盖 bug900822 用到的那些字符。这个表没有重置 API：
+`RenderContext.ClearFontCache` 清的是已解析的 typeface，不是这张表。（源码在 PeachPDF.Mod 的
+`src/PeachDrawing.Text/Internal/Fonts/FontFactory.cs`；NuGet 包没有提供查看或清理它的入口。）
+
+Poso 这边的修复落在名字上：每个内嵌程序重建时都换上只声明 Poso 生成的唯一标识
+（`poso-embedded-<guid>`）的 name 表——完整的 TrueType 和 CFF 程序也换，不只是原本就需要补
+cmap/名字的子集。这样任何内嵌字体都不可能再占用系统字体的名字槽。字体本身、它的 cmap 兜底和
+度量都不动，变的只是它自报的字符串；代价是每个内嵌字体多重建一次 sfnt，而多数 PDF 子集本来
+就要付这笔重建。
+
+A/B（report31 → report32，977 个文件）：ZapfDingbats 的 Peach 9.03% → 7.31%，issue8092
+0.93% → 0.50%，issue7580 4.38% → 4.49%，issue15443 8.68% → 8.75%。后两个数字变大，是因为
+report31 本身就是被污染的那次渲染；顺序依赖消除后它们的值才是确定的，而且这四个文件单独重渲
+与整份语料跑的 PNG 逐字节相同。其余 973 个文件全部不变，分桶计数也完全一致（Skia
+552/270/120/8/3，Peach 559/265/118/8/3）。测试覆盖：TrueType 与 CFF 的重命名、完整字体不被
+无谓改动，以及内嵌字体仍保留自己的度量。
 
 ## Poso 完全渲染不出页面的文件（Skia 10 个 / Peach 10 个）
 
