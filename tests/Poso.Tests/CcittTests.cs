@@ -106,6 +106,45 @@ public class CcittTests
     }
 
     /// <summary>
+    /// The image path must not re-derive black from /BlackIs1: the decoder has already folded the flag, so
+    /// each flag value has one fixed rendered polarity. MuPDF paints the true-flag matrix below and its exact
+    /// complement for the default flag - both checked by rendering these samples through pymupdf. Pinning
+    /// only that the two renders are complements leaves a render-path inversion free to ship, which is how a
+    /// default-flag scan (pdf.js issue5747.pdf) once reached the page as its own negative.
+    /// </summary>
+    [Fact]
+    public void CcittImage_RendersMuPdfsPolarityForEitherBlackIs1()
+    {
+        byte[] raw = Convert.FromHexString(SmallRawHex);
+        for (int variant = 0; variant < 2; variant++)
+        {
+            bool blackIs1 = variant == 0;
+            using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateCcittImagePdf(raw, blackIs1));
+            using IGraphicsContext context = SkiaGraphicsFactory.Default.CreateContext(200, 100);
+            document.Pages[0].Render(SkiaGraphicsFactory.Default, context, new PdfRenderOptions(1f, 0f, PosoColor.White), _ => { });
+
+            using IImage image = context.Snapshot();
+            byte[] pixels = new byte[image.Width * image.Height * image.BytesPerPixel];
+            image.CopyPixels(pixels);
+
+            int wrong = 0;
+            for (int row = 0; row < 12; row++)
+            {
+                int py = (int)((row + 0.5f) * 100f / 12f);
+                for (int column = 0; column < 24; column++)
+                {
+                    int px = (int)((column + 0.5f) * 200f / 24f);
+                    byte value = pixels[((py * image.Width) + px) * 4];
+                    bool wantDark = (SmallExpected[row][column] == '1') == blackIs1;
+                    if (wantDark != value < 128) { wrong++; }
+                }
+            }
+
+            Assert.True(wrong == 0, $"BlackIs1={blackIs1}: {wrong} of 288 samples painted the wrong polarity");
+        }
+    }
+
+    /// <summary>
     /// /BlackIs1 chooses which decoded bit is black, so the same codestream drawn with the default (false)
     /// flag must be the exact pixel complement of the true render. Re-applying the flag on top of the
     /// decoder's already-folded output made false equal true instead - which in practice inverted every
