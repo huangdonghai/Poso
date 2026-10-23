@@ -41,6 +41,45 @@ public class VerticalWritingTests
         Assert.False(CMap.Identity.IsVertical);
     }
 
+    /// <summary>
+    /// An encoding CMap may carry its mapping as beginbfchar/beginbfrange instead of cidchar/cidrange.
+    /// The operators are ToUnicode syntax, but pdf.js reads the destination string's bytes as a CID
+    /// (convertCidString) and so renders pdf.js bug920426.pdf, whose /Encoding is exactly this - the
+    /// file's text comes out instead of .notdef boxes.
+    /// </summary>
+    [Fact]
+    public void CMap_ParsesBfCharAndBfRangeAsCids()
+    {
+        byte[] cmap = System.Text.Encoding.ASCII.GetBytes(
+            "/CIDInit /ProcSet findresource begin 12 dict begin begincmap\n" +
+            "1 begincodespacerange <0000> <FFFF> endcodespacerange\n" +
+            "2 beginbfchar\n<0043> <0026>\n<0068> <004B>\nendbfchar\n" +
+            "1 beginbfrange\n<0020> <0021> <0003>\nendbfrange\n" +
+            "1 beginbfrange\n<0065> <0067> [<0048> <0049> <004A>]\nendbfrange\n" +
+            "endcmap end end");
+
+        CMap? parsed = CMap.Parse(cmap);
+        Assert.NotNull(parsed);
+
+        // bfchar: the two-byte destination is the CID, big-endian.
+        Assert.True(parsed!.TryLookup(new byte[] { 0x00, 0x43 }, out int cid));
+        Assert.Equal(0x26, cid);
+        Assert.True(parsed.TryLookup(new byte[] { 0x00, 0x68 }, out cid));
+        Assert.Equal(0x4B, cid);
+
+        // bfrange: consecutive CIDs from the first destination.
+        Assert.True(parsed.TryLookup(new byte[] { 0x00, 0x20 }, out cid));
+        Assert.Equal(0x03, cid);
+        Assert.True(parsed.TryLookup(new byte[] { 0x00, 0x21 }, out cid));
+        Assert.Equal(0x04, cid);
+
+        // bfrange with an array destination: one CID per code, in order.
+        Assert.True(parsed.TryLookup(new byte[] { 0x00, 0x65 }, out cid));
+        Assert.Equal(0x48, cid);
+        Assert.True(parsed.TryLookup(new byte[] { 0x00, 0x67 }, out cid));
+        Assert.Equal(0x4A, cid);
+    }
+
     [Fact]
     public void VerticalIdentityV_RendersTallColumn_MatchesMuPdf()
     {

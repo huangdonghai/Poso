@@ -1151,6 +1151,30 @@ route carried other files with it: pattern_text_embedded_font 10.10% -> 3.28%, Z
 asserting the property that was broken - the complement tone, the faded band, the gradient along
 the word, and the ink total of the four panels.
 
+*An encoding CMap can carry its mapping as bfchar.* The bfchar/bfrange operators belong to a
+ToUnicode CMap, but a producer that swaps the two is not rare, and readers accept it: pdf.js reads
+the destination string's bytes as a CID (`convertCidString` - one byte is the value, two are
+`(b0 << 8) | b1`). pdf.js bug920426.pdf's /Encoding is a CMap whose whole mapping is 100 bfchar
+entries, and its text now renders "Checkliste Service". PDFium ignores bfchar there and paints
+.notdef boxes, so this one is recorded in `oracle_wrong.tsv`; the corpus diff against PDFium moves
+only from 16.60% to 14.10% because the reference itself is the wrong side.
+
+**Two files that are not Poso's fault, arbitrated.** `function_based_shading_cmyk` looked like a
+color bug (ours 22.75% from PDFium), but MuPDF agrees with Poso to 0.81% while differing from
+PDFium by 19.29%: PDFium wraps the 2x2 sampled CMYK function at its far corner (dark blue where
+the sample says yellow+black). Recorded in `oracle_wrong.tsv`. `issue16038`'s hatch lines differ
+because the stroke is 0.3985 pt - 0.8 device pixels at 2x: PDFium snaps it onto one pixel row while
+ours antialiases it across two, and the ink measure counts the pale second row. That is the
+sub-pixel-thin-line band this project does not chase.
+
+**A note on Peach's run-to-run noise.** A full re-render changes four Peach numbers that no code
+change can explain (ZapfDingbats 7.31% -> 9.03%, issue8092 0.50% -> 0.93%, issue15443 and
+issue7580 by ~0.1pp). None of those files carries an embedded CMap, and rendering ZapfDingbats
+alone reproduces 7.31% with the same binary - PeachDrawing's output for some files depends on
+which fonts were rendered before it in the process. A Peach "regression" of this size in a resumed
+versus a single-shot run is that noise, not a code change; Skia, which shares no such state, is the
+tie-breaker.
+
 **A note on measuring ink in tests.** The radial fix looked like it had failed in the unit test
 while the corpus render showed it working: the test counted a single colour channel below the
 threshold, and the gradient is red and green. Counting ink needs the darkest channel, which is

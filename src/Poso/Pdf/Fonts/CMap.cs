@@ -121,6 +121,14 @@ public sealed class CMap
             {
                 ParseCidChar(lexer, cmap);
             }
+            else if (lexer.Match(token, "beginbfchar"u8))
+            {
+                ParseBfChar(lexer, cmap);
+            }
+            else if (lexer.Match(token, "beginbfrange"u8))
+            {
+                ParseBfRange(lexer, cmap);
+            }
         }
 
         return cmap._ranges.Count > 0 || cmap._singles.Count > 0 ? cmap : null;
@@ -205,6 +213,89 @@ public sealed class CMap
             if (cidToken.Kind == PdfTokenKind.Integer)
             {
                 cmap._singles[code] = (int)cidToken.IntegerValue;
+            }
+        }
+    }
+
+    // A bfchar/bfrange entry names the destination as a *string*, not a number: the bytes are read
+    // big-endian into the CID (pdf.js convertCidString does exactly this - one byte is the value, two
+    // are (b0 << 8) | b1). These operators belong in a ToUnicode CMap, but a producer that swaps the
+    // two is not rare, and readers accept it: pdf.js bug920426.pdf's /Encoding is a CMap whose whole
+    // mapping is bfchar, and its text renders instead of .notdef when the entries are read as CIDs.
+
+    private static void ParseBfChar(PdfLexer lexer, CMap cmap)
+    {
+        while (!lexer.AtEnd)
+        {
+            PdfToken token = lexer.NextToken();
+            if (token.Kind == PdfTokenKind.Keyword && lexer.Match(token, "endbfchar"u8))
+            {
+                return;
+            }
+
+            if (token.Kind != PdfTokenKind.HexString)
+            {
+                continue;
+            }
+
+            int code = HexToInt(lexer.Data, token.Start, token.Length);
+            PdfToken destination = lexer.NextToken();
+            if (destination.Kind == PdfTokenKind.HexString)
+            {
+                cmap._singles[code] = HexToInt(lexer.Data, destination.Start, destination.Length);
+            }
+        }
+    }
+
+    private static void ParseBfRange(PdfLexer lexer, CMap cmap)
+    {
+        while (!lexer.AtEnd)
+        {
+            PdfToken token = lexer.NextToken();
+            if (token.Kind == PdfTokenKind.Keyword && lexer.Match(token, "endbfrange"u8))
+            {
+                return;
+            }
+
+            if (token.Kind != PdfTokenKind.HexString)
+            {
+                continue;
+            }
+
+            int low = HexToInt(lexer.Data, token.Start, token.Length);
+            PdfToken highToken = lexer.NextToken();
+            if (highToken.Kind != PdfTokenKind.HexString)
+            {
+                continue;
+            }
+
+            int high = HexToInt(lexer.Data, highToken.Start, highToken.Length);
+            PdfToken destination = lexer.NextToken();
+            if (destination.Kind == PdfTokenKind.HexString)
+            {
+                int first = HexToInt(lexer.Data, destination.Start, destination.Length);
+                if (high >= low)
+                {
+                    cmap._ranges.Add((low, high, first));
+                }
+            }
+            else if (destination.Kind == PdfTokenKind.ArrayOpen)
+            {
+                // An array destination lists each code's CID in order.
+                int code = low;
+                while (code <= high)
+                {
+                    PdfToken item = lexer.NextToken();
+                    if (item.Kind == PdfTokenKind.ArrayClose)
+                    {
+                        break;
+                    }
+
+                    if (item.Kind == PdfTokenKind.HexString)
+                    {
+                        cmap._singles[code++] = HexToInt(lexer.Data, item.Start, item.Length);
+                    }
+                }
             }
         }
     }

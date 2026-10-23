@@ -6,3 +6,5 @@ calgray-6a6a83	PDFium writes g*255 and skips the transfer function; pdf.js's ref
 jpx_smaskindata-a852eb	PDFium paints stored premultiplied samples opaquely and ignores /SMaskInData for 1 and 2; pdf.js un-premultiplies with /Matte
 knockout_inner_backdrop-946fca	PDFium blends the nested non-isolated subgroup against the parent's blue (red*blue, green*blue = black); the group has to blend against its own initial backdrop
 issue19634-f3848a	PDFium paints the d1-stencil shadow neutral grey; a d1 glyph is filled in the text colour (red, ISO 32000-1 9.5.5) and MuPDF renders it red on 92% of those pixels, siding with Poso
+bug920426-3f018f	PDFium ignores bfchar in an encoding CMap and paints .notdef boxes; pdf.js reads the destination string as a CID (convertCidString) and renders "Checkliste Service", which Poso now does too
+function_based_shading_cmyk-af5e33	PDFium wraps the 2x2 sampled CMYK function at its far corner (dark blue where the sample says yellow+black); MuPDF agrees with Poso to 0.81% while differing from PDFium by 19.3%

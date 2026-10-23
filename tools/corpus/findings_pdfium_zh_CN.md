@@ -1080,6 +1080,25 @@ ShowText-ShadingPattern 1.76% → 1.08%，issue19360 1.05% → 0.48%，issue8111
 0.55% → 0.00%。全语料 977 个文件零回归（report29 → report30）。测试：四个语料文件各作夹具，各自断言被破坏的那个性质——取补色调、
 渐隐色带、词上的渐变、四个面板的墨迹总量。
 
+*编码 CMap 也可以用 bfchar 携带映射。* bfchar/bfrange 属于 ToUnicode CMap，但把两者写反的
+生成器并不罕见，读取器也都接受：pdf.js 把目的字符串的字节读成 CID（`convertCidString`——一字节
+是值本身，两字节是 `(b0 << 8) | b1`）。pdf.js bug920426.pdf 的 /Encoding 就是整张映射都由 100 条
+bfchar 组成的 CMap，它的文字现在渲染成 "Checkliste Service"。PDFium 在那里忽略 bfchar、画 .notdef
+方框，所以这一条记入 `oracle_wrong.tsv`；与 PDFium 的语料差异只从 16.60% 挪到 14.10%，因为参照
+引擎自己站错了边。
+
+**两个不是 Poso 的问题，经仲裁确认。** `function_based_shading_cmyk` 看着像颜色 bug（与 PDFium
+差 22.75%），但 MuPDF 与 Poso 只差 0.81%、与 PDFium 差 19.29%：PDFium 把 2x2 采样 CMYK 函数的远角
+卷绕了（样本说是黄+黑的地方它画成深蓝）。记入 `oracle_wrong.tsv`。`issue16038` 的 hatch 线差异
+是因为笔画只有 0.3985pt——2 倍下 0.8 像素：PDFium 把它吸附到一行像素上，我们是跨两行抗锯齿，而
+墨迹统计把偏淡的第二行也计入。这正是本项目不追的「亚像素细线」类。
+
+**关于 Peach 逐次运行的噪声。** 整份重渲会改变四个 Peach 数字，而任何代码改动都解释不了
+（ZapfDingbats 7.31% → 9.03%，issue8092 0.50% → 0.93%，issue15443 与 issue7580 约 0.1pp）。这四个
+文件都没有内嵌 CMap，而且用同一个二进制单独渲染 ZapfDingbats 又回到 7.31%——PeachDrawing 对某些
+文件的输出取决于同一进程里此前渲染过哪些字体。断点续跑与一次性跑之间的这种量级的 Peach「回归」
+就是这类噪声，不是代码改动；Skia 不共享这类状态，是仲裁者。
+
 **关于在测试里量墨迹的一点说明。** 径向渐变的修复在单元测试里一度像失败，而语料渲染显示它是对的：
 测试只数一个颜色通道低于阈值，而这条渐变是红和绿的。数墨迹要数最暗的通道，这正是语料比较的亮度
 口径做的事。
