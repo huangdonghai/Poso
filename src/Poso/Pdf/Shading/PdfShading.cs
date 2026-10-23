@@ -406,37 +406,59 @@ public sealed class PdfShading
         float y1 = _coords[4];
         float r1 = _coords[5];
 
-        float fx = x1 - x0;
-        float fy = y1 - y0;
-        float fd = (fx * fx) + (fy * fy);
+        float dx = x1 - x0;
+        float dy = y1 - y0;
         float dr = r1 - r0;
-        float dx0 = s.X - x0;
-        float dy0 = s.Y - y0;
+        float posDx = s.X - x0;
+        float posDy = s.Y - y0;
 
-        float a = fd - (dr * dr);
-        float b = -((dx0 * fx) + (dy0 * fy) + (r0 * dr));
-        float c = (dx0 * dx0) + (dy0 * dy0) - (r0 * r0);
+        // The quadratic of the circle the parameter sweeps: a·t² + b·t + c = 0, exactly as PDFium's
+        // DrawRadialShading writes it (cpdf_rendershading.cpp). b carries the factor 2, so a solver
+        // without it lands on a different root than the reference renderer's.
+        float a = (dx * dx) + (dy * dy) - (dr * dr);
+        float b = -2f * ((posDx * dx) + (posDy * dy) + (r0 * dr));
+        float c = (posDx * posDx) + (posDy * posDy) - (r0 * r0);
 
-        // Concentric / cone-closed case (a == 0): the radius is linear in t.
+        // A cone that closes (the two circles' centres coincide and the radii match) has no quadratic
+        // term, and the parameter is then linear in the distance from the start circle.
         if (MathF.Abs(a) < 1e-6f)
         {
-            float linear = MathF.Abs(b) < 1e-6f ? 0f : c / b;
+            float linear = MathF.Abs(b) < 1e-6f ? 0f : -c / b;
             return AcceptParameter(linear, out t);
         }
 
-        float determinant = (b * b) - (a * c);
+        float determinant = (b * b) - (4f * (a * c));
         if (determinant < 0f)
         {
+            // The point is outside both circles of the cone, so no circle of the sweep passes it.
             t = 0f;
             return false;
         }
 
         float root = MathF.Sqrt(determinant);
-        float first = (-b - root) / a;
-        float second = (-b + root) / a;
+        float first = (-b - root) / (2f * a);
+        float second = (-b + root) / (2f * a);
+        if (a < 0f)
+        {
+            (first, second) = (second, first);
+        }
 
-        // Choose the solution whose interpolated radius is non-negative; prefer the smaller t.
-        float chosen = (r0 + (first * dr)) >= 0f ? first : second;
+        // Which root is the visible one depends on which way the cone runs. When the radius shrinks
+        // and the circles contain each other, the sweep is traversed backwards: the first root is the
+        // one inside the cone, and the start extension decides when it falls outside the domain.
+        // Otherwise the second root is the first crossing, and the end extension decides.
+        bool decreasing = dr < 0f && MathF.Sqrt((dx * dx) + (dy * dy)) < -dr;
+        float chosen = decreasing
+            ? (first >= 0f || _extend[0] ? first : second)
+            : (second <= 1f || _extend[1] ? second : first);
+
+        // The circle the chosen root puts the point on must have a real radius.
+        if (r0 + (chosen * dr) < 0f)
+        {
+            t = 0f;
+            return false;
+        }
+
         return AcceptParameter(chosen, out t);
     }
 

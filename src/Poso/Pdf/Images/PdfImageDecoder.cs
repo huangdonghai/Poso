@@ -137,6 +137,25 @@ public static class PdfImageDecoder
                 return Masked(backendCmyk);
             }
 
+            // The /Decode array applies to the codec's samples whatever channel count it produced, and
+            // the codec never sees the dictionary. PDFium applies it in its image loader after the
+            // decoder hands back the samples (CPDF_DIB::GetDecodeAndMaskArray feeds the same
+            // decode_min_/decode_step_ the raw-sample path uses). Without this a JPEG drawn with
+            // /Decode [1 0] - the complement form - comes out in its stored tones instead of the
+            // inverted ones: pdf.js issue7406.pdf's logo printed as white-on-black where every viewer
+            // shows black-on-white.
+            int decodeComponents = JpegDecoder.PeekComponentCount(encoded);
+            if (!IsIdentityDecode(dictionary) && decodeComponents is 1 or 3 or 4)
+            {
+                System.IO.File.AppendAllText(@"D:\_git0\Poso\_scratch\trace.txt", $"DCT decode-array path: comps={decodeComponents}\n");
+                IImage? decoded = DecodeWithDecodeArray(factory, encoded, dictionary, decodeComponents, diagnostics);
+                if (decoded is not null)
+                {
+                    return Masked(decoded);
+                }
+                System.IO.File.AppendAllText(@"D:\_git0\Poso\_scratch\trace.txt", "DCT decode-array returned null\n");
+            }
+
             IImage? raster = factory.DecodeImage(encoded);
             if (raster is null)
             {
@@ -791,6 +810,75 @@ public static class PdfImageDecoder
         return factory.CreateImage(raster.Width, raster.Height, PixelFormat.Bgra8888Premul, pixels);
     }
 
+    /// <summary>
+    /// Decodes a JPEG whose /Decode array is not the identity, applying the array to the decoded pixels.
+    /// The array maps each component's samples through <c>min + sample * (max - min)</c> (PDFium:
+    /// <c>decode_step_ = (max - min) / max_sample</c> in CPDF_DIB::GetDecodeAndMaskArray), and a codec
+    /// never sees the dictionary, so the mapping is applied after decoding. A progressive file is one
+    /// the managed decoder refuses (SOF2), so the back end decodes it and the mapping runs on the BGRA
+    /// it hands back: the alpha channel is left alone and the colour channels are mapped per component,
+    /// which is the identity for a 3-component image only when the array is the identity too.
+    /// </summary>
+    private static IImage? DecodeWithDecodeArray(
+        IGraphicsFactory factory,
+        byte[] encoded,
+        PdfDictionary dictionary,
+        int componentCount,
+        PdfDiagnostics? diagnostics)
+    {
+        PdfArray? decode = dictionary.GetArray("Decode");
+        float[] min = new float[componentCount];
+        float[] max = new float[componentCount];
+        for (int c = 0; c < componentCount; c++)
+        {
+            min[c] = decode is not null && decode.Count > c * 2 ? decode.GetNumber(c * 2)?.AsFloat() ?? 0f : 0f;
+            max[c] = decode is not null && decode.Count > (c * 2) + 1 ? decode.GetNumber((c * 2) + 1)?.AsFloat() ?? 1f : 1f;
+        }
+
+        byte[] pixels;
+        int width;
+        int height;
+
+        JpegDecoder.Result? jpeg = JpegDecoder.Decode(encoded);
+        if (jpeg is not null && jpeg.Planes.Length >= componentCount && JpegColorConverter.ToBgra32(jpeg) is { } fromPlanes)
+        {
+            pixels = fromPlanes;
+            width = jpeg.Width;
+            height = jpeg.Height;
+        }
+        else
+        {
+            // The managed decoder refused the file (progressive), so let the back end decode it and map
+            // the channels of the raster it returns.
+            using IImage? raster = factory.DecodeImage(encoded);
+            if (raster is null)
+            {
+                return null;
+            }
+
+            width = raster.Width;
+            height = raster.Height;
+            pixels = new byte[width * height * raster.BytesPerPixel];
+            raster.CopyPixels(pixels);
+        }
+
+        for (int c = 0; c < componentCount; c++)
+        {
+            if (min[c] == 0f && max[c] == 1f)
+            {
+                continue;
+            }
+
+            for (int i = c; i < pixels.Length; i += 4)
+            {
+                float mapped = min[c] + (pixels[i] / 255f * (max[c] - min[c]));
+                pixels[i] = (byte)Math.Clamp((int)MathF.Round(Math.Clamp(mapped, 0f, 1f) * 255f), 0, 255);
+            }
+        }
+
+        return factory.CreateImage(width, height, PixelFormat.Bgra8888Premul, pixels);
+    }
+
     private static byte[] Combine(byte[] first, byte[] second)
     {
         byte[] result = new byte[first.Length + second.Length];
@@ -1141,7 +1229,32 @@ public static class PdfImageDecoder
         PdfDiagnostics? diagnostics)
     {
         // Soft masks are grayscale images (possibly with their own filters)
-        byte[] data = stream.Decode(diagnostics);
+        List<string> filters = GetFilters(dictionary);
+        bool dctMask = filters.Exists(f => f is "DCTDecode" or "DCT");
+        byte[] data;
+
+        if (dctMask)
+        {
+            // A soft mask is a gray image like any other, and a producer may store it as a JPEG. The
+            // raw bytes of such a stream are an entropy-coded codestream, not samples, so reading them
+            // as rows of pixels yields garbage - the mask came back as noise and the element vanished.
+            // pdf.js issue18956.pdf writes its Luminosity group's mask that way. The decoder hands back
+            // the component planes; a single-component file's first plane is the coverage.
+            JpegDecoder.Result? jpeg = JpegDecoder.Decode(stream.RawData.ToArray());
+            if (jpeg is null || jpeg.Planes.Length < 1)
+            {
+                return null;
+            }
+
+            data = jpeg.Planes[0];
+            width = jpeg.Width;
+            height = jpeg.Height;
+        }
+        else
+        {
+            data = stream.Decode(diagnostics);
+        }
+
         int bitsPerComponent = Math.Max(1, (int)(dictionary.GetIntegerValue("BitsPerComponent") ?? 8));
         int maxSample = (1 << bitsPerComponent) - 1;
         int rowBytes = (width * bitsPerComponent + 7) / 8;

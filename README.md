@@ -133,8 +133,8 @@ Poso's rendering is validated against **PDFium** (Chrome's engine) on the pdf.js
 
 | vs PDFium (953 comparable files) | Skia | Peach |
 | --- | --- | --- |
-| within 1% pixel diff | 550 | 555 |
-| within 5% | 816 (85.6%) | 818 (85.8%) |
+| within 1% pixel diff | 552 | 559 |
+| within 5% | 822 (86.3%) | 824 (86.5%) |
 | pages Poso cannot open | 10 | 10 |
 
 After excluding the files where PDFium itself is known to be the wrong side (it ignores `/UserUnit`

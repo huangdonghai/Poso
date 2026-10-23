@@ -685,7 +685,9 @@ public class ContentRenderTests
         int ink = 0;
         for (int i = 0; i < pixels.Length; i += 4)
         {
-            if (pixels[i] < 200)
+            // Any channel below the threshold counts as ink: a shading may be pure red or pure green,
+            // which a single blue channel would miss entirely.
+            if (pixels[i] < 200 || pixels[i + 1] < 200 || pixels[i + 2] < 200)
             {
                 ink++;
             }
@@ -716,7 +718,9 @@ public class ContentRenderTests
         int ink = 0;
         for (int i = 0; i < pixels.Length; i += 4)
         {
-            if (pixels[i] < 200)
+            // Any channel below the threshold counts as ink: a shading may be pure red or pure green,
+            // which a single blue channel would miss entirely.
+            if (pixels[i] < 200 || pixels[i + 1] < 200 || pixels[i + 2] < 200)
             {
                 ink++;
             }
@@ -799,7 +803,9 @@ public class ContentRenderTests
         int ink = 0;
         for (int i = 0; i < pixels.Length; i += 4)
         {
-            if (pixels[i] < 200)
+            // Any channel below the threshold counts as ink: a shading may be pure red or pure green,
+            // which a single blue channel would miss entirely.
+            if (pixels[i] < 200 || pixels[i + 1] < 200 || pixels[i + 2] < 200)
             {
                 ink++;
             }
@@ -831,7 +837,9 @@ public class ContentRenderTests
         int ink = 0;
         for (int i = 0; i < pixels.Length; i += 4)
         {
-            if (pixels[i] < 200)
+            // Any channel below the threshold counts as ink: a shading may be pure red or pure green,
+            // which a single blue channel would miss entirely.
+            if (pixels[i] < 200 || pixels[i + 1] < 200 || pixels[i + 2] < 200)
             {
                 ink++;
             }
@@ -865,7 +873,9 @@ public class ContentRenderTests
         int ink = 0;
         for (int i = 0; i < pixels.Length; i += 4)
         {
-            if (pixels[i] < 200)
+            // Any channel below the threshold counts as ink: a shading may be pure red or pure green,
+            // which a single blue channel would miss entirely.
+            if (pixels[i] < 200 || pixels[i + 1] < 200 || pixels[i + 2] < 200)
             {
                 ink++;
             }
@@ -900,7 +910,9 @@ public class ContentRenderTests
         int ink = 0;
         for (int i = 0; i < pixels.Length; i += 4)
         {
-            if (pixels[i] < 200)
+            // Any channel below the threshold counts as ink: a shading may be pure red or pure green,
+            // which a single blue channel would miss entirely.
+            if (pixels[i] < 200 || pixels[i + 1] < 200 || pixels[i + 2] < 200)
             {
                 ink++;
             }
@@ -934,7 +946,9 @@ public class ContentRenderTests
         int ink = 0;
         for (int i = 0; i < pixels.Length; i += 4)
         {
-            if (pixels[i] < 200)
+            // Any channel below the threshold counts as ink: a shading may be pure red or pure green,
+            // which a single blue channel would miss entirely.
+            if (pixels[i] < 200 || pixels[i + 1] < 200 || pixels[i + 2] < 200)
             {
                 ink++;
             }
@@ -944,6 +958,137 @@ public class ContentRenderTests
         // title survived and the rest fell onto the fake .notdef entries.
         double fraction = (double)ink / (image.Width * image.Height);
         Assert.InRange(fraction, 0.05, 0.075);
+    }
+
+    /// <summary>
+    /// pdf.js issue7406.pdf draws a progressive JPEG with /Decode [1 0 1 0 1 0] - the complement form,
+    /// which inverts every sample. A codec never sees the dictionary, so the array has to be applied to
+    /// the decoded pixels; the DCT path handed the codec's own tones straight through and the logo came
+    /// out as its negative (white-on-black where every viewer shows black-on-white).
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Render_DctImageWithComplementDecode_InvertsItsTones(bool peach)
+    {
+        IGraphicsFactory factory = peach ? PeachGraphicsFactory.Default : Factory;
+        using PdfDocument document = PdfDocument.FromArray(File.ReadAllBytes(PdfSample("issue7406-reduced.pdf")));
+        using IGraphicsContext context = factory.CreateContext(400, 100);
+        document.Pages[0].Render(factory, context, new PdfRenderOptions(2f, 0f, PosoColor.White));
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+
+        // The image's own corner is black in the stored tones and white after the array; PDFium inks
+        // 16.6% of the page and the un-inverted raster 15.3%, so the ink alone separates them only
+        // weakly - the corner sample below is what pins the inversion.
+        int ink = 0;
+        for (int i = 0; i < pixels.Length; i += 4)
+        {
+            // Any channel below the threshold counts as ink: a shading may be pure red or pure green,
+            // which a single blue channel would miss entirely.
+            if (pixels[i] < 200 || pixels[i + 1] < 200 || pixels[i + 2] < 200)
+            {
+                ink++;
+            }
+        }
+
+        Assert.InRange((double)ink / (image.Width * image.Height), 0.10, 0.13);
+
+        // The logo's backdrop, at the image's top-left corner in PDF units (10,40) -> device (20,20).
+        (byte b, byte g, byte r, _) = PixelAt(pixels, image.Width, 20, 20);
+        Assert.True(r < 40 && g < 40 && b < 40, $"the complement /Decode must leave the logo's backdrop black, got ({r},{g},{b})");
+    }
+
+    /// <summary>
+    /// pdf.js issue18956.pdf fades a gradient out through a Luminosity soft mask, painted with the `sh`
+    /// operator. Two faults kept the band solid: the ExtGState mask never reached a shading paint, and
+    /// the mask group's own coverage was stored as a JPEG, which the alpha reader took for raw samples.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Render_ShadingUnderLuminositySoftMask_FadesOut(bool peach)
+    {
+        IGraphicsFactory factory = peach ? PeachGraphicsFactory.Default : Factory;
+        using PdfDocument document = PdfDocument.FromArray(File.ReadAllBytes(PdfSample("issue18956-reduced.pdf")));
+        using IGraphicsContext context = factory.CreateContext(1584, 1224);
+        document.Pages[0].Render(factory, context, new PdfRenderOptions(2f, 0f, PosoColor.White));
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+
+        // PDFium inks 7.6% of the page; with the mask ignored the band came back solid at 13.6% diff.
+        int ink = 0;
+        for (int i = 0; i < pixels.Length; i += 4)
+        {
+            // Any channel below the threshold counts as ink: a shading may be pure red or pure green,
+            // which a single blue channel would miss entirely.
+            if (pixels[i] < 200 || pixels[i + 1] < 200 || pixels[i + 2] < 200)
+            {
+                ink++;
+            }
+        }
+
+        Assert.InRange((double)ink / (image.Width * image.Height), 0.06, 0.095);
+    }
+
+    /// <summary>
+    /// pdf.js issue9243.pdf selects a shading pattern through `/Pattern cs ... scn` and then draws its
+    /// title with it. A pattern is not a colour, so it cannot be handed to the text painter as one: the
+    /// glyphs become the stencil the pattern paints through. Without that the word came out solid black.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Render_TextFilledWithShadingPattern_GradientsTheLetters(bool peach)
+    {
+        IGraphicsFactory factory = peach ? PeachGraphicsFactory.Default : Factory;
+        using PdfDocument document = PdfDocument.FromArray(File.ReadAllBytes(PdfSample("issue9243-reduced.pdf")));
+        using IGraphicsContext context = factory.CreateContext(864, 288);
+        document.Pages[0].Render(factory, context, new PdfRenderOptions(2f, 0f, PosoColor.White));
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+
+        // The gradient runs teal to blue, so the letters' colour changes along the word: the first
+        // letter is green-dominant and the last is blue-dominant, which a flat fill never is.
+        (byte b1, byte g1, byte r1, _) = PixelAt(pixels, image.Width, 140, 95);
+        (byte b2, byte g2, byte r2, _) = PixelAt(pixels, image.Width, 140, 725);
+        Assert.True(r1 > 10 && g1 > 100 && b1 > 100, $"the first letter should be teal, got ({r1},{g1},{b1})");
+        Assert.True(b2 > 120 && b2 > r2, $"the last letter should be blue, got ({r2},{g2},{b2})");
+        Assert.True(g1 > g2, "the gradient must run from green towards blue across the word");
+    }
+
+    /// <summary>
+    /// pdf.js radial_gradients.pdf draws four circle configurations - contained, disjoint, and the two
+    /// intersecting ones - each a Type 3 shading whose cone the parameter has to be solved against. The
+    /// root of that quadratic is chosen by how the cone runs (shrinking and containing, or crossing),
+    /// and the wrong root fills the intersecting cases with a solid blob instead of the ring.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Render_RadialShadings_DrawEveryCircleConfiguration(bool peach)
+    {
+        IGraphicsFactory factory = peach ? PeachGraphicsFactory.Default : Factory;
+        using PdfDocument document = PdfDocument.FromArray(File.ReadAllBytes(PdfSample("radial_gradients-reduced.pdf")));
+        using IGraphicsContext context = factory.CreateContext(1190, 1684);
+        document.Pages[0].Render(factory, context, new PdfRenderOptions(2f, 0f, PosoColor.White));
+        using IImage image = context.Snapshot();
+        byte[] pixels = ReadPixels(image);
+
+        int ink = 0;
+        for (int i = 0; i < pixels.Length; i += 4)
+        {
+            // Any channel below the threshold counts as ink: a shading may be pure red or pure green,
+            // which a single blue channel would miss entirely.
+            if (pixels[i] < 200 || pixels[i + 1] < 200 || pixels[i + 2] < 200)
+            {
+                ink++;
+            }
+        }
+
+        // PDFium inks 37.3% of the page; the wrong root filled the intersecting panels solid and the
+        // total moved by 13.8 percentage points of pixels.
+        Assert.InRange((double)ink / (image.Width * image.Height), 0.34, 0.41);
     }
 
     /// <summary>
@@ -965,7 +1110,9 @@ public class ContentRenderTests
         int ink = 0;
         for (int i = 0; i < pixels.Length; i += 4)
         {
-            if (pixels[i] < 200)
+            // Any channel below the threshold counts as ink: a shading may be pure red or pure green,
+            // which a single blue channel would miss entirely.
+            if (pixels[i] < 200 || pixels[i + 1] < 200 || pixels[i + 2] < 200)
             {
                 ink++;
             }
@@ -1142,7 +1289,9 @@ public class ContentRenderTests
         int ink = 0;
         for (int i = 0; i < pixels.Length; i += 4)
         {
-            if (pixels[i] < 200)
+            // Any channel below the threshold counts as ink: a shading may be pure red or pure green,
+            // which a single blue channel would miss entirely.
+            if (pixels[i] < 200 || pixels[i + 1] < 200 || pixels[i + 2] < 200)
             {
                 ink++;
             }
@@ -1222,7 +1371,9 @@ public class ContentRenderTests
         int ink = 0;
         for (int i = 0; i < pixels.Length; i += 4)
         {
-            if (pixels[i] < 200)
+            // Any channel below the threshold counts as ink: a shading may be pure red or pure green,
+            // which a single blue channel would miss entirely.
+            if (pixels[i] < 200 || pixels[i + 1] < 200 || pixels[i + 2] < 200)
             {
                 ink++;
             }

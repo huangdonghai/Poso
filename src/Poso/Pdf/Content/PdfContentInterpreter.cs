@@ -30,6 +30,14 @@ public sealed class PdfContentInterpreter
     private const int MaxFormDepth = 12;
 
     /// <summary>
+    /// How many levels of pattern-through-text may nest. A tiling pattern's cell can hold text, and that
+    /// text can be filled with a pattern again - a file whose cells refer back to each other would then
+    /// never terminate, and the glyph stencil each level builds is a full-size surface. Past this depth
+    /// the pattern paint is dropped, which keeps the rest of the page.
+    /// </summary>
+    private const int MaxPatternTextDepth = 4;
+
+    /// <summary>
     /// Ceiling for a color space's component count. The specification allows at most 31 colorants in a
     /// DeviceN space, but /N and the colorant array come from the file, and an absurd value would be
     /// used as the size of a stack buffer while collecting the operands of a colour operator.
@@ -114,6 +122,9 @@ public sealed class PdfContentInterpreter
     private PdfStream? _fillTiling;
     private Matrix3x2 _fillTilingMatrix = Matrix3x2.Identity;
     private PosoColor? _fillTilingColor;
+
+    /// <summary>How many pattern-through-text paints are open right now (see MaxPatternTextDepth).</summary>
+    private int _patternTextDepth;
     private PdfStream? _strokeTiling;
     private Matrix3x2 _strokeTilingMatrix = Matrix3x2.Identity;
     private PosoColor? _strokeTilingColor;
@@ -1835,17 +1846,29 @@ public sealed class PdfContentInterpreter
             bool masked = BeginMaskedElement();
             try
             {
-                // A font whose program the back end could not load is being drawn in a substitute face.
-                // Painting the program's own outlines instead keeps the letterforms the PDF asked for;
-                // the pen positions are already in the glyph list, so this stays an ordinary path fill.
-                if (fallbackOutlines is not null)
+                if (HasPatternFill && _state.RenderMode is TextRenderMode.Fill or TextRenderMode.FillStroke)
                 {
-                    PaintOutlineRun(fallbackOutlines, textStroke);
+                    // A pattern paint cannot be handed to the back end as a colour, so the glyphs of the
+                    // run become the stencil the pattern paints through: they are drawn white on their
+                    // own surface, that surface becomes a layer mask, and the pattern paints inside the
+                    // layer over the whole device. pdf.js issue9243.pdf sets a shading pattern and then
+                    // draws its title with it - the letters came out solid black instead of the gradient.
+                    PaintPatternThroughRun(graphicsFont, fontSize, glyphs.Slice(0, glyphCount), drawMatrix, fallbackOutlines);
                 }
-
-                if (!backendGlyphs.IsEmpty)
+                else
                 {
-                    _context.DrawGlyphs(graphicsFont, fontSize, backendGlyphs, FillPaintColor(), StrokePaintColor(), _state.RenderMode, textStroke);
+                    // A font whose program the back end could not load is being drawn in a substitute face.
+                    // Painting the program's own outlines instead keeps the letterforms the PDF asked for;
+                    // the pen positions are already in the glyph list, so this stays an ordinary path fill.
+                    if (fallbackOutlines is not null)
+                    {
+                        PaintOutlineRun(fallbackOutlines, textStroke);
+                    }
+
+                    if (!backendGlyphs.IsEmpty)
+                    {
+                        _context.DrawGlyphs(graphicsFont, fontSize, backendGlyphs, FillPaintColor(), StrokePaintColor(), _state.RenderMode, textStroke);
+                    }
                 }
             }
             finally
@@ -1982,6 +2005,108 @@ public sealed class PdfContentInterpreter
                     target.Close();
                     break;
             }
+        }
+    }
+
+    /// <summary>True when the fill paint is a shading or tiling pattern rather than a flat colour.</summary>
+    private bool HasPatternFill => _patternTextDepth < MaxPatternTextDepth && (_fillShading is not null || _fillTiling is not null);
+
+    /// <summary>
+    /// Paints the current fill pattern through the letterforms of a run. The glyphs are drawn white on a
+    /// surface of their own, that surface becomes a layer mask, and the pattern paints inside the layer
+    /// across the whole device - so the shapes the glyphs cover are exactly where the pattern lands.
+    /// The glyphs come from the back end when it can draw them, and from the embedded program's own
+    /// outlines when it cannot, the same choice an ordinary text fill makes.
+    /// </summary>
+    private void PaintPatternThroughRun(
+        Poso.Graphics.IFont graphicsFont,
+        float fontSize,
+        ReadOnlySpan<GlyphPosition> glyphs,
+        in Matrix3x2 drawMatrix,
+        IPath? fallbackOutlines)
+    {
+        _patternTextDepth++;
+        try
+        {
+            PaintPatternThroughRunCore(graphicsFont, fontSize, glyphs, drawMatrix, fallbackOutlines);
+        }
+        finally
+        {
+            _patternTextDepth--;
+        }
+    }
+
+    private void PaintPatternThroughRunCore(
+        Poso.Graphics.IFont graphicsFont,
+        float fontSize,
+        ReadOnlySpan<GlyphPosition> glyphs,
+        in Matrix3x2 drawMatrix,
+        IPath? fallbackOutlines)
+    {
+        RectF clip = _context.ClipBounds;
+        int originX = (int)MathF.Floor(clip.X);
+        int originY = (int)MathF.Floor(clip.Y);
+        int width = Math.Clamp((int)MathF.Ceiling(clip.Right) - originX, 1, 4096);
+        int height = Math.Clamp((int)MathF.Ceiling(clip.Bottom) - originY, 1, 4096);
+
+        var coverage = new byte[width * height * 4];
+        using (IGraphicsContext surface = _factory.CreateContext(width, height))
+        {
+            surface.Clear(new PosoColor(0, 0, 0, 0));
+            surface.Save();
+            // The glyphs are drawn the way the ordinary text path draws them: under the page matrix
+            // composed with the run's own text matrix, which is what places them on the device grid
+            // the stencil has to cover. Handing DrawGlyphs the text matrix alone leaves them in the
+            // page's own space and the mask lands somewhere else entirely.
+            surface.SetMatrix(Matrix3x2.CreateTranslation(-originX, -originY) * _state.Ctm);
+            surface.ConcatMatrix(drawMatrix);
+            if (fallbackOutlines is not null)
+            {
+                surface.FillPath(fallbackOutlines, PosoColor.White, false);
+            }
+            else if (!glyphs.IsEmpty)
+            {
+                surface.DrawGlyphs(graphicsFont, fontSize, glyphs, PosoColor.White, PosoColor.White, TextRenderMode.Fill, default);
+            }
+
+            surface.Restore();
+            using IImage rendered = surface.Snapshot();
+            rendered.CopyPixels(coverage);
+        }
+
+        using IImage stencil = _factory.CreateImage(width, height, PixelFormat.Bgra8888Premul, coverage);
+
+        _context.PushLayer(null, 255, _state.BlendMode, stencil);
+        try
+        {
+            _context.Save();
+            _context.SetMatrix(Matrix3x2.CreateTranslation(-originX, -originY) * _state.Ctm);
+            PaintCurrentPattern();
+            _context.Restore();
+        }
+        finally
+        {
+            _context.PopLayer();
+        }
+    }
+
+    /// <summary>Paints the current fill pattern (shading first, then tiling) in the current space.</summary>
+    private void PaintCurrentPattern()
+    {
+        if (_fillShading is { } shading)
+        {
+            PaintShading(shading, _fillShadingMatrix, _streamEntryMatrix);
+        }
+        else if (_fillTiling is { } tiling)
+        {
+            RectF clip = _context.ClipBounds;
+            var builder = new PathBuilder();
+            builder.MoveTo(clip.Left, clip.Top);
+            builder.LineTo(clip.Right, clip.Top);
+            builder.LineTo(clip.Right, clip.Bottom);
+            builder.LineTo(clip.Left, clip.Bottom);
+            builder.Close();
+            PaintTiling(builder.Build(), tiling, _fillTilingMatrix, false, stroke: false);
         }
     }
 
@@ -3068,7 +3193,21 @@ public sealed class PdfContentInterpreter
         {
             // The shading is defined directly in user space (no pattern matrix), and `sh` is painted by the
             // CTM as it stands - unlike a shading pattern, which is placed by the stream's entry transform.
-            PaintShading(shading, Matrix3x2.Identity, _state.Ctm);
+            // The ExtGState's soft mask applies to this paint like any other: pdf.js issue18956.pdf fades a
+            // gradient out through a Luminosity /SMask and the shading came back as a solid band without it.
+            bool masked = BeginMaskedElement();
+            try
+            {
+                PaintShading(shading, Matrix3x2.Identity, _state.Ctm);
+            }
+            finally
+            {
+                if (masked)
+                {
+                    EndMaskedElement();
+                }
+            }
+
             return;
         }
 
@@ -3198,6 +3337,11 @@ public sealed class PdfContentInterpreter
         using (IGraphicsContext cell = _factory.CreateContext(tw, th))
         {
             var nested = new PdfContentInterpreter(_document, _factory, cell, _options, _sharedForms) { OnUnsupported = OnUnsupported };
+
+            // The pattern-through-text depth has to survive into the cell's interpreter: a cell that
+            // draws text filled with a pattern would otherwise start a fresh count and nest without
+            // bound (each level also builds a full-size stencil surface).
+            nested._patternTextDepth = _patternTextDepth;
             nested.RenderCell(stream.Decode(_diag), _document.Resolve(dict.Get("Resources")) as PdfDictionary, tileMatrix,
                 stroke ? _strokeTilingColor : _fillTilingColor);
             tile = cell.Snapshot();
@@ -3703,6 +3847,7 @@ public sealed class PdfContentInterpreter
             }
 
             var nested = new PdfContentInterpreter(_document, _factory, surface, _options, _sharedForms) { OnUnsupported = OnUnsupported };
+            nested._patternTextDepth = _patternTextDepth;
             nested.RenderCell(content, _document.Resolve(form.Dictionary.Get("Resources")) as PdfDictionary, baseMatrix);
 
             using IImage rendered = surface.Snapshot();

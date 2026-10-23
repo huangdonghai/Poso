@@ -1092,6 +1092,70 @@ The lesson is in the failure mode: a parser that is *almost* right about where a
 not visibly fail on the font - it silently fabricates entries, and the rendering evidence (a
 hundred missing letters) points at the rasteriser rather than at the byte cursor.
 
+## Round 44 - a /Decode array no codec ever sees, a shading under its mask, and text filled with a pattern
+
+Four faults in the painting path, each found by following the ink the reference renderer puts down
+and ours does not.
+
+*The DCT path ignored /Decode.* A JPEG's samples are remapped by the image's /Decode array -
+`min + sample * (max - min)`, the same `decode_min_`/`decode_step_` PDFium computes in
+CPDF_DIB::GetDecodeAndMaskArray and applies to whatever its decoder returns. No codec sees the
+dictionary, and ours handed the decoded raster straight to the page, so a file drawn with
+`/Decode [1 0]` (the complement form) came out in its stored tones instead of the inverted ones:
+pdf.js issue7406.pdf's logo printed white-on-black where every viewer shows black-on-white. The
+array is now applied to the decoded pixels on the DCT path, whatever channel count the codec
+produced - the CMYK route already had its own mapping. The one wrinkle: issue7406's JPEG is
+progressive (SOF2), which the managed decoder refuses, so the raster comes from the back end and
+the mapping runs on its BGRA.
+
+*The alpha reader read a JPEG as raw samples.* The same file's Luminosity soft mask stores its
+coverage as a JPEG too, and DecodeAlphaChannel treated the stream's bytes as rows of pixels - so
+the mask was noise and the element it masked vanished. A mask is a gray image like any other, and
+a producer may store it as a JPEG, so it now goes through the decoder and takes the single
+component's plane.
+
+*A shading never saw the ExtGState's soft mask.* The `sh` operator painted the shading straight
+to the page. Every other paint opens the mask's group first; the shading was the one element that
+did not, so pdf.js issue18956.pdf's faded gradient came back as a solid band. `sh` now opens the
+group like the rest.
+
+*Text could not be filled with a pattern.* `scn` selects a shading or tiling pattern as the paint,
+and a pattern is not a colour - it cannot be handed to the text painter as one. The glyphs of the
+run are now drawn white on a surface of their own, that surface becomes a layer mask, and the
+pattern paints inside the layer across the whole device, so exactly the letterforms are covered.
+pdf.js issue9243.pdf draws its title through a shading pattern this way; the word came out solid
+black. Both glyph routes take part: the ones the back end draws, and the ones the embedded
+program's own outlines supply when it cannot.
+
+The pattern-through-text route needs a depth guard of its own: a tiling pattern's cell can hold
+text, and that text can be filled with a pattern again, and the cell is rendered by a *fresh*
+interpreter whose counter starts at zero. The corpus has such a file
+(ContentStreamCycleType3insideType3), and without carrying the depth into the cell interpreter the
+render recursed to a stack overflow. The depth now survives into the nested interpreter, and past
+four levels the pattern paint is dropped so the rest of the page stands.
+
+*The radial shading picked the wrong root.* A Type 3 shading's parameter is the root of the
+quadratic the two circles define, and which root is the visible one depends on how the cone runs.
+Ours preferred the smaller root and fell back to the other when the radius went negative, which
+fills the intersecting-circle configurations with a solid blob. PDFium's DrawRadialShading decides
+by the cone's direction - a radius that shrinks while the circles contain each other traverses the
+sweep backwards - and carries the factor 2 in the quadratic's middle term that our solver left
+out. The solver now mirrors it: pdf.js radial_gradients.pdf's four circle configurations (13.81%
+-> 0.49%) come out ring for ring.
+
+Files moved: issue7406 15.93% -> 7.16% (Peach 15.48% -> 7.63%), issue18956 13.57% -> 6.14%,
+issue9243 13.79% -> 1.14% (Peach 0.03%), radial_gradients 13.81% -> 0.49%. The pattern-through-text
+route carried other files with it: pattern_text_embedded_font 10.10% -> 3.28%, ZapfDingbats (Peach)
+9.03% -> 7.31%, ShowText-ShadingPattern 1.76% -> 1.08%, issue19360 1.05% -> 0.48%, issue8111
+(Peach) 0.55% -> 0.00%. No regression anywhere in the corpus (report29 -> report30, 977 files). Tests: the four corpus files as fixtures, each
+asserting the property that was broken - the complement tone, the faded band, the gradient along
+the word, and the ink total of the four panels.
+
+**A note on measuring ink in tests.** The radial fix looked like it had failed in the unit test
+while the corpus render showed it working: the test counted a single colour channel below the
+threshold, and the gradient is red and green. Counting ink needs the darkest channel, which is
+what the corpus comparison's luminance does.
+
 ## Real Poso issues, worst first
 
 1. **`issue19634` (20.95% -> 19.20%): a Type3 glyph's graphics state leaked out - fixed (`4f9d00b`);
