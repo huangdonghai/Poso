@@ -319,6 +319,18 @@ public partial class MainView : UserControl
         }
     }
 
+    /// <summary>Runs the search when Enter is pressed in the query box.</summary>
+    private void OnSearchKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter || ViewModel is not { } viewModel)
+        {
+            return;
+        }
+
+        viewModel.FindCommand.Execute(null);
+        e.Handled = true;
+    }
+
     private void OnHitNavigationRequested(object? sender, int direction)
     {
         if (ViewModel is not { } viewModel || Viewer is not { } viewer || viewModel.SearchHitCount == 0)

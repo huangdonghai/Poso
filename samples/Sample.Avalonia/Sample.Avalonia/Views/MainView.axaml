@@ -51,7 +51,7 @@
 
             <StackPanel Grid.Column="5" Orientation="Horizontal" Spacing="4" HorizontalAlignment="Right">
                 <Button Content="Copy" Click="OnCopyClick" ToolTip.Tip="Copy the selected text (Ctrl+C)" />
-                <TextBox Text="{Binding SearchQuery}" Width="160" PlaceholderText="Search in document" />
+                <TextBox Text="{Binding SearchQuery}" Width="160" PlaceholderText="Search in document" KeyDown="OnSearchKeyDown" />
                 <Button Content="Find" Command="{Binding FindCommand}" />
                 <Button Content="&#9664;" Command="{Binding PreviousHitCommand}" Width="28" />
                 <Button Content="&#9654;" Command="{Binding NextHitCommand}" Width="28" />
