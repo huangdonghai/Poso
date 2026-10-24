@@ -339,6 +339,42 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// A page whose crop box does not start at the origin, whose /Rotate is 90 and whose /UserUnit
+    /// is 2, holding one asymmetric black marker rectangle at user (20,30)-(60,50). Rendering it and
+    /// mapping the same rectangle through the viewer's page-to-view matrix must line up for every
+    /// view rotation.
+    /// </summary>
+    public static byte[] CreateRotatedUserUnitPdf()
+    {
+        string content = "0 0 0 rg 20 30 40 20 re f";
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new PdfObjectDefinition(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /CropBox [10 20 210 120] /Rotate 90 /UserUnit 2 /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)));
+    }
+
+    /// <summary>
+    /// Two pages that each carry the <see cref="CreateGraphicsPdf"/> text line, so a selection can
+    /// be dragged from one page into the next.
+    /// </summary>
+    public static byte[] CreateTwoPageTextPdf()
+    {
+        string widths = string.Join(" ", Enumerable.Repeat("500", 95));
+        string font = $"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding /FirstChar 32 /LastChar 126 /Widths [{widths}] >>";
+        string pageDictionary = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>";
+        string content = "BT /F1 12 Tf 20 50 Td (Hello Poso) Tj ET";
+
+        return Build(1,
+            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R 6 0 R] /Count 2 >>"),
+            new PdfObjectDefinition(3, pageDictionary),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            new PdfObjectDefinition(5, font),
+            new PdfObjectDefinition(6, pageDictionary));
+    }
+
+    /// <summary>
     /// A three-line text page exercising line-positioning operators: baseline via Td, then a
     /// TD (which also sets the leading) for line 2, then T* (which must step by that leading) for
     /// line 3. Guards the TD leading-sign bug where T* moved the wrong way and stacked line 3 on line 1.

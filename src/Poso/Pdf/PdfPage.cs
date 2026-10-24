@@ -172,6 +172,13 @@ public sealed class PdfPage
     private IReadOnlyList<PdfLink>? _links;
 
     /// <summary>
+    /// The page's extracted text when <see cref="GetText"/> has already run, otherwise null. Never
+    /// extracts: text extraction costs tens of milliseconds on a text-heavy page, so a caller that
+    /// asks from an input handler uses this to stay non-blocking.
+    /// </summary>
+    public PdfTextPage? PeekText() => _textPage;
+
+    /// <summary>
     /// Extracts the text of this page (cached). Runs the content interpreter with a no-op
     /// drawing context, so only text operators matter.
     /// </summary>
