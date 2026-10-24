@@ -160,7 +160,7 @@ internal sealed class PageRenderPipeline
                 return;
             }
 
-            var options = new PdfRenderOptions((float)scale, rotationDegrees - page.Rotation, PosoColor.White);
+            var options = new PdfRenderOptions((float)scale, rotationDegrees, PosoColor.White);
 
             WriteableBitmap? bitmap;
             await _renderGate.WaitAsync(cts.Token).ConfigureAwait(false);

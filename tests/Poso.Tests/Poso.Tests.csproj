@@ -12,12 +12,14 @@
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="Avalonia.Headless" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Poso\Poso.csproj" />
     <ProjectReference Include="..\..\src\Poso.Skia\Poso.Skia.csproj" />
     <ProjectReference Include="..\..\src\Poso.PeachDrawing\Poso.PeachDrawing.csproj" />
+    <ProjectReference Include="..\..\src\Poso.Avalonia\Poso.Avalonia.csproj" />
   </ItemGroup>
 
   <ItemGroup>

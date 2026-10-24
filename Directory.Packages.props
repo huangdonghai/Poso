@@ -7,6 +7,8 @@
   <ItemGroup>
     <!-- Keep in sync with samples/Sample.Avalonia/Directory.Packages.props -->
     <PackageVersion Include="Avalonia" Version="12.1.2" />
+    <!-- Headless UI tests for the Avalonia viewer (tests/Poso.Tests). Keep in step with Avalonia above. -->
+    <PackageVersion Include="Avalonia.Headless" Version="12.1.2" />
     <!-- 3.119.4 is the version resolved by the Avalonia 12.1.2 desktop stack: share one native Skia build. -->
     <PackageVersion Include="SkiaSharp" Version="3.119.4" />
     <!-- PeachDrawing pure-managed raster backend (src/Poso.PeachDrawing). 0.x line: pin centrally, upgrades must pass the full regression. -->
