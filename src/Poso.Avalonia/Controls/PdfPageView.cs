@@ -17,9 +17,12 @@ internal sealed class PdfPageView : ContentControl
 {
     private static readonly IBrush HighlightBrush = new SolidColorBrush(Color.FromArgb(0x66, 0xFF, 0xB3, 0x00));
     private static readonly IBrush ActiveHighlightBrush = new SolidColorBrush(Color.FromArgb(0x99, 0xFF, 0x8C, 0x00));
+    private static readonly IBrush SelectionBrush = new SolidColorBrush(Color.FromArgb(0x66, 0x33, 0x99, 0xFF));
     private static readonly IBrush LinkBrush = Brushes.Transparent;
+    private static readonly Cursor TextCursor = new Cursor(StandardCursorType.Ibeam);
 
     private readonly Image _image;
+    private readonly Canvas _selection;
     private readonly Canvas _overlay;
 
     public PdfPageView()
@@ -31,16 +34,24 @@ internal sealed class PdfPageView : ContentControl
             VerticalAlignment = VerticalAlignment.Stretch,
         };
 
+        _selection = new Canvas { IsHitTestVisible = false };
         _overlay = new Canvas();
 
         var grid = new Grid();
         grid.Children.Add(_image);
+        grid.Children.Add(_selection);
         grid.Children.Add(_overlay);
         Content = grid;
 
         // The page size is driven by Width/Height, so no margin is needed
         Margin = new Thickness(0);
     }
+
+    /// <summary>
+    /// Shows the text cursor over the page (when the pointer is over selectable text) or drops back
+    /// to the inherited default cursor.
+    /// </summary>
+    public void SetTextCursor(bool overText) => Cursor = overText ? TextCursor : null;
 
     /// <summary>Zero-based page index.</summary>
     public int PageIndex { get; set; }
@@ -58,6 +69,37 @@ internal sealed class PdfPageView : ContentControl
         if (!ReferenceEquals(_image.Source, bitmap))
         {
             _image.Source = bitmap;
+        }
+    }
+
+    /// <summary>
+    /// Replaces the text-selection highlight (device coordinates relative to the page). Null or an
+    /// empty list removes it. Kept on its own layer so a drag does not rebuild the link hotspots.
+    /// </summary>
+    public void SetSelection(IReadOnlyList<Rect>? rects)
+    {
+        if (rects is null || rects.Count == 0)
+        {
+            if (_selection.Children.Count > 0)
+            {
+                _selection.Children.Clear();
+            }
+
+            return;
+        }
+
+        _selection.Children.Clear();
+        foreach (Rect rect in rects)
+        {
+            var highlight = new Rectangle
+            {
+                Fill = SelectionBrush,
+                Width = Math.Max(1, rect.Width),
+                Height = Math.Max(1, rect.Height),
+            };
+            Canvas.SetLeft(highlight, rect.X);
+            Canvas.SetTop(highlight, rect.Y);
+            _selection.Children.Add(highlight);
         }
     }
 

@@ -1,17 +1,23 @@
 using System.Collections.Generic;
+using System.Numerics;
+using System.Text;
+using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
+using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
+using Avalonia.Threading;
 using Poso.Avalonia.Imaging;
 using Poso.Avalonia.Rendering;
 using Poso.Geometry;
 using Poso.Graphics;
 using Poso.Pdf;
+using Vector = Avalonia.Vector;
 
 namespace Poso.Avalonia.Controls;
 
@@ -41,7 +47,7 @@ public sealed class LinkActivatedEventArgs : EventArgs
 /// <summary>
 /// A PDF viewer control: loads a <see cref="PdfDocument"/>, renders pages through the injected
 /// <see cref="IGraphicsFactory"/> backend (e.g. the Skia backend) and provides zooming, panning,
-/// rotation, page navigation, text search highlighting and link activation.
+/// rotation, page navigation, text selection and search highlighting, and link activation.
 /// </summary>
 public sealed class PdfView : ContentControl
 {
@@ -59,13 +65,37 @@ public sealed class PdfView : ContentControl
     private readonly ScrollViewer _scrollViewer;
     private readonly StackPanel _pagesPanel;
     private readonly List<PdfPageView> _pageViews = new();
+    private readonly DispatcherTimer _dragScrollTimer;
+    private readonly DispatcherTimer _hoverTextTimer;
     private PageRenderPipeline? _pipeline;
     private Point _panOrigin;
     private Vector _panStartOffset;
     private bool _panning;
+    private bool _spaceHeld;
     private bool _suppressPageChanged;
     private List<PdfSearchHit> _searchHits = new();
     private int _activeHit = -1;
+
+    // Text selection: carets are (page index, position in PdfTextPage.Text) pairs. Anchor and focus
+    // are normalized into reading order when the highlight and copied text are computed.
+    private bool _selecting;
+    private bool _hasAnchor;
+    private (int Page, int Caret) _selectionAnchor;
+    private (int Page, int Caret) _selectionFocus;
+    private readonly HashSet<int> _selectionPages = new();
+    private bool _selectionDirty;
+    private string _selectedText = string.Empty;
+    private Vector _dragPoint;
+    private int _clickCount;
+    private long _lastClickTime;
+    private Point _lastClickPosition;
+
+    // Hover: the text cursor follows selectable text, so the pointer position is tracked and the
+    // page under it is read for text off the UI thread after a short dwell.
+    private Point _hoverPoint;
+    private int _hoverPage = -1;
+    private int _textCursorPage = -1;
+    private readonly HashSet<int> _textPrefetched = new();
 
     // The hosting top-level, tracked so we can re-render at the new device resolution when the
     // HiDPI scaling factor changes (e.g. the window moves to a monitor with a different DPI).
@@ -108,10 +138,19 @@ public sealed class PdfView : ContentControl
 
         // handledEventsToo: the inner ScrollViewer consumes the wheel when it can scroll, but single-page
         // mode still needs the event to turn the page when there is nothing to scroll.
+        _dragScrollTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(30) };
+        _dragScrollTimer.Tick += OnDragScrollTick;
+
+        _hoverTextTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
+        _hoverTextTimer.Tick += OnHoverTextTick;
+
         AddHandler(PointerWheelChangedEvent, OnPointerWheel, RoutingStrategies.Bubble, handledEventsToo: true);
         AddHandler(PointerPressedEvent, OnPointerPressed, RoutingStrategies.Bubble);
         AddHandler(PointerMovedEvent, OnPointerMoved, RoutingStrategies.Bubble);
         AddHandler(PointerReleasedEvent, OnPointerReleased, RoutingStrategies.Bubble);
+        AddHandler(PointerCaptureLostEvent, OnPointerCaptureLost, RoutingStrategies.Bubble);
+        AddHandler(KeyDownEvent, OnKeyDown, RoutingStrategies.Bubble);
+        AddHandler(KeyUpEvent, OnKeyUp, RoutingStrategies.Bubble);
         LayoutUpdated += OnLayoutUpdated;
     }
 
@@ -218,6 +257,9 @@ public sealed class PdfView : ContentControl
     /// <summary>Raised when a link hotspot is clicked.</summary>
     public event EventHandler<LinkActivatedEventArgs>? LinkActivated;
 
+    /// <summary>Raised when the selected text changes.</summary>
+    public event EventHandler? SelectionChanged;
+
     // ---- Public API ----
 
     /// <summary>Number of pages in the current document (0 when none).</summary>
@@ -308,6 +350,43 @@ public sealed class PdfView : ContentControl
         RefreshOverlays();
     }
 
+    /// <summary>The selected text, or an empty string when nothing is selected.</summary>
+    public string SelectedText => _selectedText;
+
+    /// <summary>Copies the current selection to the clipboard; returns false when there is nothing to copy.</summary>
+    public async Task<bool> CopySelectionAsync()
+    {
+        if (_selectedText.Length == 0)
+        {
+            return false;
+        }
+
+        IClipboard? clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+        if (clipboard is null)
+        {
+            return false;
+        }
+
+        await clipboard.SetTextAsync(_selectedText);
+        return true;
+    }
+
+    /// <summary>Clears the selection and its highlight.</summary>
+    public void ClearSelection()
+    {
+        if (_selectionAnchor == _selectionFocus && _selectedText.Length == 0)
+        {
+            return;
+        }
+
+        _selecting = false;
+        _hasAnchor = false;
+        _dragScrollTimer.Stop();
+        _selectionAnchor = default;
+        _selectionFocus = default;
+        UpdateSelection();
+    }
+
     /// <summary>Marks every page overlay as stale so the next pass rebuilds them.</summary>
     private void InvalidateOverlays()
     {
@@ -356,11 +435,13 @@ public sealed class PdfView : ContentControl
                  change.Property == RotationProperty || change.Property == PageSpacingProperty)
         {
             _pipeline?.Invalidate();
+            _selectionDirty = true;
             UpdatePageSizes();
             UpdateOverlaysAndVisibility();
         }
         else if (change.Property == PageLayoutProperty)
         {
+            _selectionDirty = true;
             UpdatePageSizes();
             UpdateOverlaysAndVisibility();
         }
@@ -390,6 +471,24 @@ public sealed class PdfView : ContentControl
         _overlayRotation = int.MinValue;
         _lastFitZoom = 0;
         InvalidateOverlays();
+
+        bool hadSelection = _selectedText.Length > 0;
+        _selecting = false;
+        _hasAnchor = false;
+        _dragScrollTimer.Stop();
+        _hoverTextTimer.Stop();
+        _hoverPage = -1;
+        _textCursorPage = -1;
+        _textPrefetched.Clear();
+        _selectionAnchor = default;
+        _selectionFocus = default;
+        _selectedText = string.Empty;
+        _selectionPages.Clear();
+        _selectionDirty = false;
+        if (hadSelection)
+        {
+            SelectionChanged?.Invoke(this, EventArgs.Empty);
+        }
 
         PdfDocument? document = Source;
         IGraphicsFactory? factory = GraphicsFactory;
@@ -513,6 +612,11 @@ public sealed class PdfView : ContentControl
             InvalidateOverlays();
         }
 
+        if (_selectionDirty)
+        {
+            UpdateSelection();
+        }
+
         bool singlePage = PageLayout == PageLayout.SinglePage;
         for (int i = 0; i < _pageViews.Count; i++)
         {
@@ -583,16 +687,17 @@ public sealed class PdfView : ContentControl
             _hitsByPage = grouped;
         }
 
-        Size pageSize = ZoomMath.PageSize(page, Rotation);
+        // Page user space is y-up and unrotated; the matrix folds in the crop box, /UserUnit, the
+        // page's own /Rotate and the view rotation, the same way the renderer's base matrix does.
+        Matrix3x2 pageToView = ZoomMath.PageToViewMatrix(page, Rotation, zoom);
 
-        // Highlights (page user space is y-up: flip into the device space of the page view)
         var highlights = new List<Rect>();
         int activeIndex = -1;
         if (_hitsByPage.TryGetValue(pageIndex, out List<(RectF Rect, bool Active)>? hits))
         {
             for (int i = 0; i < hits.Count; i++)
             {
-                highlights.Add(ToDeviceRect(hits[i].Rect, pageSize, zoom));
+                highlights.Add(ZoomMath.ToViewRect(hits[i].Rect, pageToView));
                 if (hits[i].Active && activeIndex < 0)
                 {
                     activeIndex = highlights.Count - 1;
@@ -603,7 +708,7 @@ public sealed class PdfView : ContentControl
         var links = new List<(Rect, PdfLink)>();
         foreach (PdfLink link in page.Links)
         {
-            links.Add((ToDeviceRect(link.Rect, pageSize, zoom), link));
+            links.Add((ZoomMath.ToViewRect(link.Rect, pageToView), link));
         }
 
         view.SetOverlay(highlights, activeIndex, links);
@@ -873,38 +978,560 @@ public sealed class PdfView : ContentControl
 
     private void OnPointerPressed(object? sender, PointerPressedEventArgs e)
     {
-        if (Source is null || !e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+        if (Source is null || _pageViews.Count == 0)
         {
             return;
         }
 
-        _panning = true;
-        _panOrigin = e.GetPosition(_scrollViewer);
-        _panStartOffset = _scrollViewer.Offset;
-        e.Pointer.Capture(_scrollViewer);
+        PointerPoint pointer = e.GetCurrentPoint(this);
+
+        // Panning follows the reader convention now that the left button selects: middle-drag, or
+        // space held down while dragging with the left button.
+        if (pointer.Properties.IsMiddleButtonPressed ||
+            (pointer.Properties.IsLeftButtonPressed && _spaceHeld))
+        {
+            _panning = true;
+            _panOrigin = e.GetPosition(_scrollViewer);
+            _panStartOffset = _scrollViewer.Offset;
+            e.Pointer.Capture(_scrollViewer);
+            e.Handled = true;
+            return;
+        }
+
+        if (!pointer.Properties.IsLeftButtonPressed || GraphicsFactory is null)
+        {
+            return;
+        }
+
+        // Keyboard copy and the space-pan gesture need focus on this control
+        Focus();
+
+        Point panelPoint = e.GetPosition(_pagesPanel);
+        if (!TryGetPageAt(panelPoint, out int pageIndex))
+        {
+            ClearSelection();
+            return;
+        }
+
+        PdfTextPage? text = GetTextPage(pageIndex);
+        if (text is null)
+        {
+            return;
+        }
+
+        int caret = CaretAt(pageIndex, e.GetPosition(_pageViews[pageIndex]));
+        (int Page, int Caret) position = (pageIndex, caret);
+
+        bool extend = _hasAnchor;
+        _clickCount = IsSameClickSpot(panelPoint) ? Math.Min(_clickCount + 1, 3) : 1;
+        _lastClickTime = Environment.TickCount64;
+        _lastClickPosition = panelPoint;
+        _hasAnchor = true;
+
+        if (_clickCount == 2)
+        {
+            (int start, int end) = text.GetWordRange(caret);
+            _selectionAnchor = (pageIndex, start);
+            _selectionFocus = (pageIndex, end);
+        }
+        else if (_clickCount >= 3)
+        {
+            (int start, int end) = text.GetLineRange(caret);
+            _selectionAnchor = (pageIndex, start);
+            _selectionFocus = (pageIndex, end);
+        }
+        else if (e.KeyModifiers.HasFlag(KeyModifiers.Shift) && extend)
+        {
+            _selectionFocus = position;
+        }
+        else
+        {
+            _selectionAnchor = position;
+            _selectionFocus = position;
+        }
+
+        _selecting = true;
+        _dragPoint = e.GetPosition(_scrollViewer);
+        e.Pointer.Capture(this);
+        UpdateSelection();
+        e.Handled = true;
     }
 
     private void OnPointerMoved(object? sender, PointerEventArgs e)
     {
-        if (!_panning)
+        if (_selecting)
         {
+            _dragPoint = e.GetPosition(_scrollViewer);
+            UpdateSelectionFocus(e.GetPosition(_pagesPanel));
+            UpdateDragScroll(_dragPoint);
+            e.Handled = true;
             return;
         }
 
-        Point current = e.GetPosition(_scrollViewer);
-        Vector delta = current - _panOrigin;
-        _scrollViewer.Offset = new Vector(
-            Math.Max(0, _panStartOffset.X - delta.X),
-            Math.Max(0, _panStartOffset.Y - delta.Y));
-        e.Handled = true;
+        if (_panning)
+        {
+            Point current = e.GetPosition(_scrollViewer);
+            Vector delta = current - _panOrigin;
+            _scrollViewer.Offset = new Vector(
+                Math.Max(0, _panStartOffset.X - delta.X),
+                Math.Max(0, _panStartOffset.Y - delta.Y));
+            e.Handled = true;
+            return;
+        }
+
+        UpdateHover(e.GetPosition(_pagesPanel));
     }
 
     private void OnPointerReleased(object? sender, PointerReleasedEventArgs e)
     {
+        if (_selecting)
+        {
+            _selecting = false;
+            _dragScrollTimer.Stop();
+            e.Pointer.Capture(null);
+            e.Handled = true;
+            return;
+        }
+
         if (_panning)
         {
             _panning = false;
             e.Pointer.Capture(null);
+            e.Handled = true;
+        }
+    }
+
+    private void OnPointerCaptureLost(object? sender, PointerCaptureLostEventArgs e)
+    {
+        // Only react when this control lost the capture; child elements (the ScrollViewer) losing it
+        // as the selection capture takes over must not end the drag.
+        if (!ReferenceEquals(e.Source, this))
+        {
+            return;
+        }
+
+        _selecting = false;
+        _panning = false;
+        _dragScrollTimer.Stop();
+    }
+
+    private void OnKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Space)
+        {
+            _spaceHeld = true;
+            e.Handled = true;
+            return;
+        }
+
+        bool command = e.KeyModifiers.HasFlag(KeyModifiers.Control) || e.KeyModifiers.HasFlag(KeyModifiers.Meta);
+        if (command && e.Key == Key.C && _selectedText.Length > 0)
+        {
+            _ = CopySelectionAsync();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Escape && _selectedText.Length > 0)
+        {
+            ClearSelection();
+            e.Handled = true;
+        }
+    }
+
+    private void OnKeyUp(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Space)
+        {
+            _spaceHeld = false;
+            e.Handled = true;
+        }
+    }
+
+    // ---- Text selection ----
+
+    /// <summary>The nearest caret position to a point in pages-panel coordinates.</summary>
+    private (int Page, int Caret) CaretAt(Point panelPoint)
+    {
+        int page = NearestPage(panelPoint);
+        if (page < 0)
+        {
+            return _selectionFocus;
+        }
+
+        Rect bounds = _pageViews[page].Bounds;
+        var local = new Point(panelPoint.X - bounds.X, panelPoint.Y - bounds.Y);
+        return (page, CaretAt(page, local));
+    }
+
+    /// <summary>The nearest caret position to a point in a page view's own coordinates.</summary>
+    private int CaretAt(int pageIndex, Point viewPoint)
+    {
+        PdfTextPage? text = GetTextPage(pageIndex);
+        if (text is null)
+        {
+            return 0;
+        }
+
+        return text.GetCaretIndex(PagePoint(pageIndex, viewPoint));
+    }
+
+    /// <summary>Maps a point in a page view's own coordinates to that page's user space.</summary>
+    private Vector2 PagePoint(int pageIndex, Point viewPoint)
+    {
+        Matrix3x2 pageToView = ZoomMath.PageToViewMatrix(Source!.Pages[pageIndex], Rotation, EffectiveZoom);
+        return ZoomMath.ToPagePoint(viewPoint, pageToView);
+    }
+
+    /// <summary>
+    /// Tracks the pointer over the pages: the text cursor is shown only where the page actually has
+    /// text, and a page that has not been read yet is read off the UI thread once the pointer dwells.
+    /// </summary>
+    private void UpdateHover(Point panelPoint)
+    {
+        _hoverPoint = panelPoint;
+
+        int page = TryGetPageAt(panelPoint, out int index) ? index : -1;
+        if (page != _hoverPage)
+        {
+            _hoverPage = page;
+            RestartHoverPrefetch(page);
+        }
+
+        UpdateTextCursor();
+    }
+
+    private void RestartHoverPrefetch(int pageIndex)
+    {
+        _hoverTextTimer.Stop();
+
+        // Extraction takes tens of milliseconds on a text-heavy page (measured: ~5ms on the PDF
+        // specification, ~50ms on a typeset book), so it never runs from the pointer handler itself.
+        if (pageIndex >= 0 &&
+            Source?.Pages[pageIndex].PeekText() is null &&
+            !_textPrefetched.Contains(pageIndex))
+        {
+            _hoverTextTimer.Start();
+        }
+    }
+
+    private void OnHoverTextTick(object? sender, EventArgs e)
+    {
+        _hoverTextTimer.Stop();
+
+        int pageIndex = _hoverPage;
+        PdfDocument? document = Source;
+        IGraphicsFactory? factory = GraphicsFactory;
+        if (document is null || factory is null ||
+            pageIndex < 0 || pageIndex >= document.PageCount ||
+            document.Pages[pageIndex].PeekText() is not null ||
+            !_textPrefetched.Add(pageIndex))
+        {
+            return;
+        }
+
+        PdfPage page = document.Pages[pageIndex];
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                page.GetText(factory);
+            }
+            catch
+            {
+                // A page whose text cannot be read simply keeps the default cursor
+            }
+
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (ReferenceEquals(Source, document))
+                {
+                    UpdateTextCursor();
+                }
+            });
+        });
+    }
+
+    private void UpdateTextCursor()
+    {
+        PdfDocument? document = Source;
+        int page = -1;
+
+        if (document is not null && GraphicsFactory is not null &&
+            TryGetPageAt(_hoverPoint, out int index))
+        {
+            Rect bounds = _pageViews[index].Bounds;
+            var local = new Point(_hoverPoint.X - bounds.X, _hoverPoint.Y - bounds.Y);
+            PdfTextPage? text = document.Pages[index].PeekText();
+            if (text is not null && text.IsOverText(PagePoint(index, local)))
+            {
+                page = index;
+            }
+        }
+
+        if (page == _textCursorPage)
+        {
+            return;
+        }
+
+        if (_textCursorPage >= 0 && _textCursorPage < _pageViews.Count)
+        {
+            _pageViews[_textCursorPage].SetTextCursor(false);
+        }
+
+        if (page >= 0)
+        {
+            _pageViews[page].SetTextCursor(true);
+        }
+
+        _textCursorPage = page;
+    }
+
+    private void UpdateSelectionFocus(Point panelPoint)
+    {
+        (int Page, int Caret) caret = CaretAt(panelPoint);
+        if (caret == _selectionFocus)
+        {
+            return;
+        }
+
+        _selectionFocus = caret;
+        UpdateSelection();
+    }
+
+    /// <summary>
+    /// Recomputes the selected text, the per-page highlight boxes and raises
+    /// <see cref="SelectionChanged"/> when the text changed.
+    /// </summary>
+    private void UpdateSelection()
+    {
+        _selectionDirty = false;
+
+        if (Source is null || _pageViews.Count == 0)
+        {
+            return;
+        }
+
+        (int Page, int Caret) anchor = _selectionAnchor;
+        (int Page, int Caret) focus = _selectionFocus;
+        if (anchor.Page > focus.Page || (anchor.Page == focus.Page && anchor.Caret > focus.Caret))
+        {
+            (anchor, focus) = (focus, anchor);
+        }
+
+        var ranges = new List<(int Page, int Start, int End)>();
+        if (anchor.Page == focus.Page)
+        {
+            if (focus.Caret > anchor.Caret)
+            {
+                ranges.Add((anchor.Page, anchor.Caret, focus.Caret));
+            }
+        }
+        else
+        {
+            int anchorLength = GetTextPage(anchor.Page)?.Length ?? 0;
+            if (anchor.Caret < anchorLength)
+            {
+                ranges.Add((anchor.Page, anchor.Caret, anchorLength));
+            }
+
+            for (int page = anchor.Page + 1; page < focus.Page; page++)
+            {
+                int length = GetTextPage(page)?.Length ?? 0;
+                if (length > 0)
+                {
+                    ranges.Add((page, 0, length));
+                }
+            }
+
+            if (focus.Caret > 0)
+            {
+                ranges.Add((focus.Page, 0, focus.Caret));
+            }
+        }
+
+        var text = new StringBuilder();
+        var placed = new List<(int Page, List<Rect> Rects)>();
+        double zoom = EffectiveZoom;
+        bool canPlace = double.IsFinite(zoom) && zoom > 0;
+
+        foreach ((int page, int start, int end) in ranges)
+        {
+            PdfTextPage? textPage = GetTextPage(page);
+            if (textPage is null)
+            {
+                continue;
+            }
+
+            // Cross-page selections read as lines in a single copy
+            if (text.Length > 0 && text[^1] != '\n')
+            {
+                text.Append('\n');
+            }
+
+            text.Append(textPage.GetText(start, end - start));
+
+            if (!canPlace)
+            {
+                continue;
+            }
+
+            PdfTextSelection selection = textPage.GetSelection(start, end);
+            if (selection.Bounds.Count == 0)
+            {
+                continue;
+            }
+
+            Matrix3x2 pageToView = ZoomMath.PageToViewMatrix(Source.Pages[page], Rotation, zoom);
+            var rects = new List<Rect>(selection.Bounds.Count);
+            foreach (RectF bounds in selection.Bounds)
+            {
+                rects.Add(ZoomMath.ToViewRect(bounds, pageToView));
+            }
+
+            placed.Add((page, rects));
+        }
+
+        var selectedPages = new HashSet<int>();
+        foreach ((int page, List<Rect> rects) in placed)
+        {
+            if (page >= 0 && page < _pageViews.Count)
+            {
+                _pageViews[page].SetSelection(rects);
+                selectedPages.Add(page);
+            }
+        }
+
+        foreach (int page in _selectionPages)
+        {
+            if (!selectedPages.Contains(page) && page >= 0 && page < _pageViews.Count)
+            {
+                _pageViews[page].SetSelection(null);
+            }
+        }
+
+        _selectionPages.Clear();
+        _selectionPages.UnionWith(selectedPages);
+
+        string selected = text.ToString();
+        if (selected != _selectedText)
+        {
+            _selectedText = selected;
+            SelectionChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    private bool TryGetPageAt(Point panelPoint, out int pageIndex)
+    {
+        for (int i = 0; i < _pageViews.Count; i++)
+        {
+            PdfPageView view = _pageViews[i];
+            if (view.IsVisible && view.Bounds.Contains(panelPoint))
+            {
+                pageIndex = i;
+                return true;
+            }
+        }
+
+        pageIndex = -1;
+        return false;
+    }
+
+    private int NearestPage(Point panelPoint)
+    {
+        int best = -1;
+        double bestDistance = double.MaxValue;
+
+        for (int i = 0; i < _pageViews.Count; i++)
+        {
+            PdfPageView view = _pageViews[i];
+            if (!view.IsVisible)
+            {
+                continue;
+            }
+
+            Rect bounds = view.Bounds;
+            double dx = Math.Max(Math.Max(bounds.X - panelPoint.X, 0), panelPoint.X - bounds.Right);
+            double dy = Math.Max(Math.Max(bounds.Y - panelPoint.Y, 0), panelPoint.Y - bounds.Bottom);
+            double distance = (dx * dx) + (dy * dy);
+            if (distance < bestDistance)
+            {
+                bestDistance = distance;
+                best = i;
+            }
+        }
+
+        return best;
+    }
+
+    private PdfTextPage? GetTextPage(int pageIndex)
+    {
+        if (Source is null || GraphicsFactory is null || pageIndex < 0 || pageIndex >= Source.PageCount)
+        {
+            return null;
+        }
+
+        return Source.Pages[pageIndex].GetText(GraphicsFactory);
+    }
+
+    private bool IsSameClickSpot(Point point) =>
+        _clickCount > 0 &&
+        Environment.TickCount64 - _lastClickTime <= 500 &&
+        Math.Abs(point.X - _lastClickPosition.X) <= 4 &&
+        Math.Abs(point.Y - _lastClickPosition.Y) <= 4;
+
+    private void UpdateDragScroll(Vector pointer)
+    {
+        double height = _scrollViewer.Viewport.Height;
+        bool outside = height > 0 && (pointer.Y < 0 || pointer.Y > height);
+        if (outside)
+        {
+            if (!_dragScrollTimer.IsEnabled)
+            {
+                _dragScrollTimer.Start();
+            }
+        }
+        else
+        {
+            _dragScrollTimer.Stop();
+        }
+    }
+
+    private void OnDragScrollTick(object? sender, EventArgs e)
+    {
+        if (!_selecting)
+        {
+            _dragScrollTimer.Stop();
+            return;
+        }
+
+        double height = _scrollViewer.Viewport.Height;
+        if (height <= 0)
+        {
+            return;
+        }
+
+        double overflow = _dragPoint.Y < 0 ? _dragPoint.Y : (_dragPoint.Y > height ? _dragPoint.Y - height : 0);
+        if (overflow == 0)
+        {
+            _dragScrollTimer.Stop();
+            return;
+        }
+
+        double max = Math.Max(0, _scrollViewer.Extent.Height - height);
+        double step = Math.Clamp(Math.Abs(overflow) * 0.25, 8, 48) * Math.Sign(overflow);
+        double offset = Math.Clamp(_scrollViewer.Offset.Y + step, 0, max);
+        if (Math.Abs(offset - _scrollViewer.Offset.Y) < 0.5)
+        {
+            return;
+        }
+
+        _scrollViewer.Offset = new Vector(_scrollViewer.Offset.X, offset);
+
+        // The pointer holds still while pages move under it: re-map it to page coordinates so the
+        // focus caret walks into the page scrolling into view.
+        Point? panelOrigin = _pagesPanel.TranslatePoint(new Point(0, 0), _scrollViewer);
+        if (panelOrigin is { } origin)
+        {
+            UpdateSelectionFocus(new Point(_dragPoint.X - origin.X, _dragPoint.Y - origin.Y));
         }
     }
 
@@ -927,18 +1554,6 @@ public sealed class PdfView : ContentControl
         }
     }
 
-    /// <summary>
-    /// Converts a page-space rectangle (y-up, origin at the crop box) into the device rectangle
-    /// of a page view (y-down).
-    /// </summary>
-    private static Rect ToDeviceRect(RectF rect, Size pageSize, double zoom)
-    {
-        double left = rect.Left * zoom;
-        double right = rect.Right * zoom;
-        double top = (pageSize.Height - rect.Top) * zoom;
-        double bottom = (pageSize.Height - rect.Bottom) * zoom;
-        return new Rect(left, top, Math.Max(1, right - left), Math.Max(1, bottom - top));
-    }
 }
 
 /// <summary>A search hit: page index plus the hit rectangle in page user space (y-up).</summary>
