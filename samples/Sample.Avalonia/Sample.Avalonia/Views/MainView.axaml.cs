@@ -50,6 +50,7 @@ public partial class MainView : UserControl
 
         Viewer.PageChanged += OnPageChanged;
         Viewer.LinkActivated += OnLinkActivated;
+        Viewer.SearchHitsChanged += OnSearchHitsChanged;
 
         if (!_sampleLoaded)
         {
@@ -73,6 +74,7 @@ public partial class MainView : UserControl
 
         Viewer.PageChanged -= OnPageChanged;
         Viewer.LinkActivated -= OnLinkActivated;
+        Viewer.SearchHitsChanged -= OnSearchHitsChanged;
     }
 
     /// <summary>Loads the bundled sample document on first show.</summary>
@@ -303,8 +305,18 @@ public partial class MainView : UserControl
             return;
         }
 
-        viewModel.SearchHitCount = viewer.Search(viewModel.SearchQuery);
-        viewModel.ActiveHit = viewModel.SearchHitCount > 0 ? 0 : -1;
+        // The scan runs in the background and reports through SearchHitsChanged
+        _ = viewer.SearchAsync(viewModel.SearchQuery);
+    }
+
+    private void OnSearchHitsChanged(object? sender, EventArgs e)
+    {
+        if (ViewModel is { } viewModel && Viewer is { } viewer)
+        {
+            viewModel.SearchHitCount = viewer.SearchHits.Count;
+            viewModel.ActiveHit = viewer.ActiveHitIndex;
+            viewModel.IsSearching = viewer.IsSearching;
+        }
     }
 
     private void OnHitNavigationRequested(object? sender, int direction)

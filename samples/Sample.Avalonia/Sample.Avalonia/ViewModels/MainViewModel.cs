@@ -81,6 +81,9 @@ public partial class MainViewModel : ViewModelBase
     [ObservableProperty]
     private int _searchHitCount;
 
+    [ObservableProperty]
+    private bool _isSearching;
+
     /// <summary>Zero-based index of the active hit, or -1.</summary>
     [ObservableProperty]
     private int _activeHit = -1;
@@ -121,8 +124,10 @@ public partial class MainViewModel : ViewModelBase
 
     /// <summary>"active / total" summary for the search toolbar.</summary>
     public string SearchStatus => SearchHitCount == 0
-        ? "No hits"
-        : $"{ActiveHit + 1} / {SearchHitCount}";
+        ? IsSearching ? "Searching…" : "No hits"
+        : IsSearching
+            ? $"{ActiveHit + 1} / {SearchHitCount} +"
+            : $"{ActiveHit + 1} / {SearchHitCount}";
 
     partial void OnSelectedSidebarTabChanged(int value)
     {
@@ -133,6 +138,8 @@ public partial class MainViewModel : ViewModelBase
     partial void OnSearchHitCountChanged(int value) => OnPropertyChanged(nameof(SearchStatus));
 
     partial void OnActiveHitChanged(int value) => OnPropertyChanged(nameof(SearchStatus));
+
+    partial void OnIsSearchingChanged(bool value) => OnPropertyChanged(nameof(SearchStatus));
 
     partial void OnSelectedThumbnailChanged(ThumbnailItem? value)
     {

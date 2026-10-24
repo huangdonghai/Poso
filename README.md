@@ -41,7 +41,9 @@ control ready to drop into your app.
 **Viewer**
 
 - `PdfView` Avalonia control: single-page and continuous layouts, fit-page / fit-width / custom
-  zoom, rotation, search with hit navigation, link activation and page-changed events
+  zoom, rotation, search with hit navigation, link activation and page-changed events. A document
+  search runs in the background and publishes hits as pages are read (`SearchAsync`), so it never
+  blocks the UI thread
 - Text selection: drag to select (across pages in continuous layout), double-click a word,
   triple-click a line, `Ctrl+C` / `CopySelectionAsync` to copy. Left-drag selects; middle-drag or
   space+drag pans
