@@ -355,23 +355,33 @@ public static class PdfFixtures
     }
 
     /// <summary>
-    /// Two pages that each carry the <see cref="CreateGraphicsPdf"/> text line, so a selection can
-    /// be dragged from one page into the next.
+    /// A document of <paramref name="pageCount"/> pages that each carry the
+    /// <see cref="CreateGraphicsPdf"/> text line, so a selection can be dragged from one page into the
+    /// next and a search can be watched walking through a long document.
     /// </summary>
-    public static byte[] CreateTwoPageTextPdf()
+    public static byte[] CreateTextPagesPdf(int pageCount)
     {
         string widths = string.Join(" ", Enumerable.Repeat("500", 95));
         string font = $"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding /FirstChar 32 /LastChar 126 /Widths [{widths}] >>";
-        string pageDictionary = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>";
         string content = "BT /F1 12 Tf 20 50 Td (Hello Poso) Tj ET";
+        int contentNumber = 3 + pageCount;
 
-        return Build(1,
-            new PdfObjectDefinition(1, "<< /Type /Catalog /Pages 2 0 R >>"),
-            new PdfObjectDefinition(2, "<< /Type /Pages /Kids [3 0 R 6 0 R] /Count 2 >>"),
-            new PdfObjectDefinition(3, pageDictionary),
-            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
-            new PdfObjectDefinition(5, font),
-            new PdfObjectDefinition(6, pageDictionary));
+        var objects = new List<PdfObjectDefinition>
+        {
+            new(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new(2, $"<< /Type /Pages /Kids [{string.Join(' ', Enumerable.Range(3, pageCount).Select(i => $"{i} 0 R"))}] /Count {pageCount} >>"),
+        };
+
+        for (int i = 0; i < pageCount; i++)
+        {
+            objects.Add(new PdfObjectDefinition(
+                3 + i,
+                $"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Font << /F1 {contentNumber + 1} 0 R >> >> /Contents {contentNumber} 0 R >>"));
+        }
+
+        objects.Add(Stream(contentNumber, string.Empty, Encoding.ASCII.GetBytes(content)));
+        objects.Add(new PdfObjectDefinition(contentNumber + 1, font));
+        return Build(1, objects.ToArray());
     }
 
     /// <summary>

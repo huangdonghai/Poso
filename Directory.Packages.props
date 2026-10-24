@@ -9,6 +9,11 @@
     <PackageVersion Include="Avalonia" Version="12.1.2" />
     <!-- Headless UI tests for the Avalonia viewer (tests/Poso.Tests). Keep in step with Avalonia above. -->
     <PackageVersion Include="Avalonia.Headless" Version="12.1.2" />
+    <!-- Real Skia rendering for the headless session, so tests can read rendered pixels. -->
+    <PackageVersion Include="Avalonia.Skia" Version="12.1.2" />
+    <!-- The headless session needs a theme: without control templates a ScrollViewer reports no
+         extent, so panning and auto-scroll could not be tested. -->
+    <PackageVersion Include="Avalonia.Themes.Fluent" Version="12.1.2" />
     <!-- 3.119.4 is the version resolved by the Avalonia 12.1.2 desktop stack: share one native Skia build. -->
     <PackageVersion Include="SkiaSharp" Version="3.119.4" />
     <!-- PeachDrawing pure-managed raster backend (src/Poso.PeachDrawing). 0.x line: pin centrally, upgrades must pass the full regression. -->

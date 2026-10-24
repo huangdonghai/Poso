@@ -1,37 +1,28 @@
 using System;
-using System.Linq;
 using System.Numerics;
 using System.Runtime.InteropServices;
-using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
-using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Input;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Threading;
-using Avalonia.VisualTree;
-using Poso.Avalonia.Controls;
-using Poso.Avalonia.Rendering;
 using Poso.Pdf;
 using Poso.Skia;
 using Xunit;
 using Vector = Avalonia.Vector;
+using Fixture = Poso.Tests.HeadlessViewer.Fixture;
 
 namespace Poso.Tests;
 
 /// <summary>
 /// PdfView text-selection interaction driven through Avalonia's headless input stack: left-drag
-/// selects, double-click selects a word, a plain click clears, and panning has moved to the middle
-/// button (or space + left). Coordinates are resolved through the same page-to-view matrix that the
-/// overlay uses, which <see cref="ZoomMathTests"/> pins against the renderer's own output.
+/// selects, double-click selects a word, a plain click clears, panning has moved to the middle
+/// button (or space + left), and the text cursor follows the selectable text.
 /// </summary>
 public class PdfViewSelectionTests
 {
-    private static readonly HeadlessUnitTestSession Session =
-        HeadlessUnitTestSession.StartNew(typeof(HeadlessApp));
-
     /// <summary>Baseline of the "Hello Poso" line in <see cref="PdfFixtures.CreateGraphicsPdf"/>.</summary>
     private static readonly Vector2 LineStart = new(18f, 53f);
 
@@ -39,13 +30,8 @@ public class PdfViewSelectionTests
 
     private static readonly Vector2 InsideWord = new(68f, 53f);
 
-    /// <summary>Runs the test body on the headless session's UI thread.</summary>
-    private static void OnUi(Action body) => Session.Dispatch(body, CancellationToken.None);
-
-    private static Task OnUiAsync(Func<Task> body) => Session.Dispatch(body, CancellationToken.None);
-
     [Fact]
-    public void DragSelect_SelectsTheTextBetweenTheTwoPoints() => OnUi(() =>
+    public void DragSelect_SelectsTheTextBetweenTheTwoPoints() => HeadlessViewer.OnUi(() =>
     {
         using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateGraphicsPdf());
         using Fixture fixture = new(document);
@@ -56,7 +42,7 @@ public class PdfViewSelectionTests
     });
 
     [Fact]
-    public void DragSelect_PaintsTheHighlightOverTheSelectedLine() => OnUi(() =>
+    public void DragSelect_PaintsTheHighlightOverTheSelectedLine() => HeadlessViewer.OnUi(() =>
     {
         using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateGraphicsPdf());
         using Fixture fixture = new(document);
@@ -82,7 +68,7 @@ public class PdfViewSelectionTests
     });
 
     [Fact]
-    public void DragSelect_HonoursTheViewRotation() => OnUi(() =>
+    public void DragSelect_HonoursTheViewRotation() => HeadlessViewer.OnUi(() =>
     {
         using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateGraphicsPdf());
         using Fixture fixture = new(document);
@@ -96,9 +82,9 @@ public class PdfViewSelectionTests
     });
 
     [Fact]
-    public void DragAcrossPages_SelectsTheTailOfTheFirstAndTheHeadOfTheNext() => OnUi(() =>
+    public void DragAcrossPages_SelectsTheTailOfTheFirstAndTheHeadOfTheNext() => HeadlessViewer.OnUi(() =>
     {
-        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateTwoPageTextPdf());
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateTextPagesPdf(2));
         using Fixture fixture = new(document);
 
         // "Hello Poso" starts at x=20 with 6pt glyphs: x=45 is inside the second 'o' of "Hello"
@@ -109,7 +95,7 @@ public class PdfViewSelectionTests
     });
 
     [Fact]
-    public void DoubleClick_SelectsTheWord() => OnUi(() =>
+    public void DoubleClick_SelectsTheWord() => HeadlessViewer.OnUi(() =>
     {
         using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateGraphicsPdf());
         using Fixture fixture = new(document);
@@ -125,7 +111,7 @@ public class PdfViewSelectionTests
     });
 
     [Fact]
-    public void Click_ClearsTheSelection() => OnUi(() =>
+    public void Click_ClearsTheSelection() => HeadlessViewer.OnUi(() =>
     {
         using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateGraphicsPdf());
         using Fixture fixture = new(document);
@@ -142,22 +128,24 @@ public class PdfViewSelectionTests
     });
 
     [Fact]
-    public void LeftDrag_SelectsInsteadOfPanning() => OnUi(() =>
+    public void LeftDrag_SelectsInsteadOfPanning() => HeadlessViewer.OnUi(() =>
     {
         using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateGraphicsPdf());
         using Fixture fixture = new(document);
 
+        // Zoomed in past the viewport, so a pan would have somewhere to go: dragging right to left
+        // would push the horizontal offset up if the left button still panned.
         fixture.SetZoom(4);
         Vector before = fixture.ScrollOffset;
 
-        fixture.Drag((0, LineStart), (0, LineEnd));
+        fixture.Drag((0, LineEnd), (0, new Vector2(50f, 53f)), (0, LineStart));
 
         Assert.Equal("Hello Poso", fixture.Viewer.SelectedText);
         Assert.Equal(before, fixture.ScrollOffset);
     });
 
     [Fact]
-    public void MiddleDrag_PansWithoutSelecting() => OnUi(() =>
+    public void MiddleDrag_PansWithoutSelecting() => HeadlessViewer.OnUi(() =>
     {
         using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateGraphicsPdf());
         using Fixture fixture = new(document);
@@ -165,32 +153,21 @@ public class PdfViewSelectionTests
         fixture.SetZoom(4);
         Vector before = fixture.ScrollOffset;
 
-        Point from = fixture.ToWindowPoint(0, LineStart);
-        Point to = new(from.X, from.Y - 60);
-        fixture.Window.MouseDown(from, MouseButton.Middle, RawInputModifiers.None);
+        Point from = fixture.ToWindowPoint(0, LineEnd);
+        Point to = new(from.X - 100, from.Y);
+        fixture.Window.MouseDown(from, MouseButton.Middle, RawInputModifiers.MiddleMouseButton);
         fixture.Window.MouseMove(to, RawInputModifiers.MiddleMouseButton);
         fixture.Window.MouseUp(to, MouseButton.Middle, RawInputModifiers.None);
         fixture.Settle();
 
         Assert.Equal(string.Empty, fixture.Viewer.SelectedText);
-        Assert.NotEqual(before, fixture.ScrollOffset);
+        Assert.True(
+            fixture.ScrollOffset.X > before.X,
+            $"middle-drag should pan the viewport, offset stayed {fixture.ScrollOffset}");
     });
 
     [Fact]
-    public Task CopySelection_CopiesOnlyWhenTextIsSelected() => OnUiAsync(async () =>
-    {
-        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateGraphicsPdf());
-        using Fixture fixture = new(document);
-
-        Assert.False(await fixture.Viewer.CopySelectionAsync());
-
-        fixture.Drag((0, LineStart), (0, LineEnd));
-
-        Assert.True(await fixture.Viewer.CopySelectionAsync());
-    });
-
-    [Fact]
-    public void SpaceDrag_PansWithoutSelecting() => OnUi(() =>
+    public void SpaceDrag_PansWithoutSelecting() => HeadlessViewer.OnUi(() =>
     {
         using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateGraphicsPdf());
         using Fixture fixture = new(document);
@@ -219,9 +196,9 @@ public class PdfViewSelectionTests
     });
 
     [Fact]
-    public Task DragHeldBelowTheViewport_AutoScrollsAndExtendsTheSelection() => OnUiAsync(async () =>
+    public Task DragHeldBelowTheViewport_AutoScrollsAndExtendsTheSelection() => HeadlessViewer.OnUiAsync(async () =>
     {
-        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateTwoPageTextPdf());
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateTextPagesPdf(2));
         using Fixture fixture = new(document);
 
         // One page is already taller than the 400 DIP viewport
@@ -248,29 +225,41 @@ public class PdfViewSelectionTests
     });
 
     [Fact]
-    public void TextCursor_FollowsTheTextAndLeavesTheDefaultEverywhereElse() => OnUi(() =>
+    public Task CopySelection_CopiesOnlyWhenTextIsSelected() => HeadlessViewer.OnUiAsync(async () =>
     {
         using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateGraphicsPdf());
         using Fixture fixture = new(document);
 
-        // Search reads every page, so the cursor decision has text to work from without a drag
-        fixture.Viewer.Search("Poso");
-        fixture.Settle();
+        Assert.False(await fixture.Viewer.CopySelectionAsync());
+
+        fixture.Drag((0, LineStart), (0, LineEnd));
+
+        Assert.True(await fixture.Viewer.CopySelectionAsync());
+    });
+
+    [Fact]
+    public void TextCursor_FollowsTheTextAndLeavesTheDefaultEverywhereElse() => HeadlessViewer.OnUi(() =>
+    {
+        using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateGraphicsPdf());
+        using Fixture fixture = new(document);
+
+        // The cursor decision only reads text that has already been extracted
+        document.Pages[0].GetText(SkiaGraphicsFactory.Default);
 
         fixture.Hover(new Vector2(23f, 53f));
-        Assert.Equal(new Cursor(StandardCursorType.Ibeam), fixture.PageCursor);
+        AssertTextCursor(fixture.PageCursor);
 
         // Same page, same line height, but past the last glyph: default cursor again
         fixture.Hover(new Vector2(150f, 53f));
         Assert.Null(fixture.PageCursor);
 
-        // Over the page gap the page view is not under the pointer at all
+        // Off the page the page view asks for nothing
         fixture.HoverPanel(new Point(200, 398));
         Assert.Null(fixture.PageCursor);
     });
 
     [Fact]
-    public Task HoveringAnUnreadPage_PrefetchesItsTextOffTheUIThread() => OnUiAsync(async () =>
+    public Task HoveringAnUnreadPage_PrefetchesItsTextOffTheUIThread() => HeadlessViewer.OnUiAsync(async () =>
     {
         using PdfDocument document = PdfDocument.FromArray(PdfFixtures.CreateGraphicsPdf());
         using Fixture fixture = new(document);
@@ -288,8 +277,14 @@ public class PdfViewSelectionTests
         }
 
         Assert.NotNull(document.Pages[0].PeekText());
-        Assert.Equal(new Cursor(StandardCursorType.Ibeam), fixture.PageCursor);
+        AssertTextCursor(fixture.PageCursor);
     });
+
+    /// <summary>
+    /// Avalonia's Cursor exposes nothing comparable, so the text cursor is recognised by the standard
+    /// type it was built from ("Ibeam"); a page that asks for no cursor at all reports null.
+    /// </summary>
+    private static void AssertTextCursor(Cursor? cursor) => Assert.Equal("Ibeam", cursor?.ToString());
 
     private static bool IsSelectionTint(WriteableBitmap frame, Point windowPoint)
     {
@@ -298,106 +293,13 @@ public class PdfViewSelectionTests
 
         using ILockedFramebuffer locked = frame.Lock();
         int offset = (y * locked.RowBytes) + (x * 4);
+        bool bgra = locked.Format == PixelFormat.Bgra8888;
+        int redIndex = bgra ? 2 : 0;
+        int blueIndex = bgra ? 0 : 2;
 
-        // BGRA: the selection is a translucent blue over paper, so blue clearly leads red
-        byte blue = Marshal.ReadByte(locked.Address, offset);
-        byte red = Marshal.ReadByte(locked.Address, offset + 2);
+        // The selection is a translucent blue over paper, so blue clearly leads red
+        byte blue = Marshal.ReadByte(locked.Address, offset + blueIndex);
+        byte red = Marshal.ReadByte(locked.Address, offset + redIndex);
         return blue > red + 30 && blue > 200;
-    }
-
-    /// <summary>Application entry point for the headless Avalonia session.</summary>
-    public static class HeadlessApp
-    {
-        public static AppBuilder BuildAvaloniaApp() =>
-            AppBuilder.Configure<Application>()
-                .UseHeadless(new AvaloniaHeadlessPlatformOptions { ShouldRenderOnUIThread = true });
-    }
-
-    /// <summary>A shown window hosting a <see cref="PdfView"/>, plus page-to-window mapping.</summary>
-    private sealed class Fixture : IDisposable
-    {
-        private readonly PdfDocument _document;
-
-        public Fixture(PdfDocument document)
-        {
-            _document = document;
-            Viewer = new PdfView { GraphicsFactory = SkiaGraphicsFactory.Default, Source = document };
-            Window = new Window { Content = Viewer, Width = 400, Height = 400 };
-            Window.Show();
-            Settle();
-        }
-
-        public Window Window { get; }
-
-        public PdfView Viewer { get; }
-
-        public Vector ScrollOffset => Viewer.GetVisualDescendants().OfType<ScrollViewer>().Single().Offset;
-
-        public void Settle() => Dispatcher.UIThread.RunJobs();
-
-        public void SetZoom(double zoom)
-        {
-            Viewer.ZoomMode = ZoomMode.Custom;
-            Viewer.Zoom = zoom;
-            Settle();
-        }
-
-        /// <summary>Maps a point in a page's user space to window coordinates.</summary>
-        public Point ToWindowPoint(int pageIndex, Vector2 pagePoint)
-        {
-            Matrix3x2 pageToView = ZoomMath.PageToViewMatrix(_document.Pages[pageIndex], Viewer.Rotation, Viewer.EffectiveZoom);
-            Vector2 view = Vector2.Transform(pagePoint, pageToView);
-            Point origin = PageOrigin(pageIndex);
-            return new Point(origin.X + view.X, origin.Y + view.Y);
-        }
-
-        /// <summary>Presses on the first point, moves through the rest, and releases on the last.</summary>
-        public void Drag(params (int Page, Vector2 Point)[] points)
-        {
-            Point start = ToWindowPoint(points[0].Page, points[0].Point);
-            Window.MouseDown(start, MouseButton.Left, RawInputModifiers.None);
-
-            for (int i = 1; i < points.Length; i++)
-            {
-                Window.MouseMove(ToWindowPoint(points[i].Page, points[i].Point), RawInputModifiers.LeftMouseButton);
-                Settle();
-            }
-
-            Point end = ToWindowPoint(points[^1].Page, points[^1].Point);
-            Window.MouseUp(end, MouseButton.Left, RawInputModifiers.None);
-            Settle();
-        }
-
-        /// <summary>Moves the pointer to a point in a page's user space (no button held).</summary>
-        public void Hover(Vector2 pagePoint, int pageIndex = 0)
-        {
-            Window.MouseMove(ToWindowPoint(pageIndex, pagePoint), RawInputModifiers.None);
-            Settle();
-        }
-
-        public void HoverPanel(Point panelPoint)
-        {
-            Point origin = PageOrigin(0);
-            Window.MouseMove(new Point(panelPoint.X + origin.X, panelPoint.Y + origin.Y), RawInputModifiers.None);
-            Settle();
-        }
-
-        /// <summary>The cursor the page under the pointer currently asks for.</summary>
-        public Cursor? PageCursor => PageView(0).Cursor;
-
-        public Control PageView(int pageIndex) => Panel.Children[pageIndex];
-
-        private StackPanel Panel => Viewer.GetVisualDescendants().OfType<StackPanel>().Single();
-
-        private Point PageOrigin(int pageIndex)
-        {
-            Visual pageView = Panel.Children[pageIndex];
-            return pageView.TranslatePoint(new Point(0, 0), Window) ?? throw new InvalidOperationException("page not laid out");
-        }
-
-        public void Dispose()
-        {
-            Window.Close();
-        }
     }
 }
