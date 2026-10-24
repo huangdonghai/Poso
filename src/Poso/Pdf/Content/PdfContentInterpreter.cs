@@ -2579,6 +2579,27 @@ public sealed class PdfContentInterpreter
         {
             IPath path = _path.Build();
             bool masked = BeginMaskedElement();
+
+            // A combined fill-and-stroke is a single graphics object (32000-1:2008 11.7.4.4): the stroke
+            // replaces the fill where it covers instead of compositing over it. MuPDF paints the pair inside
+            // a knockout group whenever the stroke is visible and either translucent or blended - a
+            // translucent stroke over a fill otherwise shows the fill through its inner half, and a blended
+            // stroke over a fill applies the mode twice (pdf_show_path, pdf-op-run.c: a group for every
+            // stroke alpha except 0 and opaque-normal). The layer plus erasing the stroke's outline between
+            // the two paints is the same picture: the erase removes the fill's coverage exactly where the
+            // stroke will put its own, and the layer composites the pair with the blend mode once.
+            BlendMode outerBlend = _state.BlendMode;
+            float strokeAlpha = StrokePaintColor().A / 255f;
+            bool knockout = fill && stroke && strokeAlpha > 0f
+                && (strokeAlpha < 1f || outerBlend != BlendMode.Normal);
+            if (knockout)
+            {
+                // A masked element's layer already carries the blend and paints its content normally, so
+                // the knockout group inside it stays normal too.
+                _context.PushLayer(null, 255, masked ? BlendMode.Normal : outerBlend, null);
+                _context.SetBlendMode(BlendMode.Normal);
+            }
+
             try
             {
                 if (fill)
@@ -2602,6 +2623,11 @@ public sealed class PdfContentInterpreter
 
                 if (stroke)
                 {
+                    if (knockout)
+                    {
+                        _context.EraseStroke(path, _state.Stroke);
+                    }
+
                     // A pattern can be the stroke colour too (PDF 32000-1:2008 8.7.4.3). The pattern is
                     // not walked along the path: it is painted once and confined to the stroke outline.
                     if (_strokeTiling is not null)
@@ -2623,6 +2649,14 @@ public sealed class PdfContentInterpreter
             }
             finally
             {
+                if (knockout)
+                {
+                    _context.PopLayer();
+                    // The canvas does not save the paint blend mode; a masked element's layer wants its
+                    // content normal, and EndMaskedElement below restores the element's own mode.
+                    _context.SetBlendMode(masked ? BlendMode.Normal : outerBlend);
+                }
+
                 if (masked)
                 {
                     EndMaskedElement();

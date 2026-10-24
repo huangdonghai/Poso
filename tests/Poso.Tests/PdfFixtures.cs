@@ -1474,6 +1474,41 @@ public static class PdfFixtures
     }
 
     /// <summary>
+    /// A 200x100 page whose whole content is one rectangle painted with the combined fill-and-stroke
+    /// operator <c>B</c>: red fill, 2-unit green stroke. By default both are translucent (/ca 0.5,
+    /// /CA 0.5), and MuPDF's knockout group renders the stroke band as green over the white page -
+    /// (128,255,128) - not as green over the translucent red fill (128,192,128), with the interior at
+    /// (255,128,128). With <paramref name="multiply"/> both are opaque under /BM /Multiply: MuPDF
+    /// composites the pair once, giving a (0,255,0) band and a (255,0,0) interior, where painting the
+    /// two operations separately multiplies the stroke into the already-multiplied fill - (0,0,0).
+    /// Expected pixels measured with pymupdf on these exact fixtures.
+    /// </summary>
+    public static byte[] CreateAtomicFillStrokePdf(bool multiply = false)
+    {
+        string content = multiply
+            ? "/GS1 gs 1 0 0 rg 0 1 0 RG 2 w 20 20 160 60 re B"
+            : "/GS1 gs 1 0 0 rg /GS2 gs 0 1 0 RG 2 w 20 20 160 60 re B";
+        string resources = multiply ? "/GS1 5 0 R" : "/GS1 5 0 R /GS2 6 0 R";
+
+        var objects = new List<PdfObjectDefinition>
+        {
+            new(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+            new(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            new(3, $"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /ExtGState << {resources} >> >> /Contents 4 0 R >>"),
+            Stream(4, string.Empty, Encoding.ASCII.GetBytes(content)),
+            multiply
+                ? new PdfObjectDefinition(5, "<< /BM /Multiply >>")
+                : new PdfObjectDefinition(5, "<< /ca 0.5 >>"),
+        };
+        if (!multiply)
+        {
+            objects.Add(new PdfObjectDefinition(6, "<< /CA 0.5 >>"));
+        }
+
+        return Build(1, objects.ToArray());
+    }
+
+    /// <summary>
     /// Two overlapping rectangles on a 200x100 page. When <paramref name="multiply"/> is set the
     /// second (blue) rectangle is painted with an ExtGState blend mode of /Multiply over the first
     /// (green) one; the overlap is then near-black. Without it the blue simply covers the green.

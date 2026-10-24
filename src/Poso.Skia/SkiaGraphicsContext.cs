@@ -354,6 +354,28 @@ public sealed class SkiaGraphicsContext : IGraphicsContext
         }
     }
 
+    /// <summary>
+    /// Clears the stroke's outline to transparency (destination-out). Drawn with the Clear blend mode,
+    /// which scales the destination by one minus the anti-aliased coverage just as the stroke would have
+    /// scaled it by the coverage.
+    /// </summary>
+    public void EraseStroke(IPath path, in StrokeStyle style)
+    {
+        if (path.IsEmpty)
+        {
+            return;
+        }
+
+        SkiaConversions.ApplyStrokeStyle(_strokePaint, style);
+        using SKPath skPath = SkiaConversions.ToSKPath(path, evenOdd: false);
+        using SKPath outline = new();
+        if (_strokePaint.GetFillPath(skPath, outline) && !outline.IsEmpty)
+        {
+            using SKPaint clear = new() { IsAntialias = true, BlendMode = SKBlendMode.Clear };
+            _canvas.DrawPath(outline, clear);
+        }
+    }
+
     public void FillPath(IPath path, PosoColor color, bool evenOdd)
     {
         if (path.IsEmpty)

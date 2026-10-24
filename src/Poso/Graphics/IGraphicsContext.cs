@@ -49,6 +49,19 @@ public interface IGraphicsContext : IDisposable
     {
     }
 
+    /// <summary>
+    /// Clear back to transparency the area a stroke of <paramref name="path"/> covers, with the same
+    /// anti-aliased coverage the stroke itself would paint (destination-out). A combined fill-and-stroke
+    /// is one graphics object in PDF (32000-1:2008 11.7.4.4): inside a group the stroke <em>replaces</em>
+    /// the fill rather than compositing over it, which the reference renderer models with a knockout
+    /// group. The interpreter gets the same result by erasing the stroke's outline from the group before
+    /// painting the stroke. Back-ends that paint must implement it; the no-op leaves the fill showing
+    /// through a translucent stroke.
+    /// </summary>
+    void EraseStroke(IPath path, in StrokeStyle style)
+    {
+    }
+
     /// <summary>Fill the path.</summary>
     void FillPath(IPath path, PosoColor color, bool evenOdd);
 

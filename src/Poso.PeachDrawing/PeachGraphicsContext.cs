@@ -221,6 +221,42 @@ public sealed class PeachGraphicsContext : IGraphicsContext
         _clipBounds = _clipBounds.Intersect(strokeBounds.TransformAabb(_ctm));
     }
 
+    /// <summary>
+    /// Clears the stroke's outline to transparency. <c>RasterCanvas.Erase</c> is the destination-out
+    /// operation, scaling each pixel by one minus the outline's anti-aliased coverage - the same outline
+    /// <see cref="ClipStroke"/> builds, so the erase matches what <see cref="StrokePath"/> would paint.
+    /// </summary>
+    public void EraseStroke(IPath path, in StrokeStyle style)
+    {
+        if (path.IsEmpty)
+        {
+            return;
+        }
+
+        float scale = DeviceScale;
+        if (scale <= 0f)
+        {
+            return;
+        }
+
+        StrokeStyle outlineStyle = style.Width > 0f ? style : style with { Width = 1f / scale };
+
+        using DrawScope scope = BeginDraw();
+        using PeachCore.GraphicsPath gp = path.ToGraphicsPath(evenOdd: false, Target, Matrix3x2.Identity);
+        PeachCore.Pen pen = Target.GetPen(PosoColor.Black.ToPaintColor());
+        pen.ApplyStrokeStyle(outlineStyle);
+
+        using PeachCore.GraphicsPath widened = Target.GetGraphicsPath();
+        PeachRaster.PathStroker.Stroke(gp, pen, widened, 0.25f / scale);
+
+        // Erase is a raster-canvas operation (the abstract Canvas has no destination-out); every canvas
+        // this context creates - the base one and each layer's - is a RasterCanvas.
+        if (Target is PeachRaster.RasterCanvas raster)
+        {
+            raster.Erase(widened);
+        }
+    }
+
     // ---- drawing ------------------------------------------------------------------------------------------
 
     public void FillPath(IPath path, PosoColor color, bool evenOdd)
