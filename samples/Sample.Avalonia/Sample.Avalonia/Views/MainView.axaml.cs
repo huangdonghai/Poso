@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Platform;
 using Avalonia.Platform.Storage;
 using Poso.Avalonia.Controls;
@@ -252,6 +253,11 @@ public partial class MainView : UserControl
 
         _sidebarResizing = false;
         e.Pointer.Capture(null);
+    }
+
+    private async void OnCopyClick(object? sender, RoutedEventArgs e)
+    {
+        await Viewer.CopySelectionAsync();
     }
 
     private void OnPageChanged(object? sender, PageChangedEventArgs e)

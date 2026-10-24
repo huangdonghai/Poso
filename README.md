@@ -42,6 +42,9 @@ control ready to drop into your app.
 
 - `PdfView` Avalonia control: single-page and continuous layouts, fit-page / fit-width / custom
   zoom, rotation, search with hit navigation, link activation and page-changed events
+- Text selection: drag to select (across pages in continuous layout), double-click a word,
+  triple-click a line, `Ctrl+C` / `CopySelectionAsync` to copy. Left-drag selects; middle-drag or
+  space+drag pans
 - Runtime switching between the Skia and PeachDrawing back ends
 
 ## Packages
